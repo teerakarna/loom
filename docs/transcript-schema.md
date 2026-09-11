@@ -98,27 +98,77 @@ Both design-doc-asserted fields are confirmed real and populated:
   signal, and likely needs its own light classification later (correction vs. clarification vs.
   praise) rather than being treated as one undifferentiated bucket — out of scope for B1.
 
-## Subagent completion — not yet located
+## Subagent completion — confirmed, but not where the design doc expected
 
-The design doc asserts the parent transcript records `subagent_tokens`, `tool_uses`, and
-`duration_ms` in a task-completion notification, giving an independent figure to reconcile
-computed subagent costs against. A grep for `subagent_tokens` and `tool_uses` across one real
-transcript containing several subagent launches found the **launch** record
-(`toolUseResult` with `isAsync`, `status: "async_launched"`, `agentId`, `description`,
-`resolvedModel`, `prompt`) but not yet a completion record with those exact field names.
+The design doc assumed `subagent_tokens`/`tool_uses`/`duration_ms` would appear as JSON fields in
+a `toolUseResult`. They don't. The real mechanism:
 
-**This is a real open question, not a confirmed fact — flag it clearly in code comments and do
-not hardcode ingest logic against `subagent_tokens`/`tool_uses` until a completion record has
-actually been found and inspected.** The design doc's own "Ingest correctness" verification step
-(replay fixtures, assert computed subagent totals reconcile against the transcript's own
-recorded totals) is exactly the check that will surface whether this field exists, is named
-differently, or has to be computed by summing the subagent's own `agent-<id>.jsonl` instead.
+Every task completion (both subagent completions and background-command completions) is a
+`{"type": "queue-operation", "operation": "enqueue", ...}` line whose `content` field is a
+**string** containing an XML-like `<task-notification>` block, which is then echoed a second time
+as an ordinary `{"type": "user", ...}` line with the identical string in `message.content` (with
+`origin.kind: "task-notification"`, `promptSource: "system"`). So this is text to parse with a
+regex or a small XML/tag scanner, not a JSON field to look up.
+
+Confirmed shape for a **successful agent completion**:
+
+```xml
+<task-notification>
+<task-id>a5d73dc222fd0e42b</task-id>
+<tool-use-id>toolu_01MGxQ5MFsPjPyTYVpK1pqD5</tool-use-id>
+<output-file>/private/tmp/.../tasks/a5d73dc222fd0e42b.output</output-file>
+<status>completed</status>
+<summary>Agent "Explore openclaw-journey repo and its blog post" finished</summary>
+<note>...</note>
+<result>... the agent's full report text ...</result>
+<usage><subagent_tokens>29668</subagent_tokens><tool_uses>8</tool_uses><duration_ms>40765</duration_ms></usage>
+</task-notification>
+```
+
+Notable gotcha: everywhere else, duration is `durationMs` (camelCase, see above). Here it's
+`duration_ms` (snake_case) — the naming convention is not consistent between the JSON transcript
+fields and this embedded text block. Do not assume one casing convention project-wide.
+
+The `<usage>` block is **conditional on success**. A `status=failed` completion (confirmed via a
+real rate-limit failure) has `<summary>` but no `<result>` and no `<usage>` at all — there is
+nothing to reconcile for a failed agent run, which makes sense but must be handled as a real case
+(zero usage, not a parse error) rather than assumed away.
+
+Background-*command* completions (`bash`/Monitor task notifications, task-id prefixed `b` rather
+than an agent's hex ID) use the identical `<task-notification>` tag shape but never carry
+`<result>` or `<usage>` at all — only `<status>` and a plain-text `<summary>`. So "does this
+notification have a `<usage>` block" is the actual discriminator between an agent completion
+worth reconciling and a background-command completion that isn't, not the task-id shape (which
+is an implementation detail and shouldn't be relied on).
+
+### Reconciliation does NOT hold under naive summing — confirmed, unresolved
+
+This is the check the design doc's own "Ingest correctness" verification step exists to run, and
+it fails as of this writing. For the real agent above (`<subagent_tokens>29668</subagent_tokens>`),
+summing that same agent's own transcript file (`agent-a5d73dc222fd0e42b.jsonl`) gives:
+
+- `input_tokens + output_tokens` across all its assistant turns: **331** — 90x too low
+- adding `cache_read_input_tokens + cache_creation_input_tokens` on top: **232,036** — 7.8x too
+  high
+
+Neither simple combination lands anywhere near 29,668. The likely culprit for the second figure:
+`cache_read_input_tokens` on turn N of a multi-turn run reflects a re-read of the *entire*
+accumulated context up to that point, not an incremental delta — so summing it across turns is
+correct for cost purposes (each turn really is billed for that read) but wildly overcounts if
+`subagent_tokens` is meant to represent something like distinct content processed rather than
+cumulative billed reads. That's a plausible explanation, not a confirmed one.
+
+**Consequence for the ledger (B1): store the computed weighted cost and the reported
+`subagent_tokens` figure side by side, never collapse them into one number, and surface the gap
+rather than hide it.** Presenting an unreconciled cost figure as if it were validated would be
+exactly the failure mode the design doc warns about ("nothing downstream can be trusted"). Root-
+causing the actual formula behind `subagent_tokens` is unresolved and out of scope for this pass.
 
 ## Open items before B1 ingest code is trusted
 
-1. Locate and confirm the actual subagent completion-notification shape (see above).
-2. Confirm whether `effort` is present, and under what conditions.
-3. Confirm whether summing `iterations[].{input,output,cache_*}_tokens` reconciles with the
+1. Confirm whether `effort` is present, and under what conditions.
+2. Confirm whether summing `iterations[].{input,output,cache_*}_tokens` reconciles with the
    top-level `usage` object, or whether one is a subset/rollup of the other.
-4. Build the synthetic fixtures (hand-written, never derived from a real transcript per the
-   design doc's publishability rules) that exercise every line type and field documented here.
+3. Build the synthetic fixtures (hand-written, never derived from a real transcript per the
+   design doc's publishability rules) that exercise every line type and field documented here,
+   including a successful and a failed `<task-notification>`.
