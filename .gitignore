@@ -1,0 +1,15 @@
+# Build artifacts
+/loom
+/dist/
+
+# Local ledger (SQLite) — never commit real usage data
+*.db
+*.db-wal
+*.db-shm
+
+# Go
+*.test
+*.out
+
+# OS
+.DS_Store
