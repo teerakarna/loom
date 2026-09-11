@@ -68,7 +68,14 @@ Notes for the cost model (design doc: "weighted cost per run... get this right f
   multi-iteration example before the ingest cost function is trusted.
 - `service_tier` and `speed` are both present and both string enums (`"standard"` observed) —
   unclear yet whether these ever diverge or one is derived from the other.
-- `message.model` is a real field (e.g. `"claude-opus-4-8"`) as the design doc expected.
+- `message.model` is a real field (e.g. `"claude-opus-4-8"`) as the design doc expected — **with
+  one confirmed exception: `"<synthetic>"`.** This is a locally-injected status/error message
+  (confirmed example: a rate-limit notice — "You've hit your session limit..."), not a real API
+  call, and it always carries all-zero usage. Found by running ingest against real history: a
+  failed agent's entire (real, non-zero) cost from earlier in the same file got attributed to
+  model `<synthetic>` under a naive "last non-empty model wins" heuristic, because the synthetic
+  status message was the last assistant line before the file ended. Ingest must never let this
+  value win model attribution for a run.
 - `effort` (reasoning effort) was asserted by the design doc but not yet independently confirmed
   present on an observed line — may be model-conditional. Needs a targeted check against a
   high-effort-model transcript before ingest code assumes it's always there.

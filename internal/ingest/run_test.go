@@ -78,6 +78,20 @@ func TestIngestFileAgent(t *testing.T) {
 	}
 }
 
+func TestSyntheticModelNeverWinsAttribution(t *testing.T) {
+	// Regression test: found by running against real history. A real model
+	// does genuine (costly) work, then the run ends with a locally-injected
+	// "<synthetic>" status line (e.g. a rate-limit notice) — that must not
+	// overwrite the run's model attribution, or its real cost gets mislabeled
+	// under a model that did no work and cost nothing.
+	rs := RunSummary{}
+	applyEvent(&rs, Event{Model: "claude-sonnet-5", Usage: &Usage{InputTokens: 100}})
+	applyEvent(&rs, Event{Model: syntheticModel})
+	if rs.Model != "claude-sonnet-5" {
+		t.Errorf("Model = %q, want %q (synthetic status line must not win attribution)", rs.Model, "claude-sonnet-5")
+	}
+}
+
 func TestAgentIDFromPath(t *testing.T) {
 	cases := []struct {
 		path   string

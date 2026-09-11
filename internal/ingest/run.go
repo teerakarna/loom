@@ -9,6 +9,18 @@ import (
 	"time"
 )
 
+// syntheticModel is a real, confirmed value of message.model on some
+// assistant lines — a locally-injected status/error message (e.g. a
+// rate-limit notice), not a real API call. Confirmed by direct inspection: it
+// always carries all-zero usage. It must never be allowed to win "last
+// non-empty model" attribution for a run, or a run's real cost (from its
+// actual model calls earlier in the same file) gets mislabeled under a model
+// name that did no real work and cost nothing — found by running against
+// real history, where a failed agent's entire cost was attributed to
+// "<synthetic>" because that was the last assistant line before it errored
+// out. See docs/transcript-schema.md.
+const syntheticModel = "<synthetic>"
+
 // RunSummary is one file's worth of ingest — one main session transcript, or
 // one subagent's own transcript. "One file = one run" for B1; the design
 // doc's richer run/session distinction (a session containing many runs) is a
@@ -93,7 +105,7 @@ func applyEvent(rs *RunSummary, ev Event) {
 			rs.EndedAt = ev.Timestamp
 		}
 	}
-	if ev.Model != "" {
+	if ev.Model != "" && ev.Model != syntheticModel {
 		rs.Model = ev.Model
 	}
 	if ev.Usage != nil {
