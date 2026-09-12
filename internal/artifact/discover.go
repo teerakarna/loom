@@ -162,6 +162,15 @@ func scanMarkdownDir(dir, kind string) ([]Artifact, error) {
 	return out, nil
 }
 
+// maxDescriptionRunes bounds every artifact description Loom stores and
+// later re-serves through get_recommendation (design doc constraint 9,
+// "artifact-derived text is data, never instructions"). This is read off
+// disk, unsanitized, from files Loom does not control the contents of — a
+// length cap doesn't stop an adversarial description from being adversarial,
+// but it stops one from being unboundedly large in whatever context a
+// downstream client renders it into.
+const maxDescriptionRunes = 300
+
 // artifactFromFile builds an Artifact from a Markdown file, preferring the
 // frontmatter's own name over the filename-derived fallback when present. A
 // file with no frontmatter description at all (plain Markdown, no YAML
@@ -177,7 +186,18 @@ func artifactFromFile(path, fallbackName, kind string) Artifact {
 	if desc == "" {
 		desc = firstHeading(path)
 	}
-	return Artifact{Kind: kind, Path: path, Name: name, Description: desc}
+	return Artifact{Kind: kind, Path: path, Name: name, Description: truncate(desc, maxDescriptionRunes)}
+}
+
+// truncate returns s unchanged if it's within max runes, or its first
+// max-1 runes plus an ellipsis otherwise. Operates on runes, not bytes, so a
+// multi-byte character is never split.
+func truncate(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max-1]) + "…"
 }
 
 // hooksSettings is the subset of settings.json this package reads. Every

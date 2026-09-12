@@ -3,6 +3,7 @@ package artifact
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -82,6 +83,35 @@ func TestDiscoverSkillNoFrontmatterFallsBackToHeading(t *testing.T) {
 	}
 	if got[0].Description != "Diagnosing a PR blocked by an unsigned commit" {
 		t.Errorf("Description = %q, want the first heading", got[0].Description)
+	}
+}
+
+func TestDiscoverTruncatesLongDescription(t *testing.T) {
+	home := t.TempDir()
+	long := strings.Repeat("x", maxDescriptionRunes+50)
+	writeFile(t, filepath.Join(home, ".claude", "skills", "long.md"), "---\ndescription: "+long+"\n---\n")
+
+	got, err := Discover(Locations{SkillDirs: []string{filepath.Join(home, ".claude", "skills")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d artifacts, want 1", len(got))
+	}
+	d := []rune(got[0].Description)
+	if len(d) != maxDescriptionRunes {
+		t.Errorf("Description length = %d, want %d (capped)", len(d), maxDescriptionRunes)
+	}
+	if d[len(d)-1] != '…' {
+		t.Errorf("Description doesn't end with an ellipsis: %q", got[0].Description)
+	}
+}
+
+func TestTruncateMultibyteSafe(t *testing.T) {
+	s := strings.Repeat("é", 10) // 2 bytes each in UTF-8, must not be split mid-rune
+	got := truncate(s, 5)
+	if got != strings.Repeat("é", 4)+"…" {
+		t.Errorf("truncate(%q, 5) = %q", s, got)
 	}
 }
 
