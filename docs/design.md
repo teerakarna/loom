@@ -21,7 +21,36 @@ without stopword filtering produced false-positive matches on shared function wo
 "and", "for") — fixed by filtering a stopword list before scoring. `list_proposals` correctly
 returns empty — nothing writes to that table until B5.
 
-B3 (policy table, generated agent definitions, model pinning) not started.
+**B3 done (2026-09-12):** policy table, model pinning, generated agent definitions. Shipped in
+four slices:
+
+- **B3a** — `runs` now records `agent_type` and `effort`. Neither existed, so per-agent-type policy
+  had nothing to key on. `agentType` lives only in the `.meta.json` companion beside each subagent
+  transcript; `effort` is top level on assistant lines, not inside `message`. This closed a standing
+  open item in `docs/transcript-schema.md`.
+- **B3b** — `loom report` gained per-run cost, cost concentration, a by-agent-type breakdown, and
+  the most expensive runs (closes #10). Totals alone invert the real ordering when run counts
+  differ, which the policy engine would otherwise have inherited.
+- **B3c** — policy resolution per agent type: stored, then evidence meeting `MinSampleSize` (20),
+  then a shipped default. Every `Decision` carries `Source` and `SampleSize`, so constraint 11 is
+  enforced by type rather than convention. `loom policy` shows it; `set`/`unset` give the
+  deliberate override and its one-command revert.
+- **B3d** — `loom policy render` writes agent definitions into Loom's own directory, never a
+  client's. A decision resting on a shipped default is not rendered at all.
+
+**The evidence path is deliberately unreached.** No agent type on a real corpus meets the 20-run
+threshold (Explore has 14, fork has 4), so everything correctly resolves to a labelled default and
+says what is still needed. That is the agreed behaviour, not an unfinished implementation.
+
+Two findings from dogfooding, both fixed: usage was summed per transcript line when one API
+response spans several lines, overstating cost by 2.12x (#6); and `UpsertPolicy` failed on any
+ledger predating the `UNIQUE` constraint on `agent_type`, because SQLite cannot add a constraint
+via `ALTER TABLE` and every unit test built its table fresh.
+
+Still open on the B3 milestone: #9 (the headline figure is uninterpretable and hides that 75% of
+weighted cost is cache reads). Report presentation, not correctness.
+
+B4 (lanes, ledger-backed coordination) not started.
 
 **Pick this up on a personal machine.** Everything below is generic by construction, with no
 employer context in it. Build it on personal hardware, on personal time, under personal accounts,
