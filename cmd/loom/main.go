@@ -46,6 +46,8 @@ Usage:
                              source and sample size behind each decision.
   loom policy set <agent-type> <model> <effort>
   loom policy unset <agent-type>
+  loom policy render        Write agent definitions for pinned models into
+                             ~/.loom/generated/agents/ (never installed for you).
   loom serve                Run the MCP server on stdio (query_ledger, get_recommendation,
                              list_proposals, record_outcome).
 

@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/teerakarna/loom/internal/ledger"
@@ -29,6 +31,11 @@ func runPolicy(args []string) error {
 			return fmt.Errorf("usage: loom policy set <agent-type> <model> <effort>")
 		}
 		return setPolicy(db, args[1], args[2], args[3])
+	case "render":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: loom policy render")
+		}
+		return renderPolicies(db)
 	case "unset":
 		if len(args) != 2 {
 			return fmt.Errorf("usage: loom policy unset <agent-type>")
@@ -39,8 +46,73 @@ func runPolicy(args []string) error {
 		fmt.Printf("Removed the stored policy for %q. It now resolves to the shipped default.\n", args[1])
 		return nil
 	default:
-		return fmt.Errorf("unknown subcommand %q (want: set, unset, or nothing to show)", args[0])
+		return fmt.Errorf("unknown subcommand %q (want: set, unset, render, or nothing to show)", args[0])
 	}
+}
+
+// generatedAgentsDir is Loom's own output directory. Nothing is ever written
+// to a client's agent directory: constraint 8 keeps Loom out of
+// human-authored locations, and the human decides whether to adopt what is
+// generated here.
+func generatedAgentsDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".loom", "generated", "agents"), nil
+}
+
+func renderPolicies(db *ledger.DB) error {
+	dir, err := generatedAgentsDir()
+	if err != nil {
+		return err
+	}
+	decisions, err := effectiveDecisions(db)
+	if err != nil {
+		return err
+	}
+
+	out, err := policy.Render(dir, decisions)
+	if err != nil {
+		return err
+	}
+
+	for _, w := range out.Written {
+		fmt.Printf("wrote %s\n", w)
+	}
+	for _, s := range out.Skipped {
+		fmt.Printf("skipped %s\n", s)
+	}
+	if len(out.Written) == 0 {
+		fmt.Println()
+		fmt.Println("Nothing rendered. A definition is only generated where there is something to")
+		fmt.Println("pin beyond the shipped default: a deliberate policy, or evidence past the")
+		fmt.Printf("%d-run threshold. Generating files that restate defaults would add material to\n", policy.MinSampleSize)
+		fmt.Println("review without adding anything to review it against.")
+		return nil
+	}
+	fmt.Println()
+	fmt.Println("Loom does not install these. Copy one where your client reads agent definitions")
+	fmt.Println("if you want it to take effect.")
+	return nil
+}
+
+// effectiveDecisions resolves every agent type the ledger knows about, plus
+// any type that has a stored policy but no runs yet.
+func effectiveDecisions(db *ledger.DB) ([]policy.Decision, error) {
+	stats, err := db.StatsByAgentType()
+	if err != nil {
+		return nil, err
+	}
+	var out []policy.Decision
+	for i := range stats {
+		stored, err := db.GetPolicy(stats[i].AgentType)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, policy.Resolve(stats[i].AgentType, stored, &stats[i]))
+	}
+	return out, nil
 }
 
 func setPolicy(db *ledger.DB, agentType, model, effort string) error {
