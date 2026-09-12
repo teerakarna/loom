@@ -172,6 +172,27 @@ to stop the design collapsing into one person's habits.
    What is not allowed is losing track of which is which, because every downstream decision inherits
    that confusion silently.
 
+12. **The ledger is machine-local, and stays that way.** It is never synced, committed, backed up to
+   a shared location, or checked into a dotfiles manager. A rule, not an accident of where the file
+   currently happens to sit.
+
+   Constraint 6 keeps message content out. It does not keep *identifiers* out, and on any corpus
+   that matters those identify real work: full transcript paths encode project directory names, and
+   discovered artifacts carry their names and descriptions. Keeping the ledger on the machine that
+   produced it is what makes Loom safe to point at a sensitive corpus at all.
+
+   Corollary for anything published — docs, examples, issues, screenshots, write-ups: it comes only
+   from a corpus you are willing to publish from. Loom cannot know which of a user's machines that
+   is, and does not guess. The discipline belongs to whoever is publishing.
+
+   This is deliberately *not* a work-versus-personal rule. Whether a user draws that distinction at
+   all is theirs to decide (constraint 5); this says only that wherever a ledger is written, it
+   stays there.
+
+> **A note on these numbers.** Constraints are cited by number from Go comments, CONTRIBUTING.md and
+> commit messages. Append new ones; never insert into the middle, which silently invalidates every
+> existing reference.
+
 
 ---
 
@@ -292,8 +313,12 @@ The `coordination` table stays in the schema as an empty, unused artifact of the
 rather than being dropped in a migration, but nothing reads or writes it. Anyone wanting
 cross-session coordination should use a file convention outside Loom.
 
-Loom's own promotion rules, pointed at a coordination mechanism that went unused, would say retire.
-That applies to this feature too.
+**Correction, same day.** An earlier version of this section argued the rejection partly on the
+grounds that the author's own file-based exchange had "gone unused". That was wrong: it was inferred
+from one machine, where the exchange happens to be quiet, and generalised to a practice spanning
+several environments. On the author's work machine the exchange is in active, heavy use. The
+rejection stands on the five arguments above, none of which depend on usage, and the usage argument
+is withdrawn rather than quietly deleted.
 
 ---
 
