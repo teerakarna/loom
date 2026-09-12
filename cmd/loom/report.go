@@ -150,15 +150,70 @@ func printReport(s ledger.Summary) {
 	fmt.Printf("Tool uses:       %d\n", s.TotalToolUses)
 	fmt.Printf("Tool denials:    %d\n", s.TotalDenials)
 	fmt.Printf("User feedback:   %d\n", s.TotalFeedback)
-	fmt.Println()
-	fmt.Println("By model:")
-	for _, mc := range s.ByModel {
-		fmt.Printf("  %-24s %6d runs  %12.0f\n", mc.Model, mc.Runs, mc.WeightedCost)
+
+	// Concentration first: it changes how every breakdown below should be
+	// read. If a handful of runs are nearly all the cost, the averages are
+	// describing the tail, not the typical case.
+	if len(s.Concentration) > 0 && s.TotalRuns > 1 {
+		fmt.Println()
+		fmt.Println("Cost concentration:")
+		for _, c := range s.Concentration {
+			if c.N >= s.TotalRuns {
+				break
+			}
+			fmt.Printf("  top %-2d of %d runs   %5.1f%% of total\n", c.N, s.TotalRuns, c.Share*100)
+		}
 	}
+
+	printGroup(s, "By model:", len(s.ByModel), func(i int) (string, int, float64, float64) {
+		m := s.ByModel[i]
+		return m.Model, m.Runs, m.WeightedCost, m.PerRun
+	})
+
+	if len(s.ByAgentType) > 0 {
+		printGroup(s, "By agent type:", len(s.ByAgentType), func(i int) (string, int, float64, float64) {
+			a := s.ByAgentType[i]
+			name := a.AgentType
+			if name == "" {
+				name = "(unattributed)"
+			}
+			return name, a.Runs, a.WeightedCost, a.PerRun
+		})
+	}
+
+	if len(s.TopRuns) > 0 && s.TotalRuns > 1 {
+		fmt.Println()
+		fmt.Println("Most expensive runs:")
+		for _, r := range s.TopRuns {
+			label := r.Model
+			if r.AgentType != "" {
+				label = r.AgentType + " / " + r.Model
+			}
+			fmt.Printf("  %5.1f%%  %-30s %12.0f  %s\n", r.Share*100, label, r.WeightedCost, filepath.Base(r.Path))
+		}
+	}
+
 	if s.AgentRuns > 0 {
 		fmt.Println()
 		fmt.Printf("%d/%d agent runs have a reported subagent_tokens figure from their parent's\n", s.UnreconciledAgents, s.AgentRuns)
 		fmt.Println("task-notification. This is NOT reconciled against the weighted cost above —")
 		fmt.Println("see docs/transcript-schema.md, \"Reconciliation does NOT hold\".")
+	}
+}
+
+// printGroup renders one grouped breakdown with both the total and the
+// per-run figure. Per-run is shown because totals alone conflate "costs more
+// each time" with "used more often", and can invert the real ordering when
+// run counts differ (issue #10).
+func printGroup(s ledger.Summary, heading string, n int, row func(int) (string, int, float64, float64)) {
+	if n == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Println(heading)
+	fmt.Printf("  %-24s %6s %14s %14s\n", "", "runs", "total", "per run")
+	for i := range n {
+		name, runs, total, per := row(i)
+		fmt.Printf("  %-24s %6d %14.0f %14.0f\n", name, runs, total, per)
 	}
 }
