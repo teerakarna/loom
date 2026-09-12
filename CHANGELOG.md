@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- CI: golangci-lint (`.golangci.yml`, standard linters), govulncheck, and gitleaks secret scanning
+  as separate jobs alongside build/vet/test. Fixes 19 errcheck findings (unchecked `Close()` errors)
+  surfaced by turning lint on for the first time.
+- Dependabot config for `gomod` and `github-actions` dependency updates, weekly. Also enabled
+  GitHub's Dependabot vulnerability alerts on the repo (a settings toggle, free on private repos —
+  confirmed by testing, doesn't require going public).
+
 - Prompt-injection hardening for the artifact-recommendation path: `get_recommendation` and
   `loom advise` re-serve name/description text read verbatim from local files, which is an
   indirect-injection surface once it lands back in another agent's context. Description text is

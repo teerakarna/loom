@@ -37,7 +37,7 @@ func (d *DB) ListEvents() ([]EventRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []EventRow
 	for rows.Next() {

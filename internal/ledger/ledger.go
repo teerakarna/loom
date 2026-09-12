@@ -104,11 +104,11 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	if _, err := db.Exec(schema); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
 	if err := migrate(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
 	return &DB{sql: db}, nil
@@ -134,7 +134,7 @@ func migrate(db *sql.DB) error {
 		var notnull, pk int
 		var dflt any
 		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return err
 		}
 		have[name] = true
@@ -142,7 +142,7 @@ func migrate(db *sql.DB) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	for col, ddl := range map[string]string{
 		"name":        `ALTER TABLE artifacts ADD COLUMN name TEXT NOT NULL DEFAULT ''`,

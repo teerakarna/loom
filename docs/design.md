@@ -364,7 +364,11 @@ The tool's only input is transcripts, which on any real machine contain confiden
 - The generic mechanisms are publishable. The *instances* (which boundaries exist, which repos, which
   skills) are user configuration and never enter the repo.
 - CI runs secret scanning plus a fixture-provenance check on every PR, and both are green before the
-  repository is made public.
+  repository is made public. **Secret scanning done (2026-09-12):** gitleaks, as a CI job, not
+  GitHub's native secret-scanning toggle — that feature requires the repo to already be public (or
+  paid GitHub Advanced Security), confirmed by trying to enable it via the API while private and
+  getting "not available for this repository." Relying on it would have made this rule impossible to
+  satisfy in the intended order. Fixture-provenance check not yet built.
 
 ## Project scaffolding
 

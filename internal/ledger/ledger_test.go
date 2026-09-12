@@ -12,7 +12,7 @@ func openTestDB(t *testing.T) *DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 
@@ -22,13 +22,13 @@ func TestOpenIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db1.Close()
+	_ = db1.Close()
 
 	db2, err := Open(path) // re-opening an existing db must not fail
 	if err != nil {
 		t.Fatal(err)
 	}
-	db2.Close()
+	_ = db2.Close()
 }
 
 func TestInsertAndReportRun(t *testing.T) {

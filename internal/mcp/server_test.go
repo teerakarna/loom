@@ -21,7 +21,7 @@ func connectTestClient(t *testing.T) (*gomcp.ClientSession, *ledger.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	server := NewServer(db)
 	client := gomcp.NewClient(&gomcp.Implementation{Name: "test-client", Version: "v0.0.1"}, nil)
@@ -35,7 +35,7 @@ func connectTestClient(t *testing.T) (*gomcp.ClientSession, *ledger.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { session.Close() })
+	t.Cleanup(func() { _ = session.Close() })
 	return session, db
 }
 

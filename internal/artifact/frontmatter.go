@@ -27,7 +27,7 @@ func readFrontmatter(path string) frontmatter {
 	if err != nil {
 		return frontmatter{}
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	sc := bufio.NewScanner(f)
 	if !sc.Scan() || strings.TrimSpace(sc.Text()) != "---" {
@@ -74,7 +74,7 @@ func firstHeading(path string) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	sc := bufio.NewScanner(f)
 	for i := 0; i < headingScanLimit && sc.Scan(); i++ {

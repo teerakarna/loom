@@ -100,7 +100,7 @@ func (d *DB) Report() (Summary, error) {
 	if err != nil {
 		return s, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var mc ModelCost
 		if err := rows.Scan(&mc.Model, &mc.Runs, &mc.WeightedCost); err != nil {
