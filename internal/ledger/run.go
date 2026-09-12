@@ -1,6 +1,10 @@
 package ledger
 
-import "time"
+import (
+	"time"
+
+	"github.com/teerakarna/loom/internal/ingest"
+)
 
 // RunRecord is what gets written to the runs table for one ingested
 // transcript file. ReportedSubagentTokens/ReportedToolUses/ReportedDurationMs
@@ -71,10 +75,16 @@ func formatTime(t time.Time) any {
 
 // Summary is the aggregate `loom report` reads back.
 type Summary struct {
-	TotalRuns          int
-	SessionRuns        int
-	AgentRuns          int
-	TotalWeightedCost  float64
+	TotalRuns         int
+	SessionRuns       int
+	AgentRuns         int
+	TotalWeightedCost float64
+	// CostByKind is the weighted contribution of each token class to
+	// TotalWeightedCost. Without it the headline is a bare nine-digit number
+	// with no reference point, and it conceals the single most useful fact
+	// about a corpus: whether the spend is dominated by cheap cached input or
+	// by expensive fresh output. Those imply opposite actions (issue #9).
+	CostByKind         []KindCost
 	TotalToolUses      int
 	TotalDenials       int
 	TotalFeedback      int
@@ -83,6 +93,14 @@ type Summary struct {
 	TopRuns            []RunCost // most expensive runs, descending
 	Concentration      []ShareAtN
 	UnreconciledAgents int // agent runs with a reported figure that doesn't match a computed one
+}
+
+// KindCost is one token class's contribution to the weighted total.
+type KindCost struct {
+	Kind   string
+	Cost   float64
+	Share  float64 // fraction of the weighted total, 0-1
+	Tokens int64
 }
 
 // ModelCost is one row of the by-model cost breakdown. PerRun is the figure
@@ -149,6 +167,9 @@ func (d *DB) Report() (Summary, error) {
 		return s, err
 	}
 
+	if err := d.scanCostByKind(&s); err != nil {
+		return s, err
+	}
 	if err := d.scanGrouped(&s); err != nil {
 		return s, err
 	}
@@ -156,6 +177,38 @@ func (d *DB) Report() (Summary, error) {
 		return s, err
 	}
 	return s, nil
+}
+
+// scanCostByKind splits the weighted total by token class, using the same
+// weights internal/ingest applies, so the two can never silently disagree
+// about what a token costs.
+func (d *DB) scanCostByKind(s *Summary) error {
+	row := d.sql.QueryRow(`
+		SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
+		       COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_creation_tokens),0)
+		FROM runs`)
+	var in, out, cr, cw int64
+	if err := row.Scan(&in, &out, &cr, &cw); err != nil {
+		return err
+	}
+	for _, k := range []struct {
+		name   string
+		tokens int64
+		weight float64
+	}{
+		{"input", in, ingest.WeightInput},
+		{"output", out, ingest.WeightOutput},
+		{"cache read", cr, ingest.WeightCacheRead},
+		{"cache write", cw, ingest.WeightCacheWrite},
+	} {
+		cost := float64(k.tokens) * k.weight
+		share := 0.0
+		if s.TotalWeightedCost > 0 {
+			share = cost / s.TotalWeightedCost
+		}
+		s.CostByKind = append(s.CostByKind, KindCost{Kind: k.name, Cost: cost, Share: share, Tokens: k.tokens})
+	}
+	return nil
 }
 
 // scanGrouped fills the by-model and by-agent-type breakdowns.

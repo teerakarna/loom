@@ -122,3 +122,60 @@ func TestReportEmptyLedgerHasNoDivisionByZero(t *testing.T) {
 		t.Errorf("expected an empty summary, got %+v", s)
 	}
 }
+
+// TestReportCostByKindSumsToTheHeadline is the guard for issue #9: a breakdown
+// that does not add up to the total it explains is worse than none. It also
+// pins the weights to internal/ingest's, so the two cannot drift apart.
+func TestReportCostByKindSumsToTheHeadline(t *testing.T) {
+	db := openTestDB(t)
+	if err := db.InsertRun(RunRecord{
+		Path: "a.jsonl", Kind: "session",
+		InputTokens: 100, OutputTokens: 20, CacheReadTokens: 5000, CacheCreationTokens: 40,
+		WeightedCost: 100*1.0 + 20*5.0 + 5000*0.1 + 40*1.25,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := db.Report()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.CostByKind) != 4 {
+		t.Fatalf("CostByKind = %d entries, want 4", len(s.CostByKind))
+	}
+
+	var sum, shares float64
+	byKind := map[string]KindCost{}
+	for _, k := range s.CostByKind {
+		sum += k.Cost
+		shares += k.Share
+		byKind[k.Kind] = k
+	}
+	if sum != s.TotalWeightedCost {
+		t.Errorf("kinds sum to %v but the headline is %v", sum, s.TotalWeightedCost)
+	}
+	if shares < 0.999 || shares > 1.001 {
+		t.Errorf("shares sum to %v, want 1.0", shares)
+	}
+	// Cache reads dominate token counts but not cost, which is the whole point
+	// of showing the split.
+	if byKind["cache read"].Tokens != 5000 {
+		t.Errorf("cache read tokens = %d, want 5000", byKind["cache read"].Tokens)
+	}
+	if byKind["cache read"].Cost != 500 {
+		t.Errorf("cache read cost = %v, want 500 (5000 x 0.1)", byKind["cache read"].Cost)
+	}
+}
+
+func TestReportCostByKindOnEmptyLedger(t *testing.T) {
+	db := openTestDB(t)
+	s, err := db.Report()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range s.CostByKind {
+		if k.Share != 0 || k.Cost != 0 {
+			t.Errorf("empty ledger produced %+v, want zeroes and no division by zero", k)
+		}
+	}
+}

@@ -19,6 +19,8 @@ func main() {
 		err = runReport(os.Args[2:])
 	case "advise":
 		err = runAdvise(os.Args[2:])
+	case "status":
+		err = runStatus(os.Args[2:])
 	case "policy":
 		err = runPolicy(os.Args[2:])
 	case "serve":
@@ -42,6 +44,8 @@ Usage:
                              and print an aggregate cost/usage report.
   loom advise <task text>   Discover skills/agents/plans/hooks, and recommend which
                              are relevant plus a cold-start model/effort choice.
+  loom status [path]        Report on loom itself: freshness, what it knows, and what
+                             it cannot answer. Read-only, never ingests.
   loom policy               Show the effective model/effort per agent type, with the
                              source and sample size behind each decision.
   loom policy set <agent-type> <model> <effort>

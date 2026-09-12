@@ -158,6 +158,7 @@ func ptr[T any](v T) *T { return &v }
 func printReport(s ledger.Summary) {
 	fmt.Printf("Runs ingested:   %d (%d sessions, %d agents)\n", s.TotalRuns, s.SessionRuns, s.AgentRuns)
 	fmt.Printf("Weighted cost:   %.0f (relative units — see docs/design.md, not real currency)\n", s.TotalWeightedCost)
+	printCostByKind(s)
 	fmt.Printf("Tool uses:       %d\n", s.TotalToolUses)
 	fmt.Printf("Tool denials:    %d\n", s.TotalDenials)
 	fmt.Printf("User feedback:   %d\n", s.TotalFeedback)
@@ -209,6 +210,39 @@ func printReport(s ledger.Summary) {
 		fmt.Printf("%d/%d agent runs have a reported subagent_tokens figure from their parent's\n", s.UnreconciledAgents, s.AgentRuns)
 		fmt.Println("task-notification. This is NOT reconciled against the weighted cost above —")
 		fmt.Println("see docs/transcript-schema.md, \"Reconciliation does NOT hold\".")
+	}
+}
+
+// printCostByKind shows what the headline figure is actually made of. A bare
+// nine-digit total has no reference point, and hides the most useful fact
+// about a corpus: spend dominated by cheap cached input and spend dominated by
+// expensive fresh output look identical in the total and imply opposite
+// actions (issue #9).
+func printCostByKind(s ledger.Summary) {
+	if len(s.CostByKind) == 0 || s.TotalWeightedCost == 0 {
+		return
+	}
+	fmt.Println("  made up of:")
+	for _, k := range s.CostByKind {
+		if k.Tokens == 0 {
+			continue
+		}
+		fmt.Printf("    %-12s %5.1f%%  %15d tokens x %.2f\n", k.Kind, k.Share*100, k.Tokens, weightFor(k.Kind))
+	}
+}
+
+// weightFor is display-only, reading the same exported constants the cost
+// function uses so the printed multiplier cannot drift from the real one.
+func weightFor(kind string) float64 {
+	switch kind {
+	case "input":
+		return ingest.WeightInput
+	case "output":
+		return ingest.WeightOutput
+	case "cache read":
+		return ingest.WeightCacheRead
+	default:
+		return ingest.WeightCacheWrite
 	}
 }
 

@@ -10,12 +10,22 @@ package ingest
 // roughly an order of magnitude cheaper than fresh input, so the cost
 // function weights by kind. Summing raw tokens would make every downstream
 // recommendation wrong."
+// Exported so a report can break a total down by token class using the same
+// numbers the cost function uses. Two copies of these weights would drift, and
+// a breakdown that does not sum to its own headline is worse than no breakdown.
 const (
-	weightInput        = 1.0
-	weightOutput       = 5.0
-	weightCacheRead    = 0.1
-	weightCacheWrite1h = 1.25
-	weightCacheWrite5m = 1.25
+	WeightInput      = 1.0
+	WeightOutput     = 5.0
+	WeightCacheRead  = 0.1
+	WeightCacheWrite = 1.25
+)
+
+const (
+	weightInput        = WeightInput
+	weightOutput       = WeightOutput
+	weightCacheRead    = WeightCacheRead
+	weightCacheWrite1h = WeightCacheWrite
+	weightCacheWrite5m = WeightCacheWrite
 )
 
 // WeightedCost returns a relative cost figure for one Usage — sum tokens by
