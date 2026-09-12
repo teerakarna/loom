@@ -108,6 +108,34 @@ to stop the design collapsing into one person's habits.
    flag on obviously injection-shaped text (`suspicious`) is surfaced alongside a match — advisory
    only, per constraint 1's whole ethos, never a filter. Full detection is not attempted: phrase-based
    classifiers are gameable and a false sense of security is worse than an honest gap.
+10. **Every accelerator ships with its brake, and nothing grows without a bound.** Any mechanism
+   that can act, spend, or generate has its limit defined and enforced in the same change that
+   introduces it, never in a later phase. A brake added afterwards is not a brake: the window it
+   was missing is exactly the window the thing ran unattended.
+
+   This bites hardest for a tool whose entire purpose is reducing accumulated material. A mechanism
+   that answers "too many artifacts to keep track of" by producing more artifacts has made the
+   problem worse while appearing to help. So anything Loom generates states its retention rule up
+   front: how many, for how long, overwritten or appended.
+
+   Concretely, and these are current gaps as of 2026-09-12, not solved problems:
+   - `record_outcome` appends to `events` with no cap. Needs a bound, or a documented reason the
+     unbounded growth is acceptable.
+   - B5's proposals need a generation limit and dedupe. An advisor producing proposals faster than
+     a human accepts them recreates exactly the fatigue this tool exists to reduce.
+   - The pre-compact hook (see "Integration") writes a resume pointer. It must **overwrite**, one
+     per session, never append, or a context-relief mechanism becomes a context-consuming one.
+
+11. **Say which numbers are evidence and which are assumption.** A figure derived from one run must
+   not render identically to one derived from fifty. Recommendations carry their sample size, and
+   the selector states when it is using a shipped default rather than measured history (see "Cold
+   start"). The same discipline applies to anything the ledger reports: an unreconciled figure, a
+   default, and a measured median are three different kinds of claim and are labelled as such.
+
+   You can reason from a model of the world that is not yet backed by data, and often you have to.
+   What is not allowed is losing track of which is which, because every downstream decision inherits
+   that confusion silently.
+
 
 ---
 
