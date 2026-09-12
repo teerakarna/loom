@@ -99,6 +99,15 @@ to stop the design collapsing into one person's habits.
    directory, and proposal files. Nothing else. Settings files are read-only, always. A tool in this
    space once shipped a version that deleted users' hand-written hook entries; that class of failure
    gets designed out, not carefully avoided.
+9. **Artifact-derived text is data, never instructions.** A skill/agent/plan's name, description, or
+   heading is read off disk and re-served verbatim through `get_recommendation` into whatever session
+   called it — that is untrusted content re-entering another agent's context, the same shape of
+   problem as Candor's "all ingested telemetry is untrusted" rule. Loom cannot force a downstream
+   client to treat it as data rather than commands, but it bounds the blast radius: every such field
+   is length-capped, and every tool that returns one says so in its own schema. A cheap heuristic
+   flag on obviously injection-shaped text (`suspicious`) is surfaced alongside a match — advisory
+   only, per constraint 1's whole ethos, never a filter. Full detection is not attempted: phrase-based
+   classifiers are gameable and a false sense of security is worse than an honest gap.
 
 ---
 

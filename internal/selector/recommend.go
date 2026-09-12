@@ -24,6 +24,13 @@ type SkillMatch struct {
 	Path        string
 	Description string
 	Score       float64 // 0 (no overlap) to 1 (every descriptor word matched)
+	// Suspicious is a best-effort, advisory-only flag (docs/design.md
+	// constraint 9): Description is read verbatim off disk from a file Loom
+	// doesn't control, and re-served through the MCP server into whatever
+	// session asked for a recommendation. This is never a filter — a
+	// flagged match is still returned, just with a warning attached — and
+	// it is not a security boundary: see LooksSuspicious.
+	Suspicious bool
 }
 
 // Recommendation is what Recommend returns: which existing artifacts are
@@ -115,6 +122,7 @@ func Recommend(desc TaskDescriptor, artifacts []ledger.ArtifactRow) Recommendati
 		}
 		matches = append(matches, SkillMatch{
 			Kind: a.Kind, Name: a.Name, Path: a.Path, Description: a.Description, Score: s,
+			Suspicious: LooksSuspicious(a.Name + " " + a.Description),
 		})
 	}
 	sort.Slice(matches, func(i, j int) bool { return matches[i].Score > matches[j].Score })
