@@ -51,7 +51,13 @@ Issue #9 (the headline figure is uninterpretable and hides that 75% of weighted 
 reads) was moved to B4 rather than held against B3: it is report presentation, not correctness, and
 nothing in B3 depends on it. The B3 milestone is closed.
 
-B4 (lanes, ledger-backed coordination) not started.
+B4 (lanes) not started. Ledger-backed coordination was **cut on 2026-09-12** rather than deferred:
+it breaks constraint 7 by making sessions depend on Loom being installed, and it invents a mechanism
+rather than optimising an existing one. Full reasoning under "Coordination between lanes: rejected".
+
+Loom never reads or writes any external coordination state. Artifact discovery scans skills, agents,
+plans and per-project memory only, so a file-based exchange convention elsewhere in `~/.claude/` is
+neither ingested nor interfered with, and its content never reaches the ledger (constraint 6).
 
 **Pick this up on a personal machine.** Everything below is generic by construction, with no
 employer context in it. Build it on personal hardware, on personal time, under personal accounts,
@@ -254,9 +260,40 @@ The scope dial, tight to loose:
 the manifest and never guessed from a path. Path-guessing is exactly how content ends up in the wrong
 store, so the manifest is the only source of truth.
 
-**Coordination between lanes** uses append-only ledger tables (`messages`, `presence` with a TTL,
-`tasks`) plus a human-readable view rendered from them. The failure mode this replaces is a shared
-markdown coordination file that grows without bound and drifts from whatever the docs claim it does.
+**Coordination between lanes: rejected 2026-09-12.** This originally specified append-only ledger
+tables (`messages`, `presence` with a TTL, `tasks`) to replace a shared markdown coordination file.
+It is not being built, and the reasoning is worth keeping rather than leaving as silence.
+
+**It breaks constraint 7.** "If the engine is absent, stopped or broken, every integration point
+returns cleanly and the session proceeds unaffected." Measurement degrades gracefully: no Loom, no
+report, session unaffected. Coordination cannot. If sessions coordinate through Loom's SQLite and
+Loom is not installed, they cannot see each other at all. That is a hard dependency, not a
+degradation, and it is the one category of feature this constraint structurally forbids.
+
+**It breaks the thesis.** The enabling fact above is that the data already exists and the
+measurement layer needs *no instrumentation at all*. Coordination is the opposite: it invents a
+mechanism Claude Code does not have and requires every session to opt into a protocol. That is a
+category shift from optimising what exists to adding something new.
+
+**It imposes one person's habits**, which the design constraints open by forbidding. A file-based
+convention in someone's own home directory is inert to everyone else. Coordination tables shipped
+in Loom push that opinion onto every user of the tool.
+
+**Files are the more enduring choice here.** Every durable Claude Code artifact is a file: skills,
+memory, plans, CLAUDE.md, transcripts. A markdown/JSONL convention runs with the grain of the
+platform, is greppable, debuggable without a CLI, and survives Loom being uninstalled or rewritten.
+A table in one tool's private database does none of that.
+
+**And it complements nothing.** Lanes feed the selector: declared scope informs recommendations.
+Coordination would share a database with the rest of Loom and nothing else. A separate product
+wearing the same binary.
+
+The `coordination` table stays in the schema as an empty, unused artifact of the original design
+rather than being dropped in a migration, but nothing reads or writes it. Anyone wanting
+cross-session coordination should use a file convention outside Loom.
+
+Loom's own promotion rules, pointed at a coordination mechanism that went unused, would say retire.
+That applies to this feature too.
 
 ---
 
@@ -282,7 +319,7 @@ polling: real-time reaction at near-zero idle cost.
 - `runs` - one row per session or agent execution, with weighted cost and outcome
 - `policies` - the model/effort/tools decision table
 - `proposals` - pending recommendations with their evidence
-- `coordination` - messages, presence, tasks
+- `coordination` - unused. Retained empty; see "Coordination between lanes: rejected" above
 
 No content store and no full-text index. Recall of past conversation is a different problem and
 explicitly not this tool's job. Expected size is single-digit megabytes.
@@ -388,7 +425,10 @@ Each stage is independently useful. Stopping after any of them leaves something 
   actually go" from existing history on day one. This is the stage that proves the whole premise.
 - **B2** Selector plus the MCP server. Recommendations only, advisory.
 - **B3** Policy table, generated agent definitions, model pinning. The cost payoff.
-- **B4** Lanes and ledger-backed coordination.
+- **B4** Lanes. Coordination was cut (see "Coordination between lanes: rejected"), so this phase is
+  the lane manifest, scope enforcement, and feeding declared scope into the selector. Lanes must
+  earn their place on the same test coordination failed: they are optional and off by default, and
+  if they would go unused they should be cut too rather than built on principle.
 - **B5** Advisor proposals for promotion and retirement.
 - **B6** Plugin packaging, signed releases, public at v0.1.0.
 
