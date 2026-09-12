@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `loom report` now shows per-run cost alongside totals, a cost-concentration summary, a by-agent-type
+  breakdown, and the most expensive runs (B3b, closes #10). Totals alone conflate "costs more each
+  time" with "used more often" and can invert the real ordering; on a real corpus one run turned out
+  to be 71% of all measured cost, which no grouped view could show.
 - Runs now record `agent_type` and `effort` (B3a). Agent type is read from the `.meta.json`
   companion beside each subagent transcript, the only place it exists; effort is a top-level field
   on assistant lines. Both are optional and empty when absent. This is the key B3's per-agent-type
