@@ -38,6 +38,38 @@ plausibly differ for background vs interactive sessions.
 
 `message.content` is an array of blocks; observed block types: `thinking`, `text`, `tool_use`.
 
+### One response spans several lines, each repeating the same usage
+
+**This is the single most expensive thing to get wrong in this file.** One API response is written
+as **multiple JSONL lines, one per content block**, and every one of those lines carries the
+**same** `message.usage` object and the same `message.id`:
+
+```
+message id: msg_01JNrMpGgM5TYKmxKywz appears 4 times
+   cache_read=26284 output=290 content_blocks=['thinking']
+   cache_read=26284 output=290 content_blocks=['text']
+   cache_read=26284 output=290 content_blocks=['tool_use']
+   cache_read=26284 output=290 content_blocks=['tool_use']
+   -> identical usage on every line: True
+```
+
+So **usage must be counted once per distinct `message.id`, not once per line**. Summing per line
+overstated weighted cost by **2.12x** across this machine's 21 real transcripts (one file had 2952
+assistant lines for 1339 unique ids, worst id repeated 11 times, 57.7% of its cache-read total
+being re-counted duplicates).
+
+Worse than the absolute error: the inflation scales with how many content blocks a response had, so
+responses with many tool calls are over-weighted relative to plain text ones. Model and agent-type
+comparisons are skewed, not just the total.
+
+`tool_use` counting is the exact opposite and must **not** be deduplicated: each line carries its
+own distinct content block, so two `tool_use` blocks on two lines of the same response are two
+genuinely separate tool calls.
+
+Found by running `loom report` against real history rather than by reading fixtures, which is
+the third time this format has not been what it looked like. See
+`internal/ingest.applyEvent` and the regression tests in `run_test.go`.
+
 `message.usage` — confirmed real shape, richer than the design doc's flat list:
 
 ```json
