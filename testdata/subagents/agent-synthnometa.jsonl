@@ -1,0 +1,1 @@
+{"type": "assistant", "sessionId": "synth-meta-2", "timestamp": "2026-01-01T00:00:01Z", "message": {"id": "msg_meta_b", "model": "claude-sonnet-5", "content": [{"type": "text", "text": "no companion"}], "usage": {"input_tokens": 5, "output_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}}

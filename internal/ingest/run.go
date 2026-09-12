@@ -26,10 +26,20 @@ const syntheticModel = "<synthetic>"
 // doc's richer run/session distinction (a session containing many runs) is a
 // later-phase refinement.
 type RunSummary struct {
-	Path          string
-	SessionID     string
-	Model         string // last non-empty model seen; a run can span models
-	Kind          string // "session" | "agent"
+	Path      string
+	SessionID string
+	Model     string // last non-empty model seen; a run can span models
+	Kind      string // "session" | "agent"
+	// AgentType is the subagent's declared type ("Explore", "fork", ...),
+	// read from the .meta.json companion. Empty for session runs, and for
+	// agent runs whose companion is missing or unreadable. This is what B3's
+	// per-agent-type policy keys on.
+	AgentType string
+	// Effort is the reasoning effort observed on this run's assistant lines.
+	// Last non-empty value wins, same rule as Model: a run can in principle
+	// span efforts, and the most recent is the better description of it.
+	// Empty when no line carried one.
+	Effort        string
 	Usage         Usage
 	WeightedCost  float64
 	ToolUseCount  int
@@ -97,6 +107,16 @@ func IngestFile(path string) (RunSummary, error) {
 	}
 
 	rs.WeightedCost = WeightedCost(rs.Usage)
+
+	// Agent type lives only in the .meta.json companion, never in the
+	// transcript itself. A missing or unreadable companion leaves AgentType
+	// empty rather than failing the ingest: the run's cost is still real and
+	// worth recording, it just cannot be attributed to an agent type.
+	if rs.Kind == "agent" {
+		if meta, ok := ReadAgentMeta(path); ok {
+			rs.AgentType = meta.AgentType
+		}
+	}
 	return rs, nil
 }
 
@@ -128,6 +148,9 @@ func applyEvent(rs *RunSummary, ev Event) {
 	}
 	if ev.Model != "" && ev.Model != syntheticModel {
 		rs.Model = ev.Model
+	}
+	if ev.Effort != "" {
+		rs.Effort = ev.Effort
 	}
 	// Usage is counted once per API response, not once per transcript line.
 	// One response is written as several lines (one per content block:

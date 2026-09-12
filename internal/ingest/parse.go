@@ -61,6 +61,11 @@ func parseAssistant(m map[string]any, ev *Event) {
 	}
 	ev.Model, _ = msg["model"].(string)
 	ev.MessageID, _ = msg["id"].(string)
+	// effort is top level on the transcript line, not inside message - confirmed
+	// against real transcripts (values seen: "high"). Absent on older lines and
+	// on models that don't expose it, which is why it's optional everywhere
+	// downstream.
+	ev.Effort, _ = m["effort"].(string)
 	if durMs, ok := m["durationMs"]; ok {
 		ev.DurationMs = int64(toFloat(durMs))
 	}

@@ -59,7 +59,12 @@ type Event struct {
 	// lines repeats the same usage object. So usage must be counted once per
 	// distinct MessageID, not once per line - see applyEvent, and
 	// docs/transcript-schema.md ("One response spans several lines").
-	MessageID    string
+	MessageID string
+	// Effort is the reasoning effort for this turn ("high", ...), read from
+	// the line's top-level "effort" field, not from message. Empty when the
+	// line does not carry one, which is common enough that every consumer
+	// treats it as optional.
+	Effort       string
 	DurationMs   int64
 	ToolUseCount int // count of tool_use content blocks on this line
 

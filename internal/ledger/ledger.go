@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS runs (
 	session_id          TEXT,
 	kind                TEXT NOT NULL, -- "session" | "agent"
 	model               TEXT,
+	agent_type          TEXT NOT NULL DEFAULT '', -- from the .meta.json companion; '' for sessions
+	effort              TEXT NOT NULL DEFAULT '', -- reasoning effort; '' when the transcript carried none
 	started_at          TEXT,
 	ended_at            TEXT,
 	input_tokens        INTEGER NOT NULL DEFAULT 0,
@@ -123,8 +125,32 @@ func Open(path string) (*DB, error) {
 // schema-complete but column-incomplete (docs/design.md, "B1 only writes to
 // runs and events" — the table existed before the selector needed these).
 func migrate(db *sql.DB) error {
+	for _, m := range []struct {
+		table   string
+		columns map[string]string
+	}{
+		{"artifacts", map[string]string{
+			"name":        `ALTER TABLE artifacts ADD COLUMN name TEXT NOT NULL DEFAULT ''`,
+			"description": `ALTER TABLE artifacts ADD COLUMN description TEXT NOT NULL DEFAULT ''`,
+		}},
+		{"runs", map[string]string{
+			"agent_type": `ALTER TABLE runs ADD COLUMN agent_type TEXT NOT NULL DEFAULT ''`,
+			"effort":     `ALTER TABLE runs ADD COLUMN effort TEXT NOT NULL DEFAULT ''`,
+		}},
+	} {
+		if err := addMissingColumns(db, m.table, m.columns); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addMissingColumns adds any of columns (name -> ALTER statement) that table
+// does not already have. SQLite has no ADD COLUMN IF NOT EXISTS, so the
+// table's actual columns are read first.
+func addMissingColumns(db *sql.DB, table string, columns map[string]string) error {
 	have := map[string]bool{}
-	rows, err := db.Query(`PRAGMA table_info(artifacts)`)
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
 		return err
 	}
@@ -144,10 +170,7 @@ func migrate(db *sql.DB) error {
 	}
 	_ = rows.Close()
 
-	for col, ddl := range map[string]string{
-		"name":        `ALTER TABLE artifacts ADD COLUMN name TEXT NOT NULL DEFAULT ''`,
-		"description": `ALTER TABLE artifacts ADD COLUMN description TEXT NOT NULL DEFAULT ''`,
-	} {
+	for col, ddl := range columns {
 		if have[col] {
 			continue
 		}

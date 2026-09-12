@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Runs now record `agent_type` and `effort` (B3a). Agent type is read from the `.meta.json`
+  companion beside each subagent transcript, the only place it exists; effort is a top-level field
+  on assistant lines. Both are optional and empty when absent. This is the key B3's per-agent-type
+  policy needs, and it immediately showed a 30x per-run cost gap between `Explore` and `fork`
+  agents on a real corpus.
+
 ### Fixed
 
 - Weighted cost was overstated by 2.12x. One API response is written to the transcript as several
