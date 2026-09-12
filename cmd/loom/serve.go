@@ -23,7 +23,7 @@ func runServe(_ []string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	server := mcp.NewServer(db)
 	return server.Run(context.Background(), &gomcp.StdioTransport{})

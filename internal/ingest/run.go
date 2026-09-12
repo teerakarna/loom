@@ -61,7 +61,7 @@ func IngestFile(path string) (RunSummary, error) {
 	if err != nil {
 		return RunSummary{}, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	rs := RunSummary{
 		Path:                 path,

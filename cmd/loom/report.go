@@ -48,7 +48,7 @@ func runReport(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := ingestAll(db, root); err != nil {
 		return err

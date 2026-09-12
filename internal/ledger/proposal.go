@@ -22,7 +22,7 @@ func (d *DB) ListProposals() ([]ProposalRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []ProposalRow
 	for rows.Next() {

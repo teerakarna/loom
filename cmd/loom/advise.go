@@ -31,7 +31,7 @@ func runAdvise(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := discoverAndUpsert(db); err != nil {
 		return err

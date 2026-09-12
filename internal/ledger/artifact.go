@@ -56,7 +56,7 @@ func (d *DB) ListArtifacts() ([]ArtifactRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []ArtifactRow
 	for rows.Next() {
