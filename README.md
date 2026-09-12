@@ -8,12 +8,27 @@ costs, or which combination fits a given task. Loom reads the session transcript
 already writes to disk, builds a local ledger of what actually happened, and reports where cost
 and rework go. It measures and recommends; a human applies.
 
-**Status: design complete, build not started.** See [`docs/design.md`](docs/design.md) for the
-full design (problem, architecture, promotion rules, phasing) and
-[`docs/transcript-schema.md`](docs/transcript-schema.md) for the transcript format Loom ingests.
+**Status: B1 and B2 done** (ingest/ledger/report; artifact discovery, selector, MCP server). See
+[`docs/design.md`](docs/design.md) for the full design (problem, architecture, promotion rules,
+phasing) and [`docs/transcript-schema.md`](docs/transcript-schema.md) for the transcript format
+Loom ingests.
 
 No content is ever stored — only derived metrics and identifiers — and there is no network
 egress from the core. See the design doc's "Design constraints, non-negotiable" section.
+
+## Usage
+
+```sh
+go build -o loom ./cmd/loom
+
+loom report                  # ingest ~/.claude/projects, print a cost/usage report
+loom advise "task text"      # discover skills/agents/plans/hooks, recommend which are
+                              # relevant plus a cold-start model/effort choice
+loom serve                   # run the MCP server on stdio
+```
+
+`loom serve` exposes four tools over MCP: `query_ledger`, `get_recommendation`,
+`list_proposals` (empty until B5), and `record_outcome`.
 
 ## License
 

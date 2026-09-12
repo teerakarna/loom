@@ -3,8 +3,9 @@
 // full-text index — derived metrics and identifiers only (design doc,
 // "Privacy by construction"). See docs/design.md, "Ledger".
 //
-// B1 only writes to runs and events; the other four tables are created now
-// (schema-complete from the start) but populated starting in later phases.
+// B1 only writes to runs; the other five tables are created now
+// (schema-complete from the start) but populated starting in later phases —
+// artifacts and events from B2 onward (see artifact.go and event.go).
 package ledger
 
 import (
@@ -23,12 +24,14 @@ type DB struct {
 
 const schema = `
 CREATE TABLE IF NOT EXISTS artifacts (
-	id         INTEGER PRIMARY KEY AUTOINCREMENT,
-	type       TEXT NOT NULL,
-	path       TEXT NOT NULL UNIQUE,
-	status     TEXT NOT NULL DEFAULT 'active',
-	first_seen TEXT NOT NULL,
-	last_seen  TEXT NOT NULL
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	type        TEXT NOT NULL,
+	path        TEXT NOT NULL UNIQUE,
+	name        TEXT NOT NULL DEFAULT '',
+	description TEXT NOT NULL DEFAULT '',
+	status      TEXT NOT NULL DEFAULT 'active',
+	first_seen  TEXT NOT NULL,
+	last_seen   TEXT NOT NULL
 );
 
 -- Append-only. This IS the ledger — never UPDATE or DELETE a row here.
@@ -104,7 +107,55 @@ func Open(path string) (*DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate schema: %w", err)
+	}
 	return &DB{sql: db}, nil
+}
+
+// migrate adds columns that shipped after a table's original CREATE TABLE,
+// for databases created by an earlier version of Loom. CREATE TABLE IF NOT
+// EXISTS (above) only ever applies to a table that doesn't exist yet, so a
+// column added later needs its own ALTER TABLE here — guarded by checking
+// the table's actual columns first, since SQLite has no ADD COLUMN IF NOT
+// EXISTS. artifacts.name/description were added after B1 shipped the table
+// schema-complete but column-incomplete (docs/design.md, "B1 only writes to
+// runs and events" — the table existed before the selector needed these).
+func migrate(db *sql.DB) error {
+	have := map[string]bool{}
+	rows, err := db.Query(`PRAGMA table_info(artifacts)`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		have[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+
+	for col, ddl := range map[string]string{
+		"name":        `ALTER TABLE artifacts ADD COLUMN name TEXT NOT NULL DEFAULT ''`,
+		"description": `ALTER TABLE artifacts ADD COLUMN description TEXT NOT NULL DEFAULT ''`,
+	} {
+		if have[col] {
+			continue
+		}
+		if _, err := db.Exec(ddl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Close closes the underlying database connection.
