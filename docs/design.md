@@ -47,8 +47,9 @@ response spans several lines, overstating cost by 2.12x (#6); and `UpsertPolicy`
 ledger predating the `UNIQUE` constraint on `agent_type`, because SQLite cannot add a constraint
 via `ALTER TABLE` and every unit test built its table fresh.
 
-Still open on the B3 milestone: #9 (the headline figure is uninterpretable and hides that 75% of
-weighted cost is cache reads). Report presentation, not correctness.
+Issue #9 (the headline figure is uninterpretable and hides that 75% of weighted cost is cache
+reads) was moved to B4 rather than held against B3: it is report presentation, not correctness, and
+nothing in B3 depends on it. The B3 milestone is closed.
 
 B4 (lanes, ledger-backed coordination) not started.
 
