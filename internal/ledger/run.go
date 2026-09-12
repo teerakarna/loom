@@ -8,6 +8,7 @@ import "time"
 // found yet" are both representable as NULL rather than a misleading zero.
 type RunRecord struct {
 	Path                   string
+	SizeBytes              int64 // file size this run was ingested from; drives re-ingest
 	SessionID              string
 	Kind                   string
 	Model                  string
@@ -28,17 +29,32 @@ type RunRecord struct {
 	ReportedDurationMs     *int64
 }
 
-// InsertRun writes one run. Fails on a duplicate path (UNIQUE constraint) —
-// callers should check HasRun first if re-running ingest idempotently.
+// InsertRun writes one run, replacing any existing row for the same path. A
+// transcript that has grown since it was last ingested is re-read in full and
+// its row replaced, rather than accumulating a second row for the same file
+// (see NeedsIngest for why re-reading is necessary at all). "One file, one
+// run" stays true.
 func (d *DB) InsertRun(r RunRecord) error {
 	_, err := d.sql.Exec(`
 		INSERT INTO runs (
-			path, session_id, kind, model, agent_type, effort, started_at, ended_at,
+			path, size_bytes, session_id, kind, model, agent_type, effort, started_at, ended_at,
 			input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
 			weighted_cost, tool_use_count, denial_count, feedback_count,
 			reported_subagent_tokens, reported_tool_uses, reported_duration_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.Path, r.SessionID, r.Kind, r.Model, r.AgentType, r.Effort, formatTime(r.StartedAt), formatTime(r.EndedAt),
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(path) DO UPDATE SET
+			size_bytes = excluded.size_bytes, session_id = excluded.session_id,
+			kind = excluded.kind, model = excluded.model, agent_type = excluded.agent_type,
+			effort = excluded.effort, started_at = excluded.started_at, ended_at = excluded.ended_at,
+			input_tokens = excluded.input_tokens, output_tokens = excluded.output_tokens,
+			cache_read_tokens = excluded.cache_read_tokens,
+			cache_creation_tokens = excluded.cache_creation_tokens,
+			weighted_cost = excluded.weighted_cost, tool_use_count = excluded.tool_use_count,
+			denial_count = excluded.denial_count, feedback_count = excluded.feedback_count,
+			reported_subagent_tokens = excluded.reported_subagent_tokens,
+			reported_tool_uses = excluded.reported_tool_uses,
+			reported_duration_ms = excluded.reported_duration_ms`,
+		r.Path, r.SizeBytes, r.SessionID, r.Kind, r.Model, r.AgentType, r.Effort, formatTime(r.StartedAt), formatTime(r.EndedAt),
 		r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheCreationTokens,
 		r.WeightedCost, r.ToolUseCount, r.DenialCount, r.FeedbackCount,
 		r.ReportedSubagentTokens, r.ReportedToolUses, r.ReportedDurationMs,

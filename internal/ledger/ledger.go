@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS runs (
 	id                  INTEGER PRIMARY KEY AUTOINCREMENT,
 	path                TEXT NOT NULL UNIQUE,
+	size_bytes          INTEGER NOT NULL DEFAULT 0, -- file size at ingest; a change means re-ingest
 	session_id          TEXT,
 	kind                TEXT NOT NULL, -- "session" | "agent"
 	model               TEXT,
@@ -144,6 +145,9 @@ func migrate(db *sql.DB) error {
 		{"runs", map[string]string{
 			"agent_type": `ALTER TABLE runs ADD COLUMN agent_type TEXT NOT NULL DEFAULT ''`,
 			"effort":     `ALTER TABLE runs ADD COLUMN effort TEXT NOT NULL DEFAULT ''`,
+		}},
+		{"runs", map[string]string{
+			"size_bytes": `ALTER TABLE runs ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0`,
 		}},
 		{"policies", map[string]string{
 			"source":      `ALTER TABLE policies ADD COLUMN source TEXT NOT NULL DEFAULT 'human'`,
@@ -241,15 +245,30 @@ func (d *DB) Close() error {
 	return d.sql.Close()
 }
 
-// HasRun reports whether a run for this file path has already been ingested,
-// so a re-run of `loom report` doesn't double-count. B1 simplification: this
-// checks by path only, not by mtime/size, so an edited-in-place transcript
-// (which shouldn't happen — Claude Code only appends) won't be re-ingested.
-// A byte-offset checkpoint (per docs/design.md, "Ingest") is the real
-// mechanism for the later fsnotify-following enhancement; this is enough for
-// B1's retroactive-only scope.
-func (d *DB) HasRun(path string) (bool, error) {
-	var n int
-	err := d.sql.QueryRow(`SELECT COUNT(1) FROM runs WHERE path = ?`, path).Scan(&n)
-	return n > 0, err
+// NeedsIngest reports whether the transcript at path should be read: either it
+// has never been ingested, or its size has changed since it was.
+//
+// Size, not just presence. An earlier version keyed on path alone, justified by
+// a comment asserting that an edited-in-place transcript "shouldn't happen -
+// Claude Code only appends". That premise was backwards: appending is exactly
+// what happens, continuously, for the whole life of a session. Any session
+// ingested while still running was frozen at that moment permanently, and no
+// amount of re-running `loom report` would correct it, because the path was
+// already known. On a real corpus the largest run was understated by roughly
+// half. Silent under-counting, in the one number the tool exists to get right.
+//
+// A byte-offset checkpoint (docs/design.md, "Ingest") is the efficient version
+// and belongs with the fsnotify-following work. Re-reading a changed file is
+// the obviously correct version, and ingest is fast enough that correctness is
+// the better trade today.
+func (d *DB) NeedsIngest(path string, size int64) (bool, error) {
+	var stored int64
+	err := d.sql.QueryRow(`SELECT size_bytes FROM runs WHERE path = ?`, path).Scan(&stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return stored != size, nil
 }
