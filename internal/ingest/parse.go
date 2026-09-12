@@ -60,6 +60,7 @@ func parseAssistant(m map[string]any, ev *Event) {
 		return
 	}
 	ev.Model, _ = msg["model"].(string)
+	ev.MessageID, _ = msg["id"].(string)
 	if durMs, ok := m["durationMs"]; ok {
 		ev.DurationMs = int64(toFloat(durMs))
 	}

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Weighted cost was overstated by 2.12x. One API response is written to the transcript as several
+  JSONL lines, one per content block, each repeating the same `message.usage`, and ingest summed
+  per line. Usage is now counted once per distinct `message.id`. Tool-use counts are deliberately
+  not deduplicated, since each line carries genuinely distinct content blocks. Found by running
+  `loom report` against a real corpus (#6); verified by re-ingesting a frozen 21-transcript
+  snapshot and matching an independent implementation to the unit.
+
 ### Added
 
 - CI: golangci-lint (`.golangci.yml`, standard linters), govulncheck, and gitleaks secret scanning

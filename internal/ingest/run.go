@@ -45,6 +45,12 @@ type RunSummary struct {
 	// nothing rules out spawnDepth > 1 doing so — see docs/design.md's
 	// spawnDepth field on the .meta.json companion).
 	AgentReconciliations map[string]AgentUsage
+
+	// countedMessages tracks which message.id values have already had their
+	// usage added, so one API response written across several transcript
+	// lines is counted once. Not part of the summary's output, just
+	// bookkeeping for the duration of one file's ingest.
+	countedMessages map[string]struct{}
 }
 
 // maxLineSize allows for very large lines — a "thinking" block's signature
@@ -67,6 +73,7 @@ func IngestFile(path string) (RunSummary, error) {
 		Path:                 path,
 		Kind:                 kindForPath(path),
 		AgentReconciliations: map[string]AgentUsage{},
+		countedMessages:      map[string]struct{}{},
 	}
 
 	sc := bufio.NewScanner(f)
@@ -93,6 +100,20 @@ func IngestFile(path string) (RunSummary, error) {
 	return rs, nil
 }
 
+// alreadyCounted reports whether id's usage has been added already, recording
+// it if not. An empty id (a line with no message.id) is never treated as a
+// duplicate: there is nothing to key on, and skipping it would undercount.
+func (rs *RunSummary) alreadyCounted(id string) bool {
+	if id == "" {
+		return false
+	}
+	if _, seen := rs.countedMessages[id]; seen {
+		return true
+	}
+	rs.countedMessages[id] = struct{}{}
+	return false
+}
+
 func applyEvent(rs *RunSummary, ev Event) {
 	if rs.SessionID == "" {
 		rs.SessionID = ev.SessionID
@@ -108,9 +129,21 @@ func applyEvent(rs *RunSummary, ev Event) {
 	if ev.Model != "" && ev.Model != syntheticModel {
 		rs.Model = ev.Model
 	}
-	if ev.Usage != nil {
+	// Usage is counted once per API response, not once per transcript line.
+	// One response is written as several lines (one per content block:
+	// thinking, text, each tool_use) and every one of them repeats the same
+	// usage object, so summing per line overstated real cost by ~2.1x on a
+	// real corpus - see docs/transcript-schema.md and the regression test in
+	// run_test.go. A line with no message.id at all still counts, since
+	// there's nothing to deduplicate it against and dropping it would
+	// undercount instead.
+	if ev.Usage != nil && !rs.alreadyCounted(ev.MessageID) {
 		rs.Usage = rs.Usage.Add(*ev.Usage)
 	}
+
+	// ToolUseCount is deliberately NOT deduplicated: each line carries its
+	// own distinct content blocks, so two tool_use blocks arriving on two
+	// lines of the same response really are two separate tool calls.
 	rs.ToolUseCount += ev.ToolUseCount
 	if ev.ToolDenialKind != "" {
 		rs.DenialCount++

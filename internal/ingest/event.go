@@ -51,8 +51,15 @@ type Event struct {
 	SessionID string
 
 	// Populated for assistant lines.
-	Model        string
-	Usage        *Usage
+	Model string
+	Usage *Usage
+	// MessageID is message.id: the id of the API response this line belongs
+	// to. One response is written as SEVERAL transcript lines, one per
+	// content block (thinking, text, each tool_use), and every one of those
+	// lines repeats the same usage object. So usage must be counted once per
+	// distinct MessageID, not once per line - see applyEvent, and
+	// docs/transcript-schema.md ("One response spans several lines").
+	MessageID    string
 	DurationMs   int64
 	ToolUseCount int // count of tool_use content blocks on this line
 
