@@ -1,0 +1,172 @@
+package ledger
+
+import (
+	"database/sql"
+	"fmt"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestPolicyUpsertGetDelete(t *testing.T) {
+	db := openTestDB(t)
+	now := time.Now()
+
+	if p, err := db.GetPolicy("Explore"); err != nil || p != nil {
+		t.Fatalf("GetPolicy on an empty table = (%v, %v), want (nil, nil)", p, err)
+	}
+
+	row := PolicyRow{CriteriaVersion: "v1", AgentType: "Explore", Model: "haiku", Effort: "low", Source: "human"}
+	if err := db.UpsertPolicy(row, now); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetPolicy("Explore")
+	if err != nil || got == nil {
+		t.Fatalf("GetPolicy = (%v, %v), want a row", got, err)
+	}
+	if got.Model != "haiku" {
+		t.Errorf("Model = %q, want haiku", got.Model)
+	}
+
+	// One row per agent type: a second write replaces rather than accumulates.
+	row.Model = "sonnet"
+	if err := db.UpsertPolicy(row, now); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = db.GetPolicy("Explore")
+	if got.Model != "sonnet" {
+		t.Errorf("Model = %q, want the replaced sonnet", got.Model)
+	}
+
+	if err := db.DeletePolicy("Explore"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := db.GetPolicy("Explore"); p != nil {
+		t.Error("expected the policy to be gone after delete, returning resolution to the default")
+	}
+}
+
+func TestStatsByAgentTypeUsesMedianAndExcludesUnattributed(t *testing.T) {
+	db := openTestDB(t)
+
+	// One wild outlier plus four ordinary runs. A mean would be dragged to
+	// ~20200; the median should stay near the typical run.
+	costs := []float64{100, 100, 100, 100, 100000}
+	for i, c := range costs {
+		if err := db.InsertRun(RunRecord{
+			Path: fmt.Sprintf("a-%d.jsonl", i), Kind: "agent", AgentType: "Explore",
+			Model: "claude-haiku-4-5", WeightedCost: c, ToolUseCount: 3,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An agent run with no attributable type must not become its own bucket.
+	if err := db.InsertRun(RunRecord{Path: "orphan.jsonl", Kind: "agent", WeightedCost: 999}); err != nil {
+		t.Fatal(err)
+	}
+	// Session runs are not agent types either.
+	if err := db.InsertRun(RunRecord{Path: "s.jsonl", Kind: "session", WeightedCost: 5000}); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := db.StatsByAgentType()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("got %d agent types, want 1 (unattributed runs are not a type): %+v", len(stats), stats)
+	}
+	s := stats[0]
+	if s.AgentType != "Explore" || s.Runs != 5 {
+		t.Errorf("got %+v, want Explore with 5 runs", s)
+	}
+	if s.MedianCost != 100 {
+		t.Errorf("MedianCost = %v, want 100 (the mean would be ~20180 and describe only the outlier)", s.MedianCost)
+	}
+	if s.ObservedModel != "claude-haiku-4-5" {
+		t.Errorf("ObservedModel = %q", s.ObservedModel)
+	}
+}
+
+func TestMedian(t *testing.T) {
+	cases := []struct {
+		in   []float64
+		want float64
+	}{
+		{nil, 0},
+		{[]float64{5}, 5},
+		{[]float64{3, 1, 2}, 2},
+		{[]float64{4, 1, 3, 2}, 2.5},
+	}
+	for _, c := range cases {
+		if got := median(c.in); got != c.want {
+			t.Errorf("median(%v) = %v, want %v", c.in, got, c.want)
+		}
+	}
+	// The caller's slice must not be reordered.
+	in := []float64{3, 1, 2}
+	_ = median(in)
+	if in[0] != 3 {
+		t.Errorf("median sorted the caller's slice in place: %v", in)
+	}
+}
+
+// TestMigratePoliciesUniqueFromOldSchema covers the upgrade path that unit
+// tests originally missed: a ledger created before agent_type was UNIQUE kept
+// a table without the constraint, and every UpsertPolicy against it failed
+// with "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE
+// constraint". Found by running against a real ledger.
+func TestMigratePoliciesUniqueFromOldSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+
+	// Build a ledger with the pre-UNIQUE policies table, including a duplicate
+	// agent_type that the rebuild has to collapse.
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`
+		CREATE TABLE policies (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			criteria_version TEXT NOT NULL,
+			agent_type       TEXT NOT NULL,
+			model            TEXT NOT NULL,
+			effort           TEXT,
+			created_at       TEXT NOT NULL
+		);
+		INSERT INTO policies (criteria_version, agent_type, model, effort, created_at)
+			VALUES ('v0', 'Explore', 'sonnet', 'medium', '2026-01-01T00:00:00Z');
+		INSERT INTO policies (criteria_version, agent_type, model, effort, created_at)
+			VALUES ('v0', 'Explore', 'haiku', 'low', '2026-01-02T00:00:00Z');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Open(path) // runs the migration
+	if err != nil {
+		t.Fatalf("Open on a pre-UNIQUE ledger failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// The duplicate collapsed to the most recent row.
+	got, err := db.GetPolicy("Explore")
+	if err != nil || got == nil {
+		t.Fatalf("GetPolicy = (%v, %v), want the surviving row", got, err)
+	}
+	if got.Model != "haiku" {
+		t.Errorf("Model = %q, want haiku (the later of the two duplicates)", got.Model)
+	}
+
+	// And the operation that used to fail now works.
+	if err := db.UpsertPolicy(PolicyRow{
+		CriteriaVersion: "v1", AgentType: "Explore", Model: "opus", Effort: "high", Source: "human",
+	}, time.Now()); err != nil {
+		t.Fatalf("UpsertPolicy after migration failed: %v", err)
+	}
+	got, _ = db.GetPolicy("Explore")
+	if got.Model != "opus" {
+		t.Errorf("Model = %q, want opus after upsert", got.Model)
+	}
+}
