@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `loom policy render` writes agent definitions carrying the pinned model into
+  `~/.loom/generated/agents/` (B3d). Never installed for you and never written to a client's own
+  agent directory (constraint 8). A decision resting on a shipped default is deliberately not
+  rendered: a file restating a default is material to review with nothing new in it. Bounded,
+  overwrites rather than accumulates, refuses to touch any file it did not generate, and rejects
+  agent-type names that would escape the output directory.
 - Policy resolution per agent type, and `loom policy` to show it (B3c). Every decision carries its
   source (`stored`, `evidence`, or `default`) and sample size, so a shipped guess can never be
   mistaken for a measured finding (constraint 11). The evidence path is implemented and tested but
