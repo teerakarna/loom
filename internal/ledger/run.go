@@ -11,6 +11,8 @@ type RunRecord struct {
 	SessionID              string
 	Kind                   string
 	Model                  string
+	AgentType              string // "" for session runs, and for agents with no readable .meta.json
+	Effort                 string // "" when the transcript carried no effort
 	StartedAt              time.Time
 	EndedAt                time.Time
 	InputTokens            int64
@@ -31,12 +33,12 @@ type RunRecord struct {
 func (d *DB) InsertRun(r RunRecord) error {
 	_, err := d.sql.Exec(`
 		INSERT INTO runs (
-			path, session_id, kind, model, started_at, ended_at,
+			path, session_id, kind, model, agent_type, effort, started_at, ended_at,
 			input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
 			weighted_cost, tool_use_count, denial_count, feedback_count,
 			reported_subagent_tokens, reported_tool_uses, reported_duration_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.Path, r.SessionID, r.Kind, r.Model, formatTime(r.StartedAt), formatTime(r.EndedAt),
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.Path, r.SessionID, r.Kind, r.Model, r.AgentType, r.Effort, formatTime(r.StartedAt), formatTime(r.EndedAt),
 		r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheCreationTokens,
 		r.WeightedCost, r.ToolUseCount, r.DenialCount, r.FeedbackCount,
 		r.ReportedSubagentTokens, r.ReportedToolUses, r.ReportedDurationMs,

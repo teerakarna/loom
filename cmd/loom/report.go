@@ -113,6 +113,8 @@ func ingestAll(db *ledger.DB, root string) error {
 			SessionID:           rs.SessionID,
 			Kind:                rs.Kind,
 			Model:               rs.Model,
+			AgentType:           rs.AgentType,
+			Effort:              rs.Effort,
 			StartedAt:           rs.StartedAt,
 			EndedAt:             rs.EndedAt,
 			InputTokens:         rs.Usage.InputTokens,

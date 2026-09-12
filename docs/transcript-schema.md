@@ -19,6 +19,16 @@ one `agent-<agentId>.jsonl` plus a companion `agent-<agentId>.meta.json` per age
 companion was **not** anticipated in the original design doc — it exists and is worth using: at
 minimum it carries `agentType`, `description`, `toolUseId`, `spawnDepth`.
 
+**`agentType` is only available here.** The transcript itself never names the agent type, so
+without reading the companion there is nothing to attribute a run to, and per-agent-type policy
+(B3) has no key. Confirmed 2026-09-12 on a real corpus: 18 of 18 agent transcripts had a readable
+companion, `agentType` values `Explore` (14) and `fork` (4), all at `spawnDepth: 1`. Loom reads
+`agentType` and `spawnDepth` only, deliberately ignoring `description` (free text a user wrote,
+kept out of the ledger by constraint 6).
+
+A missing or unparseable companion leaves the agent type empty rather than failing the ingest:
+the run's cost is still real and worth recording, it just cannot be attributed.
+
 ## Top-level line types
 
 Observed `type` values in one real transcript, beyond the two the design doc named
@@ -108,9 +118,10 @@ Notes for the cost model (design doc: "weighted cost per run... get this right f
   model `<synthetic>` under a naive "last non-empty model wins" heuristic, because the synthetic
   status message was the last assistant line before the file ended. Ingest must never let this
   value win model attribution for a run.
-- `effort` (reasoning effort) was asserted by the design doc but not yet independently confirmed
-  present on an observed line — may be model-conditional. Needs a targeted check against a
-  high-effort-model transcript before ingest code assumes it's always there.
+- `effort` (reasoning effort) is **confirmed present, top level on the line, not inside `message`**
+  (checked 2026-09-12: value `"high"` observed). Not universal: 20 of 21 runs on the corpus
+  checked carried one, 1 did not, so treat it as optional everywhere. Captured as of B3a and
+  stored on `runs.effort`, empty when absent.
 
 Other assistant-line fields observed: `requestId`, `attributionMcpServer` / `attributionMcpTool`
 (populated when the turn's context came from an MCP tool result — e.g. `"claude.ai Google Drive"`
@@ -205,7 +216,8 @@ causing the actual formula behind `subagent_tokens` is unresolved and out of sco
 
 ## Open items before B1 ingest code is trusted
 
-1. Confirm whether `effort` is present, and under what conditions.
+1. ~~Confirm whether `effort` is present, and under what conditions.~~ Done 2026-09-12: present,
+   top level, optional. See the assistant-lines section.
 2. Confirm whether summing `iterations[].{input,output,cache_*}_tokens` reconciles with the
    top-level `usage` object, or whether one is a subset/rollup of the other.
 3. Build the synthetic fixtures (hand-written, never derived from a real transcript per the
