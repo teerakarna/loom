@@ -74,13 +74,23 @@ func ingestAll(db *ledger.DB, root string) error {
 		return err
 	}
 
+	// Size is what decides: a transcript that has grown since it was last
+	// ingested must be re-read, or a live session's cost stays frozen at
+	// whatever it was the first time loom looked (see ledger.NeedsIngest).
+	sizes := map[string]int64{}
 	var toInsert []string
 	for _, p := range paths {
-		has, err := db.HasRun(p)
+		fi, err := os.Stat(p)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "loom: skipping %s: %v\n", p, err)
+			continue
+		}
+		sizes[p] = fi.Size()
+		needs, err := db.NeedsIngest(p, fi.Size())
 		if err != nil {
 			return err
 		}
-		if !has {
+		if needs {
 			toInsert = append(toInsert, p)
 		}
 	}
@@ -110,6 +120,7 @@ func ingestAll(db *ledger.DB, root string) error {
 	for path, rs := range summaries {
 		rec := ledger.RunRecord{
 			Path:                path,
+			SizeBytes:           sizes[path],
 			SessionID:           rs.SessionID,
 			Kind:                rs.Kind,
 			Model:               rs.Model,

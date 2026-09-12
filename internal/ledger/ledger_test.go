@@ -54,19 +54,19 @@ func TestInsertAndReportRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	has, err := db.HasRun("session-a.jsonl")
+	needs, err := db.NeedsIngest("session-a.jsonl", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !has {
-		t.Error("HasRun(session-a.jsonl) = false, want true")
+	if needs {
+		t.Error("NeedsIngest for an unchanged file = true, want false")
 	}
-	has, err = db.HasRun("nonexistent.jsonl")
+	needs, err = db.NeedsIngest("nonexistent.jsonl", 123)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if has {
-		t.Error("HasRun(nonexistent.jsonl) = true, want false")
+	if !needs {
+		t.Error("NeedsIngest for an unknown file = false, want true")
 	}
 
 	s, err := db.Report()
@@ -93,13 +93,74 @@ func TestInsertAndReportRun(t *testing.T) {
 	}
 }
 
-func TestInsertRunDuplicatePathFails(t *testing.T) {
+// TestInsertRunReplacesRatherThanDuplicating covers a deliberate change: this
+// used to assert that a second insert for the same path errored. It now
+// replaces, because a live transcript grows and must be re-read (see
+// NeedsIngest). "One file, one run" is preserved by replacement, not by
+// refusal.
+func TestInsertRunReplacesRatherThanDuplicating(t *testing.T) {
 	db := openTestDB(t)
-	rec := RunRecord{Path: "dup.jsonl", Kind: "session"}
+	rec := RunRecord{Path: "dup.jsonl", Kind: "session", SizeBytes: 10, WeightedCost: 1}
 	if err := db.InsertRun(rec); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.InsertRun(rec); err == nil {
-		t.Error("expected an error inserting a duplicate path, got nil")
+	rec.SizeBytes, rec.WeightedCost = 20, 2
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatalf("re-inserting a grown file must succeed, got %v", err)
+	}
+
+	s, err := db.Report()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.TotalRuns != 1 {
+		t.Errorf("TotalRuns = %d, want 1", s.TotalRuns)
+	}
+	if s.TotalWeightedCost != 2 {
+		t.Errorf("TotalWeightedCost = %v, want 2 (the replacement, not the sum)", s.TotalWeightedCost)
+	}
+}
+
+// TestNeedsIngestDetectsAGrownFile is the regression test for silent cost
+// under-counting. Ingest previously keyed on path alone, so a session
+// transcript that grew after being ingested was frozen at its first reading
+// forever. On a real corpus the largest run was understated by roughly half.
+func TestNeedsIngestDetectsAGrownFile(t *testing.T) {
+	db := openTestDB(t)
+	const path = "live-session.jsonl"
+
+	// Never seen: must ingest.
+	if needs, err := db.NeedsIngest(path, 1000); err != nil || !needs {
+		t.Fatalf("NeedsIngest on an unknown path = (%v, %v), want (true, nil)", needs, err)
+	}
+
+	if err := db.InsertRun(RunRecord{Path: path, SizeBytes: 1000, Kind: "session", WeightedCost: 500}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same size: already current, do not re-read.
+	if needs, err := db.NeedsIngest(path, 1000); err != nil || needs {
+		t.Errorf("NeedsIngest on an unchanged file = %v, want false", needs)
+	}
+
+	// Grown, which is what a live session does continuously.
+	if needs, err := db.NeedsIngest(path, 2500); err != nil || !needs {
+		t.Errorf("NeedsIngest on a grown file = %v, want true - this is the bug", needs)
+	}
+
+	// Re-ingesting replaces the row rather than adding a second one, and the
+	// new cost supersedes the stale one.
+	if err := db.InsertRun(RunRecord{Path: path, SizeBytes: 2500, Kind: "session", WeightedCost: 1200}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := db.Report()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.TotalRuns != 1 {
+		t.Errorf("TotalRuns = %d, want 1 (one file is one run, even re-ingested)", s.TotalRuns)
+	}
+	if s.TotalWeightedCost != 1200 {
+		t.Errorf("TotalWeightedCost = %v, want 1200 (the fresh reading, not the stale one)", s.TotalWeightedCost)
 	}
 }

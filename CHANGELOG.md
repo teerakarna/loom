@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Ingest re-reads a transcript whose size has changed, instead of skipping any path it has seen
+  before. A session transcript grows continuously while the session runs, so any session ingested
+  mid-flight was frozen at that moment permanently and no amount of re-running `loom report` would
+  correct it. On a real corpus the largest run was understated by roughly half. `runs.size_bytes`
+  records what was read, and `InsertRun` replaces rather than refusing, so "one file, one run"
+  still holds.
+
 - Weighted cost was overstated by 2.12x. One API response is written to the transcript as several
   JSONL lines, one per content block, each repeating the same `message.usage`, and ingest summed
   per line. Usage is now counted once per distinct `message.id`. Tool-use counts are deliberately
