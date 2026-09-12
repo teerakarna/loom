@@ -17,6 +17,10 @@ func main() {
 	switch os.Args[1] {
 	case "report":
 		err = runReport(os.Args[2:])
+	case "advise":
+		err = runAdvise(os.Args[2:])
+	case "serve":
+		err = runServe(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -32,8 +36,12 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `loom — artifact lifecycle and cost/routing engine for Claude Code
 
 Usage:
-  loom report [path]   Ingest transcripts under path (default ~/.claude/projects)
-                        and print an aggregate cost/usage report.
+  loom report [path]        Ingest transcripts under path (default ~/.claude/projects)
+                             and print an aggregate cost/usage report.
+  loom advise <task text>   Discover skills/agents/plans/hooks, and recommend which
+                             are relevant plus a cold-start model/effort choice.
+  loom serve                Run the MCP server on stdio (query_ledger, get_recommendation,
+                             list_proposals, record_outcome).
 
 See docs/design.md for the full design.`)
 }

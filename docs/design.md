@@ -1,8 +1,27 @@
 # Loom - an artifact lifecycle and routing engine for Claude Code
 
-Status: design agreed 2026-09-11, build not started.
+Status: design agreed 2026-09-11.
 Licence: Apache-2.0. Repo: personal GitHub, private until v0.1.0, then public.
 Target: full open source project, distributed via the Claude Code plugin marketplace.
+
+**B1 done (2026-09-11):** ingest, ledger, `loom report` — working, tested, run against real
+history. Two real findings along the way, both in `docs/transcript-schema.md`: the subagent
+completion record is an XML-like `<usage>` block inside a `queue-operation` line's text content,
+not JSON fields, and does not reconcile with a naive sum of the agent's own transcript; and
+`message.model` can be the literal string `"<synthetic>"` (a locally-injected status/error line,
+always zero usage) — both handled, tested, documented.
+
+**B2 done (2026-09-12):** artifact discovery (skills, agents, plans, hooks, per-project memory —
+`internal/artifact`), selector (`internal/selector`), MCP server over stdio exposing
+`query_ledger`/`get_recommendation`/`list_proposals`/`record_outcome` (`internal/mcp`), and
+`loom advise`/`loom serve` CLI commands. Two real findings running `loom advise` against this
+machine's actual skills: several real skills have no YAML frontmatter at all (just a `#` heading) —
+fixed with a first-heading fallback for the description signal; and naive word-overlap scoring
+without stopword filtering produced false-positive matches on shared function words ("the", "a",
+"and", "for") — fixed by filtering a stopword list before scoring. `list_proposals` correctly
+returns empty — nothing writes to that table until B5.
+
+B3 (policy table, generated agent definitions, model pinning) not started.
 
 **Pick this up on a personal machine.** Everything below is generic by construction, with no
 employer context in it. Build it on personal hardware, on personal time, under personal accounts,
@@ -229,6 +248,15 @@ want them get five, none LLM-backed, each with a stated latency budget:
 | prompt submit | Per-task recommendation | < 20ms |
 | stop / subagent stop | Prompt cost attribution ahead of transcript flush | < 5ms |
 | pre-compact | Write a resume pointer: table of contents plus runnable queries, never content | < 50ms |
+
+**Note on pre-compact (2026-09-12):** this hook is a pointer-writer, not a gatekeeper, and that's a
+permanent design decision, not a placeholder to revisit. It pulls from the ledger — most expensive
+runs this session, denied/corrected tool calls, artifacts touched — and writes that as the resume
+pointer; `session start` reads it back as the briefing. It never decides what Claude Code's own
+compaction keeps or drops. Same reasoning as "It measures and recommends. The human applies." above:
+a hook that prunes or rewrites context has the same blast-radius shape as a hook that denies or
+rewrites tool calls (Axis 2, cost shape) — cheap-if-wrong stays the only kind of hook Loom ships.
+Not yet built — B2 shipped selector + MCP server only, no hooks.
 
 **CLI** for humans: `loom init`, `report`, `advise`, `policy`, `lane`, `serve`.
 
