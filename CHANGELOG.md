@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `loom status`: what Loom knows, how current it is, and what it cannot answer (closes #21).
+  Read-only by design, because `loom report` ingests as a side effect and checking freshness with it
+  would change the thing being checked. Reports transcripts on disk vs ingested-and-current vs
+  stale vs never-seen, which is the check that would have surfaced the ingest staleness bug
+  immediately instead of hours later. Ends by listing what it does not track, rather than implying
+  completeness it lacks.
+- `loom report` now breaks the headline figure down by token class (closes #9). A bare nine-digit
+  total hid the most useful fact about a corpus: on real data 76.3% of weighted cost is cache
+  reads, the cheap class. The same total driven by fresh output would imply the opposite action.
+  Weights are read from `internal/ingest` rather than duplicated, so the breakdown cannot drift
+  from the figure it explains.
+
 - `loom policy render` writes agent definitions carrying the pinned model into
   `~/.loom/generated/agents/` (B3d). Never installed for you and never written to a client's own
   agent directory (constraint 8). A decision resting on a shipped default is deliberately not

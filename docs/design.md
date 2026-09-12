@@ -387,7 +387,19 @@ a hook that prunes or rewrites context has the same blast-radius shape as a hook
 rewrites tool calls (Axis 2, cost shape) — cheap-if-wrong stays the only kind of hook Loom ships.
 Not yet built — B2 shipped selector + MCP server only, no hooks.
 
-**CLI** for humans: `loom init`, `report`, `advise`, `policy`, `lane`, `serve`.
+**CLI** for humans: `report`, `status`, `advise`, `policy`, `serve`, and `lane` once B4 lands.
+
+`loom init` was listed here and is **cut (2026-09-13)**, not deferred. It was never implemented and
+belonged to no phase, and on inspection it had no job: `ledger.Open` creates and migrates the
+database on first use, and `report`/`advise` discover and ingest with no setup step. A command whose
+only function is to do nothing visible is worse than its absence, because it implies a setup ritual
+that does not exist. If a real need appears later, a lane manifest scaffold is the likeliest
+candidate and belongs to B4.
+
+`loom status` was added in its place, answering the question a new user actually has: is this
+working, what does it know, and how current is it. It is read-only by design, because `report`
+ingests as a side effect and a user checking freshness with `report` would be changing the thing
+they were checking.
 
 **Agent definitions are generated output.** Model pinning lives in agent frontmatter, rendered from
 the `policies` table, so the policy is data and the files are a reviewable diff. Generated files land
