@@ -252,14 +252,79 @@ a skill. Path is configurable, discovery is best-effort, and the whole feature i
 
 ### Lanes
 
-A lane is a session workspace whose *declared* scope governs, rather than whichever directory the
-session happened to start in. Optional, off by default.
+**Rescoped 2026-09-13** against how lanes are actually used, rather than how this doc originally
+imagined them. The original spec is preserved at the end of this section, because the gap between
+the two is the useful part.
 
-The useful trick is launching a session in a dedicated, otherwise empty directory, which makes
-CLAUDE.md inheritance and project-memory keying deliberate instead of incidental. Without it, memory
-stores fragment across whatever paths sessions were started from.
+A lane is a directory you launch a session from, with its purpose defined by convention and memory.
+That looseness is deliberate: in real use any lane may review a PR from any repo, so lanes overlap
+constantly, and the overlap is a feature rather than a problem to design out.
 
-A lane is a directory plus a manifest:
+**Overlap and separation happen at different levels, which is what makes this tractable:**
+
+- A *session* belongs to exactly one lane: the directory it was launched from. Unambiguous.
+- A *lane* may associate with any number of repos and topics, and a repo may belong to many lanes.
+  Overlap is free, because associations are metadata and nothing is partitioned by them.
+- A *run* is attributed to its session's lane, never to the repos it touched. So the ambiguity of
+  "which lane owns this repo" never has to be answered.
+
+#### Filtering, not a manifest
+
+**Decided 2026-09-13: B4 ships no manifest.** A run's project directory is already in its transcript
+path, so tagging and filtering by it costs nothing and needs no configuration at all.
+
+What a manifest would add, and why none of it justifies the file yet:
+
+| Want | Needs a manifest? |
+|---|---|
+| Tag runs by project directory, filter reports by it | **No** - already in the path |
+| A friendly lane name instead of a slugged path | Yes, but purely cosmetic |
+| Hard ledger separation between boundaries | **Yes** - a decision, not inferable |
+
+Hard separation is the only one that genuinely requires declared input, because a boundary is a
+*decision* rather than a *description*, and inferring a decision from a path is the path-guessing
+this doc forbids by name. Labelling by path is fine: it describes where a session ran, and claims
+nothing.
+
+**A correction worth keeping.** An earlier version of this section argued that `boundary` was what
+made Loom "safely installable" on a machine mixing personal and work lanes. That was wrong.
+Constraint 12 is what makes it safe: the ledger stays on the machine that produced it. Mixing lanes
+in one local ledger on a machine that already holds both is an *analysis* limitation, not a safety
+one. You lose the ability to ask what work cost versus personal. Useful to have, not load-bearing,
+and the difference matters when deciding what to build.
+
+So the separation dial reduces to two positions today, with the third available later if a real need
+appears:
+
+| Strength | Mechanism | Status |
+|---|---|---|
+| None | one ledger, no lane recorded | today |
+| Soft | one ledger, runs tagged by project directory, filterable | **B4** |
+| Hard | one ledger per declared boundary | deferred; needs a manifest, no evidenced need yet |
+
+#### Stated limitation
+
+A run is attributed to the directory its session ran in, never to the repos it touched. Reviewing a
+work PR from a personal lane files that run under the personal lane. That is a description of where
+the work happened, which is true, rather than a claim about what the work was about, which would not
+be.
+
+#### What was cut from the original spec, and why
+
+The original manifest carried a `scope` dial: `pinned` (writes only to one repo), `scoped`,
+`themed` (writes outside the lane need confirmation), `open`. Every one of those is **write
+enforcement**, and Loom cannot do it. It has no hook into what a session writes, constraint 9
+forbids it writing to human-authored files, and enforcing would require a blocking `PreToolUse`
+hook — the blast-radius category, and a direct contradiction of "it measures and recommends, the
+human applies".
+
+`promote_to` and `paths` went with it: both existed to serve enforcement.
+
+What replaced the dial is a dial about *data separation*, which Loom genuinely owns. Same idea of
+"a range of strength", applied to something the tool can actually deliver.
+
+<details>
+<summary>Original lane spec, superseded</summary>
 
 ```toml
 name       = "example-lane"
@@ -270,16 +335,11 @@ promote_to = "../some-repo/plans"
 boundary   = "default"          # opt-in separation
 ```
 
-The scope dial, tight to loose:
+Scope dial, tight to loose: `pinned` one repo writes only there; `scoped` a named set of repos;
+`themed` topic tags with writes outside needing confirmation; `open` scratch with no writes outside
+the lane directory.
 
-- `pinned` - one repo, writes only there
-- `scoped` - a named set of repos
-- `themed` - topic tags; writes outside the lane need confirmation
-- `open` - scratch; no writes outside the lane directory
-
-`boundary` is the optional separation primitive: one ledger per boundary, never joined, taken from
-the manifest and never guessed from a path. Path-guessing is exactly how content ends up in the wrong
-store, so the manifest is the only source of truth.
+</details>
 
 **Coordination between lanes: rejected 2026-09-12.** This originally specified append-only ledger
 tables (`messages`, `presence` with a TTL, `tasks`) to replace a shared markdown coordination file.
@@ -462,10 +522,11 @@ Each stage is independently useful. Stopping after any of them leaves something 
   actually go" from existing history on day one. This is the stage that proves the whole premise.
 - **B2** Selector plus the MCP server. Recommendations only, advisory.
 - **B3** Policy table, generated agent definitions, model pinning. The cost payoff.
-- **B4** Lanes. Coordination was cut (see "Coordination between lanes: rejected"), so this phase is
-  the lane manifest, scope enforcement, and feeding declared scope into the selector. Lanes must
-  earn their place on the same test coordination failed: they are optional and off by default, and
-  if they would go unused they should be cut too rather than built on principle.
+- **B4** Lanes, rescoped 2026-09-13 down to what needs no configuration: tag each run with the
+  project directory its session ran in, and let reports and policy filter by it. No manifest, no
+  new file in anyone's repo. Write enforcement was cut (Loom cannot do it without becoming a
+  gatekeeper) and hard ledger separation was deferred (it needs declared input, and filtering a
+  single local ledger turned out to be enough).
 - **B5** Advisor proposals for promotion and retirement.
 - **B6** Plugin packaging, signed releases, public at v0.1.0.
 
