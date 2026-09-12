@@ -10,7 +10,9 @@ package ledger
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite" // pure-Go driver — keeps the single-static-binary,
 	// cross-compile-from-one-machine property from docs/design.md ("Core
@@ -21,6 +23,19 @@ import (
 type DB struct {
 	sql *sql.DB
 }
+
+// policiesSchema is separate so the rebuild migration can recreate the table
+// from the same definition rather than a drifting copy.
+const policiesSchema = `CREATE TABLE IF NOT EXISTS policies (
+	id               INTEGER PRIMARY KEY AUTOINCREMENT,
+	criteria_version TEXT NOT NULL,
+	agent_type       TEXT NOT NULL UNIQUE,
+	model            TEXT NOT NULL,
+	effort           TEXT,
+	source           TEXT NOT NULL DEFAULT 'human', -- 'human' | 'evidence'
+	sample_size      INTEGER NOT NULL DEFAULT 0,    -- runs behind an 'evidence' row; 0 for 'human'
+	created_at       TEXT NOT NULL
+);`
 
 const schema = `
 CREATE TABLE IF NOT EXISTS artifacts (
@@ -70,14 +85,7 @@ CREATE TABLE IF NOT EXISTS runs (
 	reported_duration_ms     INTEGER
 );
 
-CREATE TABLE IF NOT EXISTS policies (
-	id               INTEGER PRIMARY KEY AUTOINCREMENT,
-	criteria_version TEXT NOT NULL,
-	agent_type       TEXT NOT NULL,
-	model            TEXT NOT NULL,
-	effort           TEXT,
-	created_at       TEXT NOT NULL
-);
+` + policiesSchema + `
 
 CREATE TABLE IF NOT EXISTS proposals (
 	id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -137,9 +145,56 @@ func migrate(db *sql.DB) error {
 			"agent_type": `ALTER TABLE runs ADD COLUMN agent_type TEXT NOT NULL DEFAULT ''`,
 			"effort":     `ALTER TABLE runs ADD COLUMN effort TEXT NOT NULL DEFAULT ''`,
 		}},
+		{"policies", map[string]string{
+			"source":      `ALTER TABLE policies ADD COLUMN source TEXT NOT NULL DEFAULT 'human'`,
+			"sample_size": `ALTER TABLE policies ADD COLUMN sample_size INTEGER NOT NULL DEFAULT 0`,
+		}},
 	} {
 		if err := addMissingColumns(db, m.table, m.columns); err != nil {
 			return err
+		}
+	}
+	return migratePoliciesUnique(db)
+}
+
+// migratePoliciesUnique rebuilds the policies table when it predates the
+// UNIQUE constraint on agent_type.
+//
+// ALTER TABLE cannot add a constraint in SQLite, and CREATE TABLE IF NOT
+// EXISTS does nothing to a table that already exists, so a ledger created
+// before the constraint kept a policies table without it - and every
+// UpsertPolicy against that table failed with "ON CONFLICT clause does not
+// match any PRIMARY KEY or UNIQUE constraint". Found by running against a real
+// ledger, not by unit tests, which all built their table fresh.
+//
+// The constraint is load-bearing rather than cosmetic: one row per agent type
+// is what bounds this table's growth (constraint 10).
+func migratePoliciesUnique(db *sql.DB) error {
+	var sqlText string
+	err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='policies'`).Scan(&sqlText)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // no table yet; CREATE TABLE above will build it correctly
+	}
+	if err != nil {
+		return err
+	}
+	if strings.Contains(sqlText, "UNIQUE") {
+		return nil
+	}
+
+	// Rebuild, keeping the most recent row per agent type if the old table
+	// somehow accumulated duplicates.
+	stmts := []string{
+		`ALTER TABLE policies RENAME TO policies_old`,
+		policiesSchema,
+		`INSERT INTO policies (criteria_version, agent_type, model, effort, source, sample_size, created_at)
+		 SELECT criteria_version, agent_type, model, effort, source, sample_size, created_at
+		 FROM policies_old WHERE id IN (SELECT MAX(id) FROM policies_old GROUP BY agent_type)`,
+		`DROP TABLE policies_old`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("rebuilding policies table: %w", err)
 		}
 	}
 	return nil

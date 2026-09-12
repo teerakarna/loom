@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Policy resolution per agent type, and `loom policy` to show it (B3c). Every decision carries its
+  source (`stored`, `evidence`, or `default`) and sample size, so a shipped guess can never be
+  mistaken for a measured finding (constraint 11). The evidence path is implemented and tested but
+  deliberately unreached below `MinSampleSize` (20 runs), which no agent type on a real corpus yet
+  meets. `loom policy set`/`unset` provide the deliberate override and its one-command revert.
+  Statistics use medians rather than means, because run cost is heavily skewed and a mean describes
+  the outlier.
 - `loom report` now shows per-run cost alongside totals, a cost-concentration summary, a by-agent-type
   breakdown, and the most expensive runs (B3b, closes #10). Totals alone conflate "costs more each
   time" with "used more often" and can invert the real ordering; on a real corpus one run turned out

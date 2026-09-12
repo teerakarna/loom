@@ -19,6 +19,8 @@ func main() {
 		err = runReport(os.Args[2:])
 	case "advise":
 		err = runAdvise(os.Args[2:])
+	case "policy":
+		err = runPolicy(os.Args[2:])
 	case "serve":
 		err = runServe(os.Args[2:])
 	default:
@@ -40,6 +42,10 @@ Usage:
                              and print an aggregate cost/usage report.
   loom advise <task text>   Discover skills/agents/plans/hooks, and recommend which
                              are relevant plus a cold-start model/effort choice.
+  loom policy               Show the effective model/effort per agent type, with the
+                             source and sample size behind each decision.
+  loom policy set <agent-type> <model> <effort>
+  loom policy unset <agent-type>
   loom serve                Run the MCP server on stdio (query_ledger, get_recommendation,
                              list_proposals, record_outcome).
 
