@@ -69,11 +69,23 @@ func (d *DB) InsertRun(r RunRecord) error {
 	return err
 }
 
+// formatTime renders a timestamp for storage, always in UTC.
+//
+// The UTC conversion is load-bearing, not tidiness. SQLite compares these as
+// strings, and RFC3339 is only lexically ordered when every value shares an
+// offset. Storing local time gave "2026-09-13T18:04:26+07:00" for a policy and
+// "2026-09-13T12:04:32Z" for a run that happened an hour later - and the run
+// sorted *earlier*, because "12" < "18" as text. Every comparison against a
+// stored time was silently wrong whenever the machine was not on UTC.
+//
+// Found by running loop closure for real: the tests all passed because they
+// construct times with time.UTC, so both sides matched by accident. Only real
+// usage mixes a local clock with transcript timestamps that are already Z.
 func formatTime(t time.Time) any {
 	if t.IsZero() {
 		return nil
 	}
-	return t.Format(time.RFC3339)
+	return t.UTC().Format(time.RFC3339)
 }
 
 // Summary is the aggregate `loom report` reads back.

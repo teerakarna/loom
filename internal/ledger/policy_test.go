@@ -213,3 +213,53 @@ func TestMigrateProposalsUniqueFromOldSchema(t *testing.T) {
 		t.Fatalf("UpsertProposal after migration = (%v, %v), want (true, nil)", ok, err)
 	}
 }
+
+// TestStoredTimestampsAreComparableAcrossZones is the regression test for a
+// silent ordering bug: timestamps were stored with the local offset, but SQLite
+// compares them as strings, so a run at 12:04Z sorted before a policy written
+// at 18:04+07:00 even though it happened an hour later. Every unit test passed
+// because they all built times in UTC; only real use mixed the two.
+func TestStoredTimestampsAreComparableAcrossZones(t *testing.T) {
+	db := openTestDB(t)
+	tokyo := time.FixedZone("UTC+9", 9*60*60)
+
+	// A policy written on a non-UTC clock.
+	applied := time.Date(2026, 9, 13, 20, 0, 0, 0, tokyo) // 11:00 UTC
+	if err := db.UpsertPolicy(ledger_policyRow(), applied); err != nil {
+		t.Fatal(err)
+	}
+
+	// A run that genuinely happened afterwards, recorded in UTC.
+	after := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC) // 12:00 UTC, one hour later
+	if err := db.InsertRun(RunRecord{
+		Path: "/after.jsonl", Kind: "agent", AgentType: "Explore",
+		Model: "m", WeightedCost: 1, StartedAt: after, EndedAt: after,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pol, err := db.GetPolicy("Explore")
+	if err != nil || pol == nil {
+		t.Fatalf("GetPolicy = (%v, %v)", pol, err)
+	}
+	markerTime, err := time.Parse(time.RFC3339, pol.CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	since, err := db.StatsByAgentTypeSince("Explore", markerTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if since.Runs != 1 {
+		t.Errorf("runs since the marker = %d, want 1 - a later run must not sort before an "+
+			"earlier one just because the offsets differ", since.Runs)
+	}
+}
+
+func ledger_policyRow() PolicyRow {
+	return PolicyRow{
+		CriteriaVersion: "v1", AgentType: "Explore", Model: "m",
+		Source: "evidence", SampleSize: 20, BaselineMedianCost: 100,
+	}
+}

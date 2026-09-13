@@ -47,6 +47,13 @@ const policiesSchema = `CREATE TABLE IF NOT EXISTS policies (
 	effort           TEXT,
 	source           TEXT NOT NULL DEFAULT 'human', -- 'human' | 'evidence'
 	sample_size      INTEGER NOT NULL DEFAULT 0,    -- runs behind an 'evidence' row; 0 for 'human'
+	-- The marker that closes the loop: what this policy was measured against
+	-- when it was applied, so later runs can be compared like for like.
+	-- created_at is the marker time. Zero for a policy set by hand, which has
+	-- no measured baseline to regress from.
+	baseline_median_cost   REAL NOT NULL DEFAULT 0,
+	baseline_denial_rate   REAL NOT NULL DEFAULT 0,
+	baseline_feedback_rate REAL NOT NULL DEFAULT 0,
 	created_at       TEXT NOT NULL
 );`
 
@@ -161,8 +168,11 @@ func migrate(db *sql.DB) error {
 			"evidence_hash": `ALTER TABLE proposals ADD COLUMN evidence_hash TEXT NOT NULL DEFAULT ''`,
 		}},
 		{"policies", map[string]string{
-			"source":      `ALTER TABLE policies ADD COLUMN source TEXT NOT NULL DEFAULT 'human'`,
-			"sample_size": `ALTER TABLE policies ADD COLUMN sample_size INTEGER NOT NULL DEFAULT 0`,
+			"source":                 `ALTER TABLE policies ADD COLUMN source TEXT NOT NULL DEFAULT 'human'`,
+			"sample_size":            `ALTER TABLE policies ADD COLUMN sample_size INTEGER NOT NULL DEFAULT 0`,
+			"baseline_median_cost":   `ALTER TABLE policies ADD COLUMN baseline_median_cost REAL NOT NULL DEFAULT 0`,
+			"baseline_denial_rate":   `ALTER TABLE policies ADD COLUMN baseline_denial_rate REAL NOT NULL DEFAULT 0`,
+			"baseline_feedback_rate": `ALTER TABLE policies ADD COLUMN baseline_feedback_rate REAL NOT NULL DEFAULT 0`,
 		}},
 	} {
 		if err := addMissingColumns(db, m.table, m.columns); err != nil {
@@ -186,7 +196,8 @@ func migrate(db *sql.DB) error {
 // is what bounds this table's growth (constraint 10).
 func migratePoliciesUnique(db *sql.DB) error {
 	if err := addUniqueByRebuild(db, "policies", policiesSchema,
-		"criteria_version, agent_type, model, effort, source, sample_size, created_at",
+		"criteria_version, agent_type, model, effort, source, sample_size, "+
+			"baseline_median_cost, baseline_denial_rate, baseline_feedback_rate, created_at",
 		"agent_type"); err != nil {
 		return err
 	}

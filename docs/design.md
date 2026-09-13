@@ -634,7 +634,7 @@ that changes state belongs.
 Status: pull shipped (B5a), MCP surface shipped (B5b), nudge cut, auto-apply rejected and replaced
 by `loom propose apply` (B5d). **B5 complete as scoped.**
 
-### Loop closure, scoped 2026-09-13, not built
+### Loop closure, built 2026-09-13
 
 Applying a policy currently ends the story. The doc above already says it should not: *"Applying
 writes a marker so the next measurement window compares against the previous one. That comparison is
@@ -662,8 +662,23 @@ What it needs:
 
 **Honest limitation, stated up front.** This needs enough runs *after* an apply to mean anything.
 With a 20-run threshold to propose in the first place, a comparable window afterwards is not quick.
-It will ship correct and quiet, like the evidence path in B3 - which is the intended behaviour, not
-a shortfall.
+It ships correct and quiet, like the evidence path in B3 - intended behaviour, not a shortfall.
+
+**Built as a third proposal kind**, `revert_policy`, so it reuses the machinery that already exists
+rather than adding a parallel one. A regression becomes a proposal with before/after evidence;
+applying it removes the policy; and because the policy is gone, the original pin becomes proposable
+again. The loop closes *and* re-opens, which is what makes it a loop.
+
+**Automatic revert was considered and is not needed**, for a reason that only became clear once the
+nudge was cut: **nothing triggers Loom unattended.** There is no daemon and no hook. "Auto-revert"
+would mean "revert the next time you run `loom propose`" - at which point you are looking at the
+proposal anyway, and applying it is one command. The automation would buy nothing that the surface
+does not already give.
+
+Thresholds, stated rather than implied: `MinPostApplyRuns` (10, deliberately below the 20 needed to
+*apply* - the bar for returning to a known-good state is lower than for leaving it),
+`RegressionCostRatio` (1.25), `RegressionReworkDelta` (0.2 per run). Rework is checked before cost,
+because a cheaper model that gets things wrong is not a saving.
 
 ---
 

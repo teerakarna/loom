@@ -18,7 +18,14 @@ type PolicyRow struct {
 	Effort          string
 	Source          string // "human" | "evidence"
 	SampleSize      int    // runs behind an "evidence" row; 0 for "human"
-	CreatedAt       string
+	// Baseline* is what this policy was measured against when applied. Zero
+	// for a hand-set policy, which has no measured baseline to regress from.
+	// CreatedAt doubles as the marker time: runs after it are the comparison
+	// window (see StatsByAgentTypeSince).
+	BaselineMedianCost   float64
+	BaselineDenialRate   float64
+	BaselineFeedbackRate float64
+	CreatedAt            string
 }
 
 // UpsertPolicy writes one policy, replacing any existing row for that agent
@@ -27,16 +34,21 @@ type PolicyRow struct {
 // (constraint 10).
 func (d *DB) UpsertPolicy(p PolicyRow, at time.Time) error {
 	_, err := d.sql.Exec(`
-		INSERT INTO policies (criteria_version, agent_type, model, effort, source, sample_size, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO policies (criteria_version, agent_type, model, effort, source, sample_size,
+			baseline_median_cost, baseline_denial_rate, baseline_feedback_rate, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(agent_type) DO UPDATE SET
 			criteria_version = excluded.criteria_version,
 			model = excluded.model,
 			effort = excluded.effort,
 			source = excluded.source,
 			sample_size = excluded.sample_size,
+			baseline_median_cost = excluded.baseline_median_cost,
+			baseline_denial_rate = excluded.baseline_denial_rate,
+			baseline_feedback_rate = excluded.baseline_feedback_rate,
 			created_at = excluded.created_at`,
-		p.CriteriaVersion, p.AgentType, p.Model, p.Effort, p.Source, p.SampleSize, formatTime(at))
+		p.CriteriaVersion, p.AgentType, p.Model, p.Effort, p.Source, p.SampleSize,
+		p.BaselineMedianCost, p.BaselineDenialRate, p.BaselineFeedbackRate, formatTime(at))
 	return err
 }
 
@@ -46,9 +58,11 @@ func (d *DB) UpsertPolicy(p PolicyRow, at time.Time) error {
 func (d *DB) GetPolicy(agentType string) (*PolicyRow, error) {
 	var p PolicyRow
 	err := d.sql.QueryRow(`
-		SELECT criteria_version, agent_type, model, COALESCE(effort, ''), source, sample_size, created_at
+		SELECT criteria_version, agent_type, model, COALESCE(effort, ''), source, sample_size,
+		       baseline_median_cost, baseline_denial_rate, baseline_feedback_rate, created_at
 		FROM policies WHERE agent_type = ?`, agentType).
-		Scan(&p.CriteriaVersion, &p.AgentType, &p.Model, &p.Effort, &p.Source, &p.SampleSize, &p.CreatedAt)
+		Scan(&p.CriteriaVersion, &p.AgentType, &p.Model, &p.Effort, &p.Source, &p.SampleSize,
+			&p.BaselineMedianCost, &p.BaselineDenialRate, &p.BaselineFeedbackRate, &p.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -79,14 +93,36 @@ type AgentTypeStats struct {
 	ObservedModel string  // most common model seen for this agent type
 }
 
+// StatsByAgentTypeSince is StatsByAgentType restricted to runs that started
+// after t. This is the comparison window for loop closure: runs before the
+// marker justified the policy, runs after it are the test of whether that was
+// right. Measured identically to the baseline so the two are like for like.
+func (d *DB) StatsByAgentTypeSince(agentType string, t time.Time) (AgentTypeStats, error) {
+	all, err := d.statsByAgentType(` AND agent_type = ? AND started_at > ?`, agentType, formatTime(t))
+	if err != nil {
+		return AgentTypeStats{}, err
+	}
+	if len(all) == 0 {
+		return AgentTypeStats{AgentType: agentType}, nil
+	}
+	return all[0], nil
+}
+
 // StatsByAgentType computes evidence per agent type across all agent runs.
 // Agent runs with no attributable type (no readable .meta.json) are excluded
 // rather than grouped under "", since a bucket of unattributable runs is not
 // an agent type and must never be mistaken for one.
 func (d *DB) StatsByAgentType() ([]AgentTypeStats, error) {
+	return d.statsByAgentType("")
+}
+
+// statsByAgentType is the shared implementation. extra is appended to the
+// WHERE clause so a filtered window and the whole-corpus view cannot drift in
+// how they measure.
+func (d *DB) statsByAgentType(extra string, args ...any) ([]AgentTypeStats, error) {
 	rows, err := d.sql.Query(`
 		SELECT agent_type, weighted_cost, tool_use_count, denial_count, feedback_count, COALESCE(model, '')
-		FROM runs WHERE kind = 'agent' AND agent_type != '' ORDER BY agent_type`)
+		FROM runs WHERE kind = 'agent' AND agent_type != ''`+extra+` ORDER BY agent_type`, args...)
 	if err != nil {
 		return nil, err
 	}
