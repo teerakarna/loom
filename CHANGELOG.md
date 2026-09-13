@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Runs are tagged with their lane: the project directory the session ran in, taken from the
+  transcript path (B4). `loom report` gains a by-lane breakdown and a `--lane` filter. No manifest
+  and no new file in any repo, because the lane is already in the path. Labelling by path is a
+  description and claims nothing; inferring a *boundary* from a path would be a decision, which is
+  the path-guessing the design doc forbids, so hard ledger separation stays deferred.
+
 - `loom status`: what Loom knows, how current it is, and what it cannot answer (closes #21).
   Read-only by design, because `loom report` ingests as a side effect and checking freshness with it
   would change the thing being checked. Reports transcripts on disk vs ingested-and-current vs

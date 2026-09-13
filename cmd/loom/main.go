@@ -40,8 +40,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `loom — artifact lifecycle and cost/routing engine for Claude Code
 
 Usage:
-  loom report [path]        Ingest transcripts under path (default ~/.claude/projects)
-                             and print an aggregate cost/usage report.
+  loom report [path] [--lane <lane>]
+                            Ingest transcripts under path (default ~/.claude/projects)
+                             and print an aggregate cost/usage report, optionally
+                             narrowed to one lane (the project directory a session ran in).
   loom advise <task text>   Discover skills/agents/plans/hooks, and recommend which
                              are relevant plus a cold-start model/effort choice.
   loom status [path]        Report on loom itself: freshness, what it knows, and what

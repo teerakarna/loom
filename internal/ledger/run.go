@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"strings"
 	"time"
 
 	"github.com/teerakarna/loom/internal/ingest"
@@ -16,6 +17,7 @@ type RunRecord struct {
 	SessionID              string
 	Kind                   string
 	Model                  string
+	Lane                   string // project directory the session ran in; "" if unattributable
 	AgentType              string // "" for session runs, and for agents with no readable .meta.json
 	Effort                 string // "" when the transcript carried no effort
 	StartedAt              time.Time
@@ -41,14 +43,15 @@ type RunRecord struct {
 func (d *DB) InsertRun(r RunRecord) error {
 	_, err := d.sql.Exec(`
 		INSERT INTO runs (
-			path, size_bytes, session_id, kind, model, agent_type, effort, started_at, ended_at,
+			path, size_bytes, session_id, kind, model, lane, agent_type, effort, started_at, ended_at,
 			input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
 			weighted_cost, tool_use_count, denial_count, feedback_count,
 			reported_subagent_tokens, reported_tool_uses, reported_duration_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path) DO UPDATE SET
 			size_bytes = excluded.size_bytes, session_id = excluded.session_id,
-			kind = excluded.kind, model = excluded.model, agent_type = excluded.agent_type,
+			kind = excluded.kind, model = excluded.model, lane = excluded.lane,
+			agent_type = excluded.agent_type,
 			effort = excluded.effort, started_at = excluded.started_at, ended_at = excluded.ended_at,
 			input_tokens = excluded.input_tokens, output_tokens = excluded.output_tokens,
 			cache_read_tokens = excluded.cache_read_tokens,
@@ -58,7 +61,7 @@ func (d *DB) InsertRun(r RunRecord) error {
 			reported_subagent_tokens = excluded.reported_subagent_tokens,
 			reported_tool_uses = excluded.reported_tool_uses,
 			reported_duration_ms = excluded.reported_duration_ms`,
-		r.Path, r.SizeBytes, r.SessionID, r.Kind, r.Model, r.AgentType, r.Effort, formatTime(r.StartedAt), formatTime(r.EndedAt),
+		r.Path, r.SizeBytes, r.SessionID, r.Kind, r.Model, r.Lane, r.AgentType, r.Effort, formatTime(r.StartedAt), formatTime(r.EndedAt),
 		r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheCreationTokens,
 		r.WeightedCost, r.ToolUseCount, r.DenialCount, r.FeedbackCount,
 		r.ReportedSubagentTokens, r.ReportedToolUses, r.ReportedDurationMs,
@@ -90,6 +93,7 @@ type Summary struct {
 	TotalFeedback      int
 	ByModel            []ModelCost
 	ByAgentType        []AgentTypeCost
+	ByLane             []LaneCost
 	TopRuns            []RunCost // most expensive runs, descending
 	Concentration      []ShareAtN
 	UnreconciledAgents int // agent runs with a reported figure that doesn't match a computed one
@@ -123,6 +127,16 @@ type AgentTypeCost struct {
 	PerRun       float64
 }
 
+// LaneCost is cost grouped by the project directory a session ran in. This is
+// B4's whole output: it needs no manifest because the lane is already in the
+// transcript path (docs/design.md, "Filtering, not a manifest").
+type LaneCost struct {
+	Lane         string // "" means unattributable, rendered as such rather than hidden
+	Runs         int
+	WeightedCost float64
+	PerRun       float64
+}
+
 // RunCost is one run in the most-expensive listing. Without this, a single
 // dominant run is invisible in any grouped view, and its cost is silently
 // attributed to whatever model or agent type it happened to use.
@@ -149,8 +163,25 @@ type ShareAtN struct {
 // docs/transcript-schema.md, "Reconciliation does NOT hold under naive
 // summing" — it only counts how many agent runs have a reported figure at
 // all, as a visibility signal.
-func (d *DB) Report() (Summary, error) {
+// Report aggregates the whole ledger. ReportForLane narrows the same summary
+// to one lane.
+func (d *DB) Report() (Summary, error) { return d.report("") }
+
+// ReportForLane is Report restricted to runs from one lane. An empty lane
+// string would mean "unattributed" rather than "everything", so the two
+// entry points are separate: a filter that silently means its own opposite
+// when passed a zero value is the kind of thing that bites once and is never
+// trusted again.
+func (d *DB) ReportForLane(lane string) (Summary, error) { return d.report(lane) }
+
+func (d *DB) report(lane string) (Summary, error) {
 	var s Summary
+	// One predicate threaded through every query, so a filtered report and a
+	// whole-ledger report can never diverge in what they count.
+	where, args := "", []any(nil)
+	if lane != "" {
+		where, args = " WHERE lane = ?", []any{lane}
+	}
 	row := d.sql.QueryRow(`
 		SELECT
 			COUNT(*),
@@ -161,19 +192,19 @@ func (d *DB) Report() (Summary, error) {
 			COALESCE(SUM(denial_count), 0),
 			COALESCE(SUM(feedback_count), 0),
 			COALESCE(SUM(CASE WHEN kind = 'agent' AND reported_subagent_tokens IS NOT NULL THEN 1 ELSE 0 END), 0)
-		FROM runs`)
+		FROM runs`+where, args...)
 	if err := row.Scan(&s.TotalRuns, &s.SessionRuns, &s.AgentRuns, &s.TotalWeightedCost,
 		&s.TotalToolUses, &s.TotalDenials, &s.TotalFeedback, &s.UnreconciledAgents); err != nil {
 		return s, err
 	}
 
-	if err := d.scanCostByKind(&s); err != nil {
+	if err := d.scanCostByKind(&s, where, args); err != nil {
 		return s, err
 	}
-	if err := d.scanGrouped(&s); err != nil {
+	if err := d.scanGrouped(&s, where, args); err != nil {
 		return s, err
 	}
-	if err := d.scanTopRuns(&s); err != nil {
+	if err := d.scanTopRuns(&s, where, args); err != nil {
 		return s, err
 	}
 	return s, nil
@@ -182,11 +213,11 @@ func (d *DB) Report() (Summary, error) {
 // scanCostByKind splits the weighted total by token class, using the same
 // weights internal/ingest applies, so the two can never silently disagree
 // about what a token costs.
-func (d *DB) scanCostByKind(s *Summary) error {
+func (d *DB) scanCostByKind(s *Summary, where string, args []any) error {
 	row := d.sql.QueryRow(`
 		SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
 		       COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_creation_tokens),0)
-		FROM runs`)
+		FROM runs`+where, args...)
 	var in, out, cr, cw int64
 	if err := row.Scan(&in, &out, &cr, &cw); err != nil {
 		return err
@@ -212,10 +243,10 @@ func (d *DB) scanCostByKind(s *Summary) error {
 }
 
 // scanGrouped fills the by-model and by-agent-type breakdowns.
-func (d *DB) scanGrouped(s *Summary) error {
+func (d *DB) scanGrouped(s *Summary, where string, args []any) error {
 	rows, err := d.sql.Query(`
 		SELECT COALESCE(model, '(unknown)'), COUNT(*), COALESCE(SUM(weighted_cost), 0)
-		FROM runs GROUP BY model ORDER BY SUM(weighted_cost) DESC`)
+		FROM runs`+where+` GROUP BY model ORDER BY SUM(weighted_cost) DESC`, args...)
 	if err != nil {
 		return err
 	}
@@ -232,9 +263,28 @@ func (d *DB) scanGrouped(s *Summary) error {
 		return err
 	}
 
+	laneRows, err := d.sql.Query(`
+		SELECT lane, COUNT(*), COALESCE(SUM(weighted_cost), 0)
+		FROM runs`+where+` GROUP BY lane ORDER BY SUM(weighted_cost) DESC`, args...)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = laneRows.Close() }()
+	for laneRows.Next() {
+		var lc LaneCost
+		if err := laneRows.Scan(&lc.Lane, &lc.Runs, &lc.WeightedCost); err != nil {
+			return err
+		}
+		lc.PerRun = perRun(lc.WeightedCost, lc.Runs)
+		s.ByLane = append(s.ByLane, lc)
+	}
+	if err := laneRows.Err(); err != nil {
+		return err
+	}
+
 	agentRows, err := d.sql.Query(`
 		SELECT agent_type, COUNT(*), COALESCE(SUM(weighted_cost), 0)
-		FROM runs WHERE kind = 'agent' GROUP BY agent_type ORDER BY SUM(weighted_cost) DESC`)
+		FROM runs WHERE kind = 'agent'`+strings.Replace(where, " WHERE ", " AND ", 1)+` GROUP BY agent_type ORDER BY SUM(weighted_cost) DESC`, args...)
 	if err != nil {
 		return err
 	}
@@ -259,10 +309,10 @@ const topRunsShown = 5
 // X% of cost".
 var concentrationPoints = []int{1, 3, 5}
 
-func (d *DB) scanTopRuns(s *Summary) error {
+func (d *DB) scanTopRuns(s *Summary, where string, args []any) error {
 	rows, err := d.sql.Query(`
 		SELECT path, kind, COALESCE(model, '(unknown)'), agent_type, weighted_cost
-		FROM runs ORDER BY weighted_cost DESC`)
+		FROM runs`+where+` ORDER BY weighted_cost DESC`, args...)
 	if err != nil {
 		return err
 	}

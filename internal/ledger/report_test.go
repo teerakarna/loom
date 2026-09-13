@@ -179,3 +179,68 @@ func TestReportCostByKindOnEmptyLedger(t *testing.T) {
 		}
 	}
 }
+
+func TestReportByLaneAndFiltering(t *testing.T) {
+	db := openTestDB(t)
+	seed := []struct {
+		path, lane string
+		cost       float64
+	}{
+		{"a.jsonl", "-u-work", 100},
+		{"b.jsonl", "-u-work", 300},
+		{"c.jsonl", "-u-personal", 50},
+		{"d.jsonl", "", 7}, // unattributable: still a real run
+	}
+	for _, r := range seed {
+		// Tokens and weighted cost must agree, as they do for real ingest
+		// where the cost is derived from the tokens. Input is weighted 1.0, so
+		// input == cost keeps the fixture internally consistent and lets the
+		// cost-by-kind assertion below mean something.
+		if err := db.InsertRun(RunRecord{
+			Path: r.path, Kind: "session", Lane: r.lane,
+			InputTokens: int64(r.cost), WeightedCost: r.cost,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	all, err := db.Report()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.TotalRuns != 4 || all.TotalWeightedCost != 457 {
+		t.Errorf("whole ledger = %d runs / %v, want 4 / 457", all.TotalRuns, all.TotalWeightedCost)
+	}
+	if len(all.ByLane) != 3 {
+		t.Errorf("ByLane = %d groups, want 3 (including the unattributed one)", len(all.ByLane))
+	}
+
+	work, err := db.ReportForLane("-u-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work.TotalRuns != 2 || work.TotalWeightedCost != 400 {
+		t.Errorf("work lane = %d runs / %v, want 2 / 400", work.TotalRuns, work.TotalWeightedCost)
+	}
+	// The filter must reach every part of the summary, not just the headline.
+	var kindSum float64
+	for _, k := range work.CostByKind {
+		kindSum += k.Cost
+	}
+	if kindSum != work.TotalWeightedCost {
+		t.Errorf("filtered cost-by-kind sums to %v but the filtered headline is %v", kindSum, work.TotalWeightedCost)
+	}
+	if len(work.TopRuns) != 2 {
+		t.Errorf("filtered TopRuns = %d, want 2", len(work.TopRuns))
+	}
+
+	// An empty lane means "unattributed", never "everything" - which is why
+	// Report and ReportForLane are separate entry points.
+	none, err := db.ReportForLane("nope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none.TotalRuns != 0 {
+		t.Errorf("unknown lane = %d runs, want 0", none.TotalRuns)
+	}
+}
