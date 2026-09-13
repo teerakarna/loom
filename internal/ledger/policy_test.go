@@ -170,3 +170,46 @@ func TestMigratePoliciesUniqueFromOldSchema(t *testing.T) {
 		t.Errorf("Model = %q, want opus after upsert", got.Model)
 	}
 }
+
+// TestMigrateProposalsUniqueFromOldSchema covers the same upgrade trap that
+// bit `policies`: a ledger created before UNIQUE(kind, subject) keeps a table
+// without it, and every ON CONFLICT fails. Handled proactively this time
+// rather than after the fact.
+func TestMigrateProposalsUniqueFromOldSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`
+		CREATE TABLE proposals (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			kind         TEXT NOT NULL,
+			evidence     TEXT NOT NULL,
+			sample_size  INTEGER NOT NULL,
+			effect_size  REAL,
+			status       TEXT NOT NULL DEFAULT 'pending',
+			created_at   TEXT NOT NULL
+		);
+		INSERT INTO proposals (kind, evidence, sample_size, status, created_at)
+			VALUES ('retire_artifact', '{}', 0, 'pending', '2026-01-01T00:00:00Z');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Open(path) // runs the migration
+	if err != nil {
+		t.Fatalf("Open on a pre-UNIQUE proposals table failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// The operation that would have failed now works.
+	ok, err := db.UpsertProposal(ProposalRow{
+		Kind: "retire_artifact", Subject: "/s/x.md", Evidence: "{}", EvidenceHash: "h1",
+	}, time.Now())
+	if err != nil || !ok {
+		t.Fatalf("UpsertProposal after migration = (%v, %v), want (true, nil)", ok, err)
+	}
+}

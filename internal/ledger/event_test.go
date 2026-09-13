@@ -34,7 +34,7 @@ func TestInsertAndListEvents(t *testing.T) {
 
 func TestListProposalsEmptyByDefault(t *testing.T) {
 	db := openTestDB(t)
-	proposals, err := db.ListProposals()
+	proposals, err := db.ListProposals(false)
 	if err != nil {
 		t.Fatal(err)
 	}

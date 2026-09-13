@@ -39,7 +39,7 @@ func NewServer(db *ledger.DB) *gomcp.Server {
 
 	gomcp.AddTool(s, &gomcp.Tool{
 		Name:        "list_proposals",
-		Description: "List pending artifact promotion/retirement proposals with their evidence. Empty until Loom's proposal engine (B5) ships.",
+		Description: "List pending artifact promotion/retirement proposals with their evidence. Each carries what it is about, the evidence behind it, and its sample size. Proposals that touch the user's files are advisory only and must never be applied automatically.",
 	}, listProposalsHandler(db))
 
 	gomcp.AddTool(s, &gomcp.Tool{
@@ -169,6 +169,7 @@ type ProposalsOutput struct {
 type Proposal struct {
 	ID         int64    `json:"id"`
 	Kind       string   `json:"kind"`
+	Subject    string   `json:"subject"`
 	Evidence   string   `json:"evidence"`
 	SampleSize int      `json:"sample_size"`
 	EffectSize *float64 `json:"effect_size,omitempty"`
@@ -178,14 +179,14 @@ type Proposal struct {
 
 func listProposalsHandler(db *ledger.DB) gomcp.ToolHandlerFor[emptyInput, ProposalsOutput] {
 	return func(_ context.Context, _ *gomcp.CallToolRequest, _ emptyInput) (*gomcp.CallToolResult, ProposalsOutput, error) {
-		rows, err := db.ListProposals()
+		rows, err := db.ListProposals(true)
 		if err != nil {
 			return nil, ProposalsOutput{}, err
 		}
 		out := ProposalsOutput{}
 		for _, r := range rows {
 			out.Proposals = append(out.Proposals, Proposal{
-				ID: r.ID, Kind: r.Kind, Evidence: r.Evidence, SampleSize: r.SampleSize,
+				ID: r.ID, Kind: r.Kind, Subject: r.Subject, Evidence: r.Evidence, SampleSize: r.SampleSize,
 				EffectSize: r.EffectSize, Status: r.Status, CreatedAt: r.CreatedAt,
 			})
 		}
