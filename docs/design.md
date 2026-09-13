@@ -696,7 +696,90 @@ Each stage is independently useful. Stopping after any of them leaves something 
   gatekeeper) and hard ledger separation was deferred (it needs declared input, and filtering a
   single local ledger turned out to be enough).
 - **B5** Advisor proposals for promotion and retirement.
-- **B6** Plugin packaging, signed releases, public at v0.1.0.
+- **B6** Signed releases, plugin packaging, and the decision to go public. Scoped in detail below.
+
+### B6 scope, agreed 2026-09-13
+
+Four pieces, and they are not equally justified. Two are clearly needed, one is thinner than this
+doc has been claiming, and one is a decision rather than a build.
+
+#### B6a. Signed releases - needed, and coupled to publishing
+
+goreleaser, SHA256 checksums, cosign keyless signing, SBOM per release, binaries for darwin/arm64,
+darwin/amd64, linux/amd64, linux/arm64. None of it exists today: there is no `.goreleaser.yml` and
+no release workflow.
+
+A tool that asks people to download a binary is a supply chain and should behave like one. Note the
+coupling though: nobody downloads a binary until there is a public release, so this is worth
+building *as part of* going public rather than before deciding to.
+
+#### B6b. Fixture-provenance check - needed, but it cannot do what its name claims
+
+The publishability rules require this in CI before the repo goes public. It is worth building and
+worth being honest about: **provenance cannot be verified from content.** Nothing can prove a file
+was hand-written rather than derived from a real transcript.
+
+What it can do is check for the *markers* of real data, which is a different and weaker claim that
+should be made in those words:
+
+- no absolute home paths (`/Users/<name>`, `/home/<name>`) - currently clean
+- no email addresses, no bearer tokens (gitleaks already covers credentials)
+- a size ceiling, since real transcripts run to megabytes and every current fixture is under 2.5KB
+- a manifest in `testdata/README.md` naming each fixture and asserting it was hand-written, so the
+  claim is at least recorded and reviewable rather than assumed
+
+Call it a fixture-hygiene check in the CI job name. Naming it provenance would be the tool claiming
+more than its evidence supports, which this project keeps telling other people not to do.
+
+#### B6c. The Claude Code plugin - thinner than this doc says
+
+The plugin was specified as shipping "the MCP server registration, the optional hooks, the Advisor
+skill and a manifest". Two of those four no longer exist:
+
+- **The hooks.** The session-start nudge was cut on measurement, and no other hook was ever built.
+  There are no hooks to ship.
+- **The Advisor skill.** Described as reading proposals and walking the user through accepting or
+  rejecting them. `list_proposals`, `dismiss_proposal` and `loom propose apply` already do exactly
+  that, through surfaces that exist. A skill wrapping them would be a third way to do the same
+  thing.
+
+So the plugin would ship an MCP server registration and a manifest. That is not nothing - a one-line
+install beats "edit your settings.json by hand", and marketplace presence is the distribution
+channel. But it should be built as what it is, and the plugin README updated, rather than shipping
+against a description that no longer matches.
+
+#### B6d. Going public - a decision, with prerequisites
+
+Not a build. The prerequisites are already written down in the publishability rules:
+
+- secret scanning green in CI - **done** (gitleaks, 2026-09-12)
+- fixture-hygiene check green - **B6b**
+- a manual pass for real names in docs, README and examples - currently clean, checked 2026-09-13,
+  and worth re-checking immediately before rather than trusting this line
+- signed releases actually working - **B6a**
+- **at least one evidence path has fired on real data.** Not a build, a precondition. Every
+  evidence-driven behaviour in this tool - pin proposals, retirement, regression detection - has so
+  far only run against synthetic fixtures and seeded demos. On a real corpus they all correctly
+  report insufficient evidence, which is right, and which means the interesting half of the tool is
+  unproven outside its own tests. Publishing something whose headline behaviour has never been
+  demonstrated on real data would be the thing this project spends four blog posts criticising.
+
+  This gate costs nothing to add and is satisfied by patience: keep it installed, let the corpus
+  grow past a threshold, and watch one proposal appear for a real reason. The thresholds themselves
+  (`MinSampleSize` 20, `StaleAfter` 90 days, `MinPostApplyRuns` 10, `RegressionCostRatio` 1.25,
+  `RegressionReworkDelta` 0.2) are every one of them a reasoned guess, and cannot be calibrated
+  without exactly that corpus.
+
+There is also the owner's own standing rule that a repo goes public only for a concrete demonstrated
+benefit, never to unblock a feature. The benefit here is concrete and was not invented for the
+occasion: **the plugin marketplace requires a public repository.** That is the reason, and if the
+plugin is not being pursued then going public has no forcing argument and should wait.
+
+#### Order
+
+B6b first (cheap, and the gate everything else waits on), then B6a, then B6c, then B6d as a separate
+decision once the first three are green. Stopping after B6b leaves the repo in a better state than
+it is now whether or not it ever goes public.
 
 ## Verification
 
