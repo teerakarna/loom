@@ -613,7 +613,26 @@ Pull first, MCP tool second, ~~session-start nudge third~~ (cut, see above), aut
 only for Loom-internal state. Each step is useful stopping there, and nothing later is required to
 make anything earlier worth having.
 
-Status: pull shipped (B5a), MCP surface shipped (B5b), nudge cut, auto-apply not started.
+**Auto-apply: rejected 2026-09-13, replaced by a one-command manual apply.**
+
+The arithmetic kills it. A pin proposal is suppressed once a policy exists, so it can fire **at most
+once per agent type, ever** - two times on the corpus this was measured against - and each firing
+saves exactly one command. That does not justify preference storage (`apply once` / `ask every
+time` / `apply every time`), a cap on auto-applies per window, and writes happening while nobody is
+watching.
+
+What the convenience was actually worth is not retyping a model name off a proposal. So
+`loom propose apply <id>` does that, and nothing else: a person runs it, it writes only to Loom's
+own policy table, it records the policy's source as `evidence` with its sample size, and
+`loom policy unset` reverts it. "The human applies" stays literal rather than becoming a setting.
+
+Apply is deliberately **CLI-only**. `list_proposals` and `dismiss_proposal` are exposed over MCP
+because listing is read-only and dismissing only hides a suggestion, but applying changes policy,
+and an assistant can call an MCP tool without the human asking. The terminal is where a decision
+that changes state belongs.
+
+Status: pull shipped (B5a), MCP surface shipped (B5b), nudge cut, auto-apply rejected and replaced
+by `loom propose apply` (B5d). **B5 complete.**
 
 ---
 

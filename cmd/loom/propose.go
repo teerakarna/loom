@@ -21,6 +21,22 @@ func runPropose(args []string) error {
 	}
 	defer func() { _ = db.Close() }()
 
+	if len(args) > 0 && args[0] == "apply" {
+		if len(args) != 2 {
+			return fmt.Errorf("usage: loom propose apply <id>")
+		}
+		id, err := strconv.ParseInt(args[1], 10, 64)
+		if err != nil {
+			return fmt.Errorf("%q is not a proposal id", args[1])
+		}
+		msg, err := propose.Apply(db, id, time.Now())
+		if err != nil {
+			return err
+		}
+		fmt.Println(msg)
+		return nil
+	}
+
 	if len(args) > 0 && args[0] == "dismiss" {
 		if len(args) != 2 {
 			return fmt.Errorf("usage: loom propose dismiss <id>")
@@ -36,7 +52,7 @@ func runPropose(args []string) error {
 		return nil
 	}
 	if len(args) > 0 {
-		return fmt.Errorf("unknown subcommand %q (want: dismiss, or nothing to list)", args[0])
+		return fmt.Errorf("unknown subcommand %q (want: apply, dismiss, or nothing to list)", args[0])
 	}
 
 	now := time.Now()
@@ -69,7 +85,7 @@ func runPropose(args []string) error {
 		if propose.TouchesUserFiles(p.Kind) {
 			fmt.Printf("       loom will NOT apply this: it touches your files. Review and act yourself.\n")
 		} else {
-			fmt.Printf("       applies to loom's own state only, and reverts in one command.\n")
+			fmt.Printf("       loom's own state only. `loom propose apply %d` to take it; reverts in one command.\n", p.ID)
 		}
 		if p.SampleSize > 0 {
 			fmt.Printf("       evidence: %d run(s)\n", p.SampleSize)
@@ -77,8 +93,8 @@ func runPropose(args []string) error {
 		fmt.Printf("       %s\n", compactEvidence(ev))
 		fmt.Println()
 	}
-	fmt.Println("`loom propose dismiss <id>` to dismiss one. A dismissal holds until the evidence")
-	fmt.Println("behind it changes, not until some interval elapses.")
+	fmt.Println("Dismiss with: loom propose dismiss <id>")
+	fmt.Println("A dismissal holds until the evidence behind it changes, not until an interval elapses.")
 	return nil
 }
 

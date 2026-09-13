@@ -51,7 +51,7 @@ Usage:
   loom status [path]        Report on loom itself: freshness, what it knows, and what
                              it cannot answer. Read-only, never ingests.
   loom propose              List proposals loom's evidence supports, with what each
-                             rests on. Add "dismiss <id>" to dismiss one.
+                             rests on. Add "apply <id>" or "dismiss <id>" to act on one.
   loom policy               Show the effective model/effort per agent type, with the
                              source and sample size behind each decision.
   loom policy set <agent-type> <model> <effort>

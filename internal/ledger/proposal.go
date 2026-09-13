@@ -10,6 +10,10 @@ import (
 const (
 	ProposalPending   = "pending"
 	ProposalDismissed = "dismissed"
+	// ProposalApplied means the change was made. Kept distinct from dismissed
+	// so the record says what happened, not merely that it stopped being
+	// shown.
+	ProposalApplied = "applied"
 )
 
 // MaxPendingProposals bounds how many proposals can be waiting at once.
@@ -89,6 +93,29 @@ func (d *DB) CountPendingProposals() (int, error) {
 	var n int
 	err := d.sql.QueryRow(`SELECT COUNT(*) FROM proposals WHERE status = ?`, ProposalPending).Scan(&n)
 	return n, err
+}
+
+// GetProposal returns one proposal by id.
+func (d *DB) GetProposal(id int64) (*ProposalRow, error) {
+	var r ProposalRow
+	err := d.sql.QueryRow(`
+		SELECT id, kind, subject, evidence, evidence_hash, sample_size, effect_size, status, created_at
+		FROM proposals WHERE id = ?`, id).
+		Scan(&r.ID, &r.Kind, &r.Subject, &r.Evidence, &r.EvidenceHash,
+			&r.SampleSize, &r.EffectSize, &r.Status, &r.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// MarkProposalApplied records that a proposal was acted on.
+func (d *DB) MarkProposalApplied(id int64) error {
+	_, err := d.sql.Exec(`UPDATE proposals SET status = ? WHERE id = ?`, ProposalApplied, id)
+	return err
 }
 
 // DismissProposal marks one dismissed. It stays dismissed until its evidence
