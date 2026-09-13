@@ -27,6 +27,13 @@ type LedgerStatus struct {
 	// data, which the user should be told rather than left to infer.
 	AgentTypes   int
 	Unattributed int
+
+	// Lanes counts distinct project directories runs came from, and
+	// UnattributedLanes counts runs that could not be placed in one (a
+	// transcript outside the projects root). Same reasoning as agent types:
+	// a filter is only as trustworthy as the proportion of data it can see.
+	Lanes             int
+	UnattributedLanes int
 }
 
 // Status gathers the ledger's own state in one pass. Every count is a plain
@@ -56,6 +63,8 @@ func (d *DB) Status() (LedgerStatus, error) {
 		{`SELECT COUNT(*) FROM events`, &s.Events},
 		{`SELECT COUNT(*) FROM policies`, &s.Policies},
 		{`SELECT COUNT(DISTINCT agent_type) FROM runs WHERE kind = 'agent' AND agent_type != ''`, &s.AgentTypes},
+		{`SELECT COUNT(DISTINCT lane) FROM runs WHERE lane != ''`, &s.Lanes},
+		{`SELECT COUNT(*) FROM runs WHERE lane = ''`, &s.UnattributedLanes},
 	}
 	for _, c := range counts {
 		if err := d.sql.QueryRow(c.query).Scan(c.into); err != nil {

@@ -73,11 +73,23 @@ func runStatus(args []string) error {
 		fmt.Printf("               %d agent run(s) have no readable .meta.json, so no agent type\n", st.Unattributed)
 	}
 	fmt.Printf("  agent types  %d\n", st.AgentTypes)
+	fmt.Printf("  lanes        %d\n", st.Lanes)
+	if st.UnattributedLanes > 0 {
+		fmt.Printf("               %d run(s) sit outside the projects root, so no lane\n", st.UnattributedLanes)
+	}
 	fmt.Printf("  artifacts    %d (%d stale)\n", st.Artifacts, st.StaleArtifact)
 	fmt.Printf("  events       %d\n", st.Events)
 	fmt.Printf("  policies     %d deliberate\n", st.Policies)
 	if st.EarliestRun != "" {
 		fmt.Printf("  run window   %s to %s\n", st.EarliestRun, st.LatestRun)
+	}
+	fmt.Println()
+
+	if summary, err := db.Report(); err == nil && len(summary.ByLane) > 1 {
+		fmt.Println("Lanes seen:")
+		for _, l := range summary.ByLane {
+			fmt.Printf("  %-28s %3d run(s)\n", ingest.LaneDisplay(l.Lane), l.Runs)
+		}
 	}
 	fmt.Println()
 
