@@ -536,6 +536,59 @@ compares against the previous one. That comparison is what makes this a loop rat
 - Never propose a cheaper model for an agent type whose measured rework rate is already elevated.
 - Every applied change reverts to the prior policy version in one command.
 
+### B5 scope, agreed 2026-09-13
+
+#### Two kinds of proposal, and only one may ever be automated
+
+The split falls straight out of constraint 9 and decides everything else:
+
+| A proposal that touches | Loom may | Automation |
+|---|---|---|
+| **The user's files** - promote a scratch note to a plan, retire an unused skill | render a diff, nothing more | **Never.** Not once, not with permission. Loom does not write there at all |
+| **Loom's own state** - pin a model in the `policies` table | apply it | Defensible: blast radius is confined to Loom's ledger, and `loom policy unset` already reverts it in one command |
+
+"It measures and recommends. The human applies" stays absolute for anything outside Loom's own
+database. Inside it, automation is a convenience over an action the user could already take, and it
+is revertible.
+
+#### Surfacing, in the order it earns
+
+Loom has no terminal of its own. It is a CLI and an MCP server; Claude Code owns the keyboard and
+the screen. There is no hotkey, no submenu and no TUI - a Loom that owned the terminal would be
+competing with the thing it exists to observe. Three surfaces exist, and each earns the next:
+
+1. **Pull.** `loom propose` lists pending proposals with their evidence. You ask, it answers, it
+   exits. Zero intrusion, no new machinery.
+2. **The MCP tool.** `list_proposals` already exists and returns empty. This is the most natural
+   notification available: the user is already in a conversation, so a proposal can be raised when
+   it is relevant rather than when a timer fires.
+3. **Session-start hook, optional.** One line, a count and a command to run. Never content, never
+   growing. Same discipline as the pre-compact pointer: a mechanism that answers "too much to keep
+   track of" by printing more at every session start has made the problem worse.
+
+#### Automation controls live in the ledger, not a config file
+
+`apply once` / `ask every time` / `apply every time` / `edit the value` is the right shape, and the
+preference belongs in the ledger alongside `policies`, not in a new dotfile. Same reasoning that
+cut the lane manifest: do not add a file when there is already somewhere to put it, and a tool whose
+default is zero configuration should stay that way.
+
+#### Bounds, per constraint 10, in the same change that adds the mechanism
+
+- A cap on **pending** proposals. An advisor producing proposals faster than a human accepts them
+  recreates exactly the fatigue this project exists to reduce.
+- **Dedupe**: the same finding is not re-proposed on every run. A dismissed proposal stays dismissed
+  until the evidence behind it changes, which is the same content-addressed idea as the fingerprint
+  gate in Candor: re-raise on change, not on a timer.
+- A cap on **auto-applies per window**, with every one recorded and revertible, for the Loom-internal
+  kind only.
+
+#### Build order
+
+Pull first, MCP tool second, session-start nudge third and optional, auto-apply last and only for
+Loom-internal state. Each step is useful stopping there, and nothing later is required to make
+anything earlier worth having.
+
 ---
 
 ## Phasing
