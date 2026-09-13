@@ -21,6 +21,8 @@ func main() {
 		err = runAdvise(os.Args[2:])
 	case "status":
 		err = runStatus(os.Args[2:])
+	case "propose":
+		err = runPropose(os.Args[2:])
 	case "policy":
 		err = runPolicy(os.Args[2:])
 	case "serve":
@@ -48,6 +50,8 @@ Usage:
                              are relevant plus a cold-start model/effort choice.
   loom status [path]        Report on loom itself: freshness, what it knows, and what
                              it cannot answer. Read-only, never ingests.
+  loom propose              List proposals loom's evidence supports, with what each
+                             rests on. Add "dismiss <id>" to dismiss one.
   loom policy               Show the effective model/effort per agent type, with the
                              source and sample size behind each decision.
   loom policy set <agent-type> <model> <effort>

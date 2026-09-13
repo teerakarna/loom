@@ -26,6 +26,19 @@ type DB struct {
 
 // policiesSchema is separate so the rebuild migration can recreate the table
 // from the same definition rather than a drifting copy.
+const proposalsSchema = `CREATE TABLE IF NOT EXISTS proposals (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	kind          TEXT NOT NULL,
+	subject       TEXT NOT NULL DEFAULT '', -- what it is about: an artifact path, an agent type
+	evidence      TEXT NOT NULL, -- JSON
+	evidence_hash TEXT NOT NULL DEFAULT '',
+	sample_size   INTEGER NOT NULL,
+	effect_size   REAL,
+	status        TEXT NOT NULL DEFAULT 'pending', -- pending | dismissed
+	created_at    TEXT NOT NULL,
+	UNIQUE(kind, subject)
+);`
+
 const policiesSchema = `CREATE TABLE IF NOT EXISTS policies (
 	id               INTEGER PRIMARY KEY AUTOINCREMENT,
 	criteria_version TEXT NOT NULL,
@@ -89,15 +102,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 ` + policiesSchema + `
 
-CREATE TABLE IF NOT EXISTS proposals (
-	id           INTEGER PRIMARY KEY AUTOINCREMENT,
-	kind         TEXT NOT NULL,
-	evidence     TEXT NOT NULL, -- JSON
-	sample_size  INTEGER NOT NULL,
-	effect_size  REAL,
-	status       TEXT NOT NULL DEFAULT 'pending',
-	created_at   TEXT NOT NULL
-);
+` + proposalsSchema + `
 
 CREATE TABLE IF NOT EXISTS coordination (
 	id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,6 +156,10 @@ func migrate(db *sql.DB) error {
 			"size_bytes": `ALTER TABLE runs ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0`,
 			"lane":       `ALTER TABLE runs ADD COLUMN lane TEXT NOT NULL DEFAULT ''`,
 		}},
+		{"proposals", map[string]string{
+			"subject":       `ALTER TABLE proposals ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
+			"evidence_hash": `ALTER TABLE proposals ADD COLUMN evidence_hash TEXT NOT NULL DEFAULT ''`,
+		}},
 		{"policies", map[string]string{
 			"source":      `ALTER TABLE policies ADD COLUMN source TEXT NOT NULL DEFAULT 'human'`,
 			"sample_size": `ALTER TABLE policies ADD COLUMN sample_size INTEGER NOT NULL DEFAULT 0`,
@@ -176,10 +185,31 @@ func migrate(db *sql.DB) error {
 // The constraint is load-bearing rather than cosmetic: one row per agent type
 // is what bounds this table's growth (constraint 10).
 func migratePoliciesUnique(db *sql.DB) error {
+	if err := addUniqueByRebuild(db, "policies", policiesSchema,
+		"criteria_version, agent_type, model, effort, source, sample_size, created_at",
+		"agent_type"); err != nil {
+		return err
+	}
+	return addUniqueByRebuild(db, "proposals", proposalsSchema,
+		"kind, subject, evidence, evidence_hash, sample_size, effect_size, status, created_at",
+		"kind, subject")
+}
+
+// addUniqueByRebuild adds a UNIQUE constraint to a table that predates it.
+// SQLite's ALTER TABLE cannot add a constraint, and CREATE TABLE IF NOT EXISTS
+// does nothing to a table that already exists, so a ledger created before the
+// constraint keeps a table without it - and every ON CONFLICT against that
+// table fails with "ON CONFLICT clause does not match any PRIMARY KEY or
+// UNIQUE constraint".
+//
+// Generalised after hitting this once on `policies`, where every unit test
+// passed because each built its table fresh and only a real upgraded ledger
+// exposed it. The second table to need it should not need the bug again.
+func addUniqueByRebuild(db *sql.DB, table, schema, columns, groupBy string) error {
 	var sqlText string
-	err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name='policies'`).Scan(&sqlText)
+	err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&sqlText)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil // no table yet; CREATE TABLE above will build it correctly
+		return nil // no table yet; the CREATE above builds it correctly
 	}
 	if err != nil {
 		return err
@@ -188,19 +218,19 @@ func migratePoliciesUnique(db *sql.DB) error {
 		return nil
 	}
 
-	// Rebuild, keeping the most recent row per agent type if the old table
-	// somehow accumulated duplicates.
+	// Keep the most recent row per group if the old table accumulated
+	// duplicates that the constraint would now reject.
+	old := table + "_old"
 	stmts := []string{
-		`ALTER TABLE policies RENAME TO policies_old`,
-		policiesSchema,
-		`INSERT INTO policies (criteria_version, agent_type, model, effort, source, sample_size, created_at)
-		 SELECT criteria_version, agent_type, model, effort, source, sample_size, created_at
-		 FROM policies_old WHERE id IN (SELECT MAX(id) FROM policies_old GROUP BY agent_type)`,
-		`DROP TABLE policies_old`,
+		`ALTER TABLE ` + table + ` RENAME TO ` + old,
+		schema,
+		`INSERT INTO ` + table + ` (` + columns + `) SELECT ` + columns +
+			` FROM ` + old + ` WHERE id IN (SELECT MAX(id) FROM ` + old + ` GROUP BY ` + groupBy + `)`,
+		`DROP TABLE ` + old,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
-			return fmt.Errorf("rebuilding policies table: %w", err)
+			return fmt.Errorf("rebuilding %s table: %w", table, err)
 		}
 	}
 	return nil

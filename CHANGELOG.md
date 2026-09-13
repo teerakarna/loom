@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `loom propose` (B5a): generates, stores and lists proposals the ledger's evidence actually
+  supports. Two kinds so far - retiring an artifact unseen for 90 days, and pinning a model for an
+  agent type with enough measured runs. Each says plainly whether Loom may apply it: anything
+  touching the user's files never can, anything touching only Loom's own state reverts in one
+  command. Dismissals hold until the evidence behind them changes rather than until an interval
+  elapses, and the pending queue is capped.
+
 - Runs are tagged with their lane: the project directory the session ran in, taken from the
   transcript path (B4). `loom report` gains a by-lane breakdown and a `--lane` filter. No manifest
   and no new file in any repo, because the lane is already in the path. Labelling by path is a

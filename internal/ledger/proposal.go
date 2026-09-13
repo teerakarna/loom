@@ -1,24 +1,126 @@
 package ledger
 
-// ProposalRow is one row of the proposals table as read back. The table is
-// schema-complete from B1 (see ledger.go) but nothing writes to it until B5
-// ("Advisor proposals for promotion and retirement" — docs/design.md,
-// Phasing). ListProposals exists in B2 so the MCP server's list_proposals
-// tool has something real to call — it will correctly return an empty list
-// until B5 lands, which is the honest answer, not a stub.
+import (
+	"database/sql"
+	"errors"
+	"time"
+)
+
+// Proposal statuses.
+const (
+	ProposalPending   = "pending"
+	ProposalDismissed = "dismissed"
+)
+
+// MaxPendingProposals bounds how many proposals can be waiting at once.
+// Constraint 10: an advisor that produces proposals faster than a human accepts
+// them recreates exactly the fatigue this project exists to reduce, so the
+// generator refuses to add more rather than growing without limit.
+const MaxPendingProposals = 20
+
+// ProposalRow is one proposal as stored. Subject is what it is about (an
+// artifact path, an agent type); EvidenceHash is what makes a dismissal stick
+// until the underlying facts actually change.
 type ProposalRow struct {
-	ID         int64
-	Kind       string
-	Evidence   string
-	SampleSize int
-	EffectSize *float64
-	Status     string
-	CreatedAt  string
+	ID           int64
+	Kind         string
+	Subject      string
+	Evidence     string // JSON
+	EvidenceHash string
+	SampleSize   int
+	EffectSize   *float64
+	Status       string
+	CreatedAt    string
 }
 
-// ListProposals returns every proposal, most recent first.
-func (d *DB) ListProposals() ([]ProposalRow, error) {
-	rows, err := d.sql.Query(`SELECT id, kind, evidence, sample_size, effect_size, status, created_at FROM proposals ORDER BY id DESC`)
+// UpsertProposal records one proposal, with the dedupe rule that makes this
+// bearable to live with:
+//
+//   - no row for this (kind, subject): insert as pending
+//   - row exists, same evidence: leave it completely alone, which is what
+//     preserves a dismissal
+//   - row exists, evidence changed: replace it and raise it again
+//
+// Re-raise on change, never on a timer. Reports whether a row was written.
+func (d *DB) UpsertProposal(p ProposalRow, at time.Time) (bool, error) {
+	var existingHash, existingStatus string
+	err := d.sql.QueryRow(`SELECT evidence_hash, status FROM proposals WHERE kind = ? AND subject = ?`,
+		p.Kind, p.Subject).Scan(&existingHash, &existingStatus)
+
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// New subject. The pending cap applies only here: re-raising an
+		// existing proposal must never be blocked by a full queue, or a
+		// changed fact would be silently dropped.
+		n, err := d.CountPendingProposals()
+		if err != nil {
+			return false, err
+		}
+		if n >= MaxPendingProposals {
+			return false, nil
+		}
+	case err != nil:
+		return false, err
+	case existingHash == p.EvidenceHash:
+		// Nothing has changed. A dismissal stays dismissed.
+		return false, nil
+	}
+
+	_, err = d.sql.Exec(`
+		INSERT INTO proposals (kind, subject, evidence, evidence_hash, sample_size, effect_size, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(kind, subject) DO UPDATE SET
+			evidence = excluded.evidence,
+			evidence_hash = excluded.evidence_hash,
+			sample_size = excluded.sample_size,
+			effect_size = excluded.effect_size,
+			status = excluded.status,
+			created_at = excluded.created_at`,
+		p.Kind, p.Subject, p.Evidence, p.EvidenceHash, p.SampleSize, p.EffectSize,
+		ProposalPending, formatTime(at))
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// CountPendingProposals reports how many proposals are currently waiting.
+func (d *DB) CountPendingProposals() (int, error) {
+	var n int
+	err := d.sql.QueryRow(`SELECT COUNT(*) FROM proposals WHERE status = ?`, ProposalPending).Scan(&n)
+	return n, err
+}
+
+// DismissProposal marks one dismissed. It stays dismissed until its evidence
+// changes (see UpsertProposal), rather than until some interval elapses.
+func (d *DB) DismissProposal(id int64) error {
+	res, err := d.sql.Exec(`UPDATE proposals SET status = ? WHERE id = ?`, ProposalDismissed, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return errors.New("no proposal with that id")
+	}
+	return nil
+}
+
+// ListProposals returns proposals, newest first. pendingOnly filters to those
+// still waiting.
+func (d *DB) ListProposals(pendingOnly bool) ([]ProposalRow, error) {
+	q := `SELECT id, kind, subject, evidence, evidence_hash, sample_size, effect_size, status, created_at
+	      FROM proposals`
+	var args []any
+	if pendingOnly {
+		q += ` WHERE status = ?`
+		args = append(args, ProposalPending)
+	}
+	q += ` ORDER BY id DESC`
+
+	rows, err := d.sql.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -27,7 +129,8 @@ func (d *DB) ListProposals() ([]ProposalRow, error) {
 	var out []ProposalRow
 	for rows.Next() {
 		var r ProposalRow
-		if err := rows.Scan(&r.ID, &r.Kind, &r.Evidence, &r.SampleSize, &r.EffectSize, &r.Status, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Kind, &r.Subject, &r.Evidence, &r.EvidenceHash,
+			&r.SampleSize, &r.EffectSize, &r.Status, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
