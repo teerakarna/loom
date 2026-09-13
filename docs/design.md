@@ -562,9 +562,33 @@ competing with the thing it exists to observe. Three surfaces exist, and each ea
 2. **The MCP tool.** `list_proposals` already exists and returns empty. This is the most natural
    notification available: the user is already in a conversation, so a proposal can be raised when
    it is relevant rather than when a timer fires.
-3. **Session-start hook, optional.** One line, a count and a command to run. Never content, never
-   growing. Same discipline as the pre-compact pointer: a mechanism that answers "too much to keep
-   track of" by printing more at every session start has made the problem worse.
+3. ~~**Session-start hook, optional.**~~ **Cut 2026-09-13**, on the evidence below. It was the third
+   surface and it does not earn its place.
+
+   - **It blows its own latency budget by 48x.** The table above budgets session-start hooks at
+     under 20ms. Measured: 10ms warm, **960ms cold**. Session start is precisely when the binary is
+     cold, so the realistic figure is the bad one.
+   - **It would have nothing to say for months.** On a real corpus: the nearest retire proposal is
+     90 days away *and* requires a skill to actually be deleted; the nearest pin needs 6 more runs
+     of one agent type and 16 of the other. So the honest output at every session start, for weeks,
+     is "0 proposals" - a line that costs context and says nothing.
+   - **It would write at session start.** Generating proposals mutates the ledger. A hook that
+     writes before the user has typed anything is a side effect in the wrong place, and a failed
+     write there is worse than a failed read.
+   - **A read-only version is circular.** Making it cheap means counting already-stored proposals
+     without generating. But proposals only exist if something already generated them, so on any
+     machine where the CLI has not been run it reports 0 forever. It would tell you about proposals
+     that exist only if you already looked.
+   - **The slot is contested.** A skill-maintenance hook already occupies SessionStart, and the
+     lane briefing in the table above wants it too. Three claimants on one line of startup context.
+
+   **`list_proposals` already does this better.** It surfaces a proposal when it is relevant to what
+   the user is doing, rather than unconditionally at startup, which is better targeting at zero
+   fixed cost. Push was the wrong instinct; pull-when-relevant is the right one.
+
+   This is the failure constraint 10 names, caught before building rather than after: a mechanism
+   that answers "too much to keep track of" by printing more at every session start has made the
+   problem worse.
 
 #### Automation controls live in the ledger, not a config file
 
@@ -585,9 +609,11 @@ default is zero configuration should stay that way.
 
 #### Build order
 
-Pull first, MCP tool second, session-start nudge third and optional, auto-apply last and only for
-Loom-internal state. Each step is useful stopping there, and nothing later is required to make
-anything earlier worth having.
+Pull first, MCP tool second, ~~session-start nudge third~~ (cut, see above), auto-apply last and
+only for Loom-internal state. Each step is useful stopping there, and nothing later is required to
+make anything earlier worth having.
+
+Status: pull shipped (B5a), MCP surface shipped (B5b), nudge cut, auto-apply not started.
 
 ---
 
