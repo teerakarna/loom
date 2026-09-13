@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "loom",
+  "displayName": "Loom",
+  "description": "Local artifact lifecycle and cost/routing engine for Claude Code. Registers Loom's MCP server so a session can query its own cost history and ask what to use before it starts.",
+  "version": "0.2.0",
+  "author": {
+    "name": "Bertie",
+    "url": "https://github.com/teerakarna"
+  },
+  "repository": "https://github.com/teerakarna/loom",
+  "homepage": "https://github.com/teerakarna/loom/blob/main/docs/design.md",
+  "license": "Apache-2.0",
+  "keywords": ["cost", "observability", "mcp", "local-first"],
+  "mcpServers": "./.mcp.json"
+}

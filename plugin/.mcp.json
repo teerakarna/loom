@@ -1,0 +1,6 @@
+{
+  "loom": {
+    "command": "${CLAUDE_PLUGIN_ROOT}/bin/loom-mcp",
+    "args": []
+  }
+}

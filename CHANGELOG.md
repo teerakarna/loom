@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Claude Code plugin (B6c). `plugin/` carries a manifest and an MCP server registration, and
+  `.claude-plugin/marketplace.json` makes the repository its own marketplace, so installing is
+  `/plugin marketplace add teerakarna/loom` then `/plugin install loom@loom`. The plugin does not
+  contain the binary and does not fetch one - it resolves a `loom` you installed, via a wrapper that
+  checks `$LOOM_BIN`, PATH, and where the documented install methods actually put it, because
+  `~/go/bin` is on an interactive shell's PATH and not on the one a desktop app inherits. Ships no
+  hooks and no skill: both were specified, both were cut, and `plugin/README.md` says so rather than
+  leaving the old description standing.
+
+- `claude plugin validate --strict` as a CI job, plus checks in `internal/mcp/plugin_test.go` for
+  the three things it does not catch - a command path that does not exist, a wrapper that has lost
+  its executable bit, and a manifest version disagreeing with the MCP server being shipped. All
+  three were planted and confirmed to pass validation while broken.
+
 - Fixture-hygiene check (B6b), one of the gates the publishability rules require before this repo
   could go public. Catches the markers of real data in `testdata/` - absolute home paths, email
   addresses, a size ceiling, and the very long unbroken strings a real `thinking` signature
