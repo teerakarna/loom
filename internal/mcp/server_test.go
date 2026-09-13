@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +11,8 @@ import (
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/teerakarna/loom/internal/ledger"
+	"github.com/teerakarna/loom/internal/policy"
+	"github.com/teerakarna/loom/internal/propose"
 )
 
 // connectTestClient wires an in-process client to a fresh Loom MCP server
@@ -134,7 +137,12 @@ func TestListProposalsEmpty(t *testing.T) {
 	session, _ := connectTestClient(t)
 	out := callTool[ProposalsOutput](t, session, "list_proposals", map[string]any{})
 	if len(out.Proposals) != 0 {
-		t.Errorf("got %d proposals, want 0 — nothing writes to this table until B5", len(out.Proposals))
+		t.Errorf("got %d proposals on an empty ledger, want 0", len(out.Proposals))
+	}
+	// Must serialise as [] rather than null: a client iterating the result
+	// should not have to special-case "no proposals".
+	if out.Proposals == nil {
+		t.Error("empty result serialised as null instead of an empty array")
 	}
 }
 
@@ -152,5 +160,101 @@ func TestRecordOutcomeWritesEvent(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Kind != "outcome" {
 		t.Errorf("got events %+v, want one outcome event", events)
+	}
+}
+
+func TestListProposalsRefreshesFromLedgerState(t *testing.T) {
+	session, db := connectTestClient(t)
+
+	// Nothing seeded: the tool must say so rather than invent something.
+	out := callTool[ProposalsOutput](t, session, "list_proposals", map[string]any{})
+	if len(out.Proposals) != 0 {
+		t.Fatalf("got %d proposals on an empty ledger, want 0", len(out.Proposals))
+	}
+
+	// An artifact goes stale. The tool regenerates, so this appears without
+	// anyone having run the CLI first.
+	stale := time.Now().Add(-propose.StaleAfter - 48*time.Hour)
+	if err := db.UpsertArtifact(ledger.ArtifactRecord{
+		Kind: "skill", Path: "/s/abandoned.md", Name: "abandoned",
+	}, stale); err != nil {
+		t.Fatal(err)
+	}
+
+	out = callTool[ProposalsOutput](t, session, "list_proposals", map[string]any{})
+	if len(out.Proposals) != 1 {
+		t.Fatalf("got %d proposals, want 1 after an artifact went stale", len(out.Proposals))
+	}
+	p := out.Proposals[0]
+
+	// The field that matters most: this touches the user's files, so nothing
+	// may apply it automatically.
+	if !p.TouchesUserFiles {
+		t.Error("a retire proposal must report touches_user_files = true")
+	}
+	if p.Summary == "" || p.Rationale == "" {
+		t.Errorf("proposal has no human-readable summary/rationale: %+v", p)
+	}
+	// Evidence is structured, not a JSON string to re-parse.
+	if p.Evidence["path"] != "/s/abandoned.md" {
+		t.Errorf("evidence not structured as expected: %+v", p.Evidence)
+	}
+}
+
+func TestDismissProposalViaMCPAndItStaysDismissed(t *testing.T) {
+	session, db := connectTestClient(t)
+	stale := time.Now().Add(-propose.StaleAfter - 48*time.Hour)
+	if err := db.UpsertArtifact(ledger.ArtifactRecord{
+		Kind: "skill", Path: "/s/abandoned.md", Name: "abandoned",
+	}, stale); err != nil {
+		t.Fatal(err)
+	}
+
+	out := callTool[ProposalsOutput](t, session, "list_proposals", map[string]any{})
+	if len(out.Proposals) != 1 {
+		t.Fatalf("setup: got %d proposals, want 1", len(out.Proposals))
+	}
+	id := out.Proposals[0].ID
+
+	d := callTool[DismissOutput](t, session, "dismiss_proposal", map[string]any{"id": id})
+	if !d.Dismissed {
+		t.Fatal("dismiss_proposal reported failure")
+	}
+
+	// Listing again regenerates, and must not resurrect the dismissal.
+	out = callTool[ProposalsOutput](t, session, "list_proposals", map[string]any{})
+	if len(out.Proposals) != 0 {
+		t.Errorf("dismissed proposal came back on the next list: %+v", out.Proposals)
+	}
+}
+
+// A pin proposal is the other side of the split: it touches only loom's own
+// state, so it is allowed to say so.
+func TestPinProposalIsNotFlaggedAsTouchingUserFiles(t *testing.T) {
+	session, db := connectTestClient(t)
+	for i := range policy.MinSampleSize {
+		if err := db.InsertRun(ledger.RunRecord{
+			Path: fmt.Sprintf("/a/e-%d.jsonl", i), Kind: "agent", AgentType: "Explore",
+			Model: "claude-haiku-4-5", WeightedCost: 100, ToolUseCount: 2,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out := callTool[ProposalsOutput](t, session, "list_proposals", map[string]any{})
+	found := false
+	for _, p := range out.Proposals {
+		if p.Kind == propose.KindPinModel {
+			found = true
+			if p.TouchesUserFiles {
+				t.Error("a model pin touches only loom's own state")
+			}
+			if p.SampleSize != policy.MinSampleSize {
+				t.Errorf("SampleSize = %d, want %d", p.SampleSize, policy.MinSampleSize)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected a pin proposal once the sample threshold is met")
 	}
 }

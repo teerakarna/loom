@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MCP proposal surface (B5b): `list_proposals` now refreshes from current ledger state before
+  listing, so it never returns something stale because nobody ran the CLI, and carries
+  `touches_user_files` - the field that says whether Loom may ever apply a proposal. Evidence is
+  structured rather than an opaque JSON string, and each proposal carries a human-readable summary
+  and rationale. New `dismiss_proposal` tool completes the loop in the place the user already is.
+
 - `loom propose` (B5a): generates, stores and lists proposals the ledger's evidence actually
   supports. Two kinds so far - retiring an artifact unseen for 90 days, and pinning a model for an
   agent type with enough measured runs. Each says plainly whether Loom may apply it: anything
