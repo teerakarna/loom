@@ -2,11 +2,13 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/teerakarna/loom/internal/ledger"
+	"github.com/teerakarna/loom/internal/propose"
 	"github.com/teerakarna/loom/internal/selector"
 )
 
@@ -38,9 +40,18 @@ func NewServer(db *ledger.DB) *gomcp.Server {
 	}, getRecommendationHandler(db))
 
 	gomcp.AddTool(s, &gomcp.Tool{
-		Name:        "list_proposals",
-		Description: "List pending artifact promotion/retirement proposals with their evidence. Each carries what it is about, the evidence behind it, and its sample size. Proposals that touch the user's files are advisory only and must never be applied automatically.",
+		Name: "list_proposals",
+		Description: "List pending proposals, refreshed from the current ledger state. Each carries a summary, " +
+			"the evidence behind it, and its sample size. CRITICAL: when touches_user_files is true, loom will not " +
+			"apply the proposal and neither should you - surface it and let the human act. When false, the change " +
+			"is confined to loom's own ledger and reverts in one command.",
 	}, listProposalsHandler(db))
+
+	gomcp.AddTool(s, &gomcp.Tool{
+		Name: "dismiss_proposal",
+		Description: "Dismiss one proposal by id. It stays dismissed until the evidence behind it changes, " +
+			"not until some interval elapses - so dismissing is a real decision, not a snooze.",
+	}, dismissProposalHandler(db))
 
 	gomcp.AddTool(s, &gomcp.Tool{
 		Name:        "record_outcome",
@@ -165,32 +176,95 @@ type ProposalsOutput struct {
 	Proposals []Proposal `json:"proposals"`
 }
 
-// Proposal is one pending recommendation, as read from the ledger.
+// Proposal is one pending recommendation.
+//
+// TouchesUserFiles is the field that matters most. When it is true, Loom will
+// not apply the proposal under any circumstances, and neither should anything
+// reading this: surface it, let the human act. When false, the change is
+// confined to Loom's own ledger and reverts in one command.
 type Proposal struct {
-	ID         int64    `json:"id"`
-	Kind       string   `json:"kind"`
-	Subject    string   `json:"subject"`
-	Evidence   string   `json:"evidence"`
-	SampleSize int      `json:"sample_size"`
-	EffectSize *float64 `json:"effect_size,omitempty"`
-	Status     string   `json:"status"`
-	CreatedAt  string   `json:"created_at"`
+	ID      int64  `json:"id"`
+	Kind    string `json:"kind"`
+	Subject string `json:"subject"`
+	// Summary is one line for a human. Rationale says what would happen and
+	// who does it.
+	Summary          string         `json:"summary"`
+	Rationale        string         `json:"rationale"`
+	TouchesUserFiles bool           `json:"touches_user_files" jsonschema:"true means loom must never apply this - surface it and let the human act"`
+	Evidence         map[string]any `json:"evidence"`
+	SampleSize       int            `json:"sample_size"`
+	EffectSize       *float64       `json:"effect_size,omitempty"`
+	Status           string         `json:"status"`
+	CreatedAt        string         `json:"created_at"`
 }
 
 func listProposalsHandler(db *ledger.DB) gomcp.ToolHandlerFor[emptyInput, ProposalsOutput] {
 	return func(_ context.Context, _ *gomcp.CallToolRequest, _ emptyInput) (*gomcp.CallToolResult, ProposalsOutput, error) {
+		// Regenerate from current ledger state before listing, so this never
+		// returns something stale just because nobody ran the CLI. Safe to do
+		// on every call: the dedupe rule means unchanged evidence writes
+		// nothing, so repeated calls do not churn the table or resurrect a
+		// dismissal.
+		now := time.Now()
+		generated, err := propose.Generate(db, now)
+		if err != nil {
+			return nil, ProposalsOutput{}, err
+		}
+		if _, err := propose.Store(db, generated, now); err != nil {
+			return nil, ProposalsOutput{}, err
+		}
+
+		// Summary and rationale are regenerated rather than stored, so wording
+		// can change without rewriting rows. Keyed by (kind, subject), which
+		// is the same identity the ledger uses.
+		text := map[string]propose.Proposal{}
+		for _, g := range generated {
+			text[g.Kind+"|"+g.Subject] = g
+		}
+
 		rows, err := db.ListProposals(true)
 		if err != nil {
 			return nil, ProposalsOutput{}, err
 		}
-		out := ProposalsOutput{}
+		// Initialised, not nil: an empty list must serialise as [] rather than
+		// null, or a client iterating the result fails on "no proposals".
+		out := ProposalsOutput{Proposals: []Proposal{}}
 		for _, r := range rows {
-			out.Proposals = append(out.Proposals, Proposal{
-				ID: r.ID, Kind: r.Kind, Subject: r.Subject, Evidence: r.Evidence, SampleSize: r.SampleSize,
+			var ev map[string]any
+			if err := json.Unmarshal([]byte(r.Evidence), &ev); err != nil {
+				ev = map[string]any{"raw": r.Evidence}
+			}
+			p := Proposal{
+				ID: r.ID, Kind: r.Kind, Subject: r.Subject,
+				TouchesUserFiles: propose.TouchesUserFiles(r.Kind),
+				Evidence:         ev, SampleSize: r.SampleSize,
 				EffectSize: r.EffectSize, Status: r.Status, CreatedAt: r.CreatedAt,
-			})
+			}
+			if g, ok := text[r.Kind+"|"+r.Subject]; ok {
+				p.Summary, p.Rationale = g.Summary, g.Rationale
+			}
+			out.Proposals = append(out.Proposals, p)
 		}
 		return nil, out, nil
+	}
+}
+
+// DismissInput is dismiss_proposal's argument.
+type DismissInput struct {
+	ID int64 `json:"id" jsonschema:"the proposal id, from list_proposals"`
+}
+
+// DismissOutput confirms the dismissal.
+type DismissOutput struct {
+	Dismissed bool `json:"dismissed"`
+}
+
+func dismissProposalHandler(db *ledger.DB) gomcp.ToolHandlerFor[DismissInput, DismissOutput] {
+	return func(_ context.Context, _ *gomcp.CallToolRequest, in DismissInput) (*gomcp.CallToolResult, DismissOutput, error) {
+		if err := db.DismissProposal(in.ID); err != nil {
+			return nil, DismissOutput{}, err
+		}
+		return nil, DismissOutput{Dismissed: true}, nil
 	}
 }
 
