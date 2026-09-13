@@ -757,6 +757,18 @@ Not a build. The prerequisites are already written down in the publishability ru
 - a manual pass for real names in docs, README and examples - currently clean, checked 2026-09-13,
   and worth re-checking immediately before rather than trusting this line
 - signed releases actually working - **B6a**
+- **at least one evidence path has fired on real data.** Not a build, a precondition. Every
+  evidence-driven behaviour in this tool - pin proposals, retirement, regression detection - has so
+  far only run against synthetic fixtures and seeded demos. On a real corpus they all correctly
+  report insufficient evidence, which is right, and which means the interesting half of the tool is
+  unproven outside its own tests. Publishing something whose headline behaviour has never been
+  demonstrated on real data would be the thing this project spends four blog posts criticising.
+
+  This gate costs nothing to add and is satisfied by patience: keep it installed, let the corpus
+  grow past a threshold, and watch one proposal appear for a real reason. The thresholds themselves
+  (`MinSampleSize` 20, `StaleAfter` 90 days, `MinPostApplyRuns` 10, `RegressionCostRatio` 1.25,
+  `RegressionReworkDelta` 0.2) are every one of them a reasoned guess, and cannot be calibrated
+  without exactly that corpus.
 
 There is also the owner's own standing rule that a repo goes public only for a concrete demonstrated
 benefit, never to unblock a feature. The benefit here is concrete and was not invented for the
