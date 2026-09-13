@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `loom propose apply <id>` (B5d): takes a proposal that touches only Loom's own state, records the
+  policy with its evidence and sample size, and tells you the one command that reverts it. Refuses
+  anything touching your files, unconditionally. Auto-apply was rejected: a pin can fire at most
+  once per agent type ever, so automation would have bought one saved command at the cost of
+  preference storage, window caps and unattended writes. CLI-only, because an assistant can call an
+  MCP tool without being asked.
+
 - MCP proposal surface (B5b): `list_proposals` now refreshes from current ledger state before
   listing, so it never returns something stale because nobody ran the CLI, and carries
   `touches_user_files` - the field that says whether Loom may ever apply a proposal. Evidence is

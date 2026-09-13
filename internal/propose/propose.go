@@ -180,6 +180,64 @@ func pinModels(db *ledger.DB) ([]Proposal, error) {
 	return out, nil
 }
 
+// Apply carries out one proposal. It refuses anything that touches the user's
+// files, unconditionally: Loom does not write there, and "the human applies"
+// is not a setting.
+//
+// This is deliberately a command a person runs, not automation. Auto-apply was
+// considered and rejected on the arithmetic: a pin is suppressed once a policy
+// exists, so it can fire at most once per agent type, ever - two times on the
+// corpus it was measured against - and each firing saves exactly one command.
+// That does not justify preference storage, window caps and unattended writes.
+// What it does justify is not having to retype a model name off a proposal,
+// which is what this gives.
+func Apply(db *ledger.DB, id int64, now time.Time) (string, error) {
+	p, err := db.GetProposal(id)
+	if err != nil {
+		return "", err
+	}
+	if p == nil {
+		return "", fmt.Errorf("no proposal #%d", id)
+	}
+	if p.Status == ledger.ProposalApplied {
+		return "", fmt.Errorf("#%d has already been applied", id)
+	}
+	if TouchesUserFiles(p.Kind) {
+		return "", fmt.Errorf("#%d touches your files, so loom will not apply it. "+
+			"It is a suggestion to review and act on yourself", id)
+	}
+
+	var ev map[string]any
+	if err := json.Unmarshal([]byte(p.Evidence), &ev); err != nil {
+		return "", fmt.Errorf("reading evidence for #%d: %w", id, err)
+	}
+
+	switch p.Kind {
+	case KindPinModel:
+		model, _ := ev["observed_model"].(string)
+		if model == "" {
+			return "", fmt.Errorf("#%d has no model in its evidence", id)
+		}
+		if err := db.UpsertPolicy(ledger.PolicyRow{
+			CriteriaVersion: policy.CriteriaVersion,
+			AgentType:       p.Subject,
+			Model:           model,
+			Effort:          "",
+			Source:          "evidence",
+			SampleSize:      p.SampleSize,
+		}, now); err != nil {
+			return "", err
+		}
+		if err := db.MarkProposalApplied(id); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Pinned %s to %s, on %d measured runs.\n"+
+			"Revert with: loom policy unset %s", p.Subject, model, p.SampleSize, p.Subject), nil
+	default:
+		return "", fmt.Errorf("loom does not know how to apply a %q proposal", p.Kind)
+	}
+}
+
 // Store writes generated proposals to the ledger, applying the dedupe rule.
 // Reports how many were newly raised or re-raised.
 func Store(db *ledger.DB, ps []Proposal, now time.Time) (int, error) {

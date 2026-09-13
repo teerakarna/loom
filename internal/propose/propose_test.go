@@ -226,3 +226,103 @@ func TestHashIsStableAndEvidenceSensitive(t *testing.T) {
 		t.Error("changed evidence must change the hash, or a dismissal would never end")
 	}
 }
+
+// The rule that is not a setting: Loom refuses to apply anything touching the
+// user's files, and refusing is not an error the caller can configure away.
+func TestApplyRefusesAnythingTouchingUserFiles(t *testing.T) {
+	db := openDB(t)
+	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "skill", Path: "/s/old.md", Name: "old"},
+		now.Add(-StaleAfter-48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	ps, _ := Generate(db, now)
+	if _, err := Store(db, ps, now); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := db.ListProposals(true)
+
+	_, err := Apply(db, pending[0].ID, now)
+	if err == nil {
+		t.Fatal("expected a refusal for a proposal that touches user files")
+	}
+	// And the artifact is untouched: the refusal is not a partial apply.
+	arts, _ := db.ListArtifacts()
+	if len(arts) != 1 {
+		t.Errorf("artifact list changed despite the refusal: %+v", arts)
+	}
+}
+
+func TestApplyPinsTheModelAndIsRevertible(t *testing.T) {
+	db := openDB(t)
+	seedAgentRuns(t, db, "Explore", policy.MinSampleSize, 0)
+	ps, _ := Generate(db, now)
+	if _, err := Store(db, ps, now); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := db.ListProposals(true)
+	if len(pending) != 1 {
+		t.Fatalf("setup: got %d pending, want 1", len(pending))
+	}
+
+	msg, err := Apply(db, pending[0].ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == "" {
+		t.Error("apply should say what it did")
+	}
+
+	// The policy exists, and records that evidence rather than a human set it.
+	pol, err := db.GetPolicy("Explore")
+	if err != nil || pol == nil {
+		t.Fatalf("GetPolicy = (%v, %v), want a row", pol, err)
+	}
+	if pol.Source != "evidence" {
+		t.Errorf("Source = %q, want evidence", pol.Source)
+	}
+	if pol.SampleSize != policy.MinSampleSize {
+		t.Errorf("SampleSize = %d, want %d", pol.SampleSize, policy.MinSampleSize)
+	}
+
+	// Applied, not merely hidden: the record says what happened.
+	got, _ := db.GetProposal(pending[0].ID)
+	if got.Status != ledger.ProposalApplied {
+		t.Errorf("status = %q, want %q", got.Status, ledger.ProposalApplied)
+	}
+
+	// And it is not proposed again, because a policy now exists.
+	ps, _ = Generate(db, now)
+	for _, p := range ps {
+		if p.Kind == KindPinModel && p.Subject == "Explore" {
+			t.Error("re-proposed a pin that has already been applied")
+		}
+	}
+
+	// Revert works, which is what makes applying defensible at all.
+	if err := db.DeletePolicy("Explore"); err != nil {
+		t.Fatal(err)
+	}
+	if pol, _ := db.GetPolicy("Explore"); pol != nil {
+		t.Error("revert left the policy in place")
+	}
+}
+
+func TestApplyRejectsUnknownAndRepeatIDs(t *testing.T) {
+	db := openDB(t)
+	if _, err := Apply(db, 999, now); err == nil {
+		t.Error("expected an error for an unknown proposal id")
+	}
+
+	seedAgentRuns(t, db, "Explore", policy.MinSampleSize, 0)
+	ps, _ := Generate(db, now)
+	if _, err := Store(db, ps, now); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := db.ListProposals(true)
+	if _, err := Apply(db, pending[0].ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(db, pending[0].ID, now); err == nil {
+		t.Error("applying twice should be refused, not silently repeated")
+	}
+}
