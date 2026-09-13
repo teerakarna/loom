@@ -1,0 +1,87 @@
+#!/bin/sh
+# Launch Loom's MCP server on stdio.
+#
+# The plugin cannot ship the binary. Claude Code plugins are cloned content,
+# and a repository is the wrong place to keep a 16MB platform-specific
+# executable. So this resolves a `loom` the user has already installed.
+#
+# The reason this is a script and not `"command": "loom"` in .mcp.json is
+# PATH. Claude Code launches an MCP server with the environment it was itself
+# launched with, and `go install` puts loom in ~/go/bin, which is on an
+# interactive shell's PATH but not on a desktop app's. Registering the bare
+# name works from a terminal and fails from the launcher, which is the worst
+# of the available failure modes because it looks like a Loom bug.
+#
+# stdout belongs to the MCP protocol. Every diagnostic here goes to stderr,
+# where Claude Code collects it into the server's log.
+
+set -eu
+
+# find_loom sets $loom_bin. It assigns rather than echoing because the caller
+# would otherwise have to run it in a command substitution, and an `exit` from
+# inside one kills only the subshell - which is how the override-is-wrong case
+# below managed to print its message and then carry on into the generic one.
+loom_bin=""
+
+find_loom() {
+	# An explicit override wins, and is the escape hatch when the guesses below
+	# are wrong. It is not validated beyond existence: if you set it, you meant it.
+	if [ -n "${LOOM_BIN:-}" ]; then
+		if [ -x "$LOOM_BIN" ]; then
+			loom_bin="$LOOM_BIN"
+			return 0
+		fi
+		# Deliberately not falling through to the search. An override that is
+		# set and wrong is a mistake to report, not a reason to quietly run a
+		# different binary than the one asked for.
+		echo "loom-mcp: LOOM_BIN is set to '$LOOM_BIN', which is not an executable file." >&2
+		echo "loom-mcp: unset it to search PATH and the usual install locations instead." >&2
+		exit 1
+	fi
+
+	if command -v loom >/dev/null 2>&1; then
+		loom_bin="$(command -v loom)"
+		return 0
+	fi
+
+	# Where the documented install methods actually put it. Ordered by how
+	# likely each is to be the one the user meant.
+	for candidate in \
+		"${GOBIN:-}/loom" \
+		"${GOPATH:-$HOME/go}/bin/loom" \
+		"$HOME/go/bin/loom" \
+		/opt/homebrew/bin/loom \
+		/usr/local/bin/loom
+	do
+		case "$candidate" in
+			/loom) continue ;;  # an unset GOBIN would expand to exactly this
+		esac
+		if [ -x "$candidate" ]; then
+			loom_bin="$candidate"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+if ! find_loom; then
+	cat >&2 <<'EOF'
+loom-mcp: could not find the `loom` binary.
+
+The plugin registers Loom's MCP server but does not contain Loom itself.
+Install it, then restart Claude Code:
+
+    go install github.com/teerakarna/loom/cmd/loom@latest
+
+If it is installed somewhere unusual, point at it directly:
+
+    export LOOM_BIN=/path/to/loom
+
+Searched: $LOOM_BIN, $PATH, $GOBIN, $GOPATH/bin, ~/go/bin,
+/opt/homebrew/bin, /usr/local/bin.
+EOF
+	exit 1
+fi
+
+exec "$loom_bin" serve

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "loom",
+  "description": "Loom, as a Claude Code plugin. One plugin, from the repository that builds it.",
+  "owner": {
+    "name": "Bertie",
+    "url": "https://github.com/teerakarna"
+  },
+  "plugins": [
+    {
+      "name": "loom",
+      "source": "./plugin",
+      "description": "Registers Loom's MCP server: query your own cost history, and ask what to use before a task starts.",
+      "category": "productivity",
+      "keywords": ["cost", "observability", "mcp", "local-first"]
+    }
+  ]
+}

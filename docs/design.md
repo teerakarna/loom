@@ -497,9 +497,15 @@ them. A diff-and-decide pattern applied to artifacts.
 - `go install`, a Homebrew tap, and release binaries for darwin/arm64, darwin/amd64, linux/amd64,
   linux/arm64
 - **A Claude Code plugin** for the marketplace. Plugins are cloned content and cannot carry a
-  compiled binary, so the plugin ships the MCP server registration, the optional hooks, the Advisor
-  skill and a manifest; its install step fetches the matching platform binary and verifies it,
-  refusing an unverified one rather than falling back
+  compiled binary, so the plugin ships the MCP server registration and a manifest, and resolves a
+  binary the user installed themselves.
+
+  This paragraph used to end "its install step fetches the matching platform binary and verifies it,
+  refusing an unverified one rather than falling back", and listed hooks and an Advisor skill among
+  the contents. All three were wrong by the time B6c was built: the hooks and the skill had been
+  cut, and verifying a download needs signatures to verify against, which B6a has not shipped. Left
+  here as a correction rather than edited away, because a doc that quietly rewrites its own promises
+  is exactly what this project keeps telling other people not to do.
 - Release integrity: goreleaser, SHA256 checksums, cosign keyless signing, SBOM per release. A tool
   that downloads a binary is a supply chain and should behave like one
 
@@ -736,7 +742,7 @@ wherever `go test` does with no new machinery. Each check was verified to fail a
 violation rather than assumed to work: an undeclared fixture, a `/Users/<name>` path, a
 600-character unbroken string, and a 60KB file were each caught.
 
-#### B6c. The Claude Code plugin - thinner than this doc says
+#### B6c. The Claude Code plugin - BUILT 2026-09-13, thinner than this doc said
 
 The plugin was specified as shipping "the MCP server registration, the optional hooks, the Advisor
 skill and a manifest". Two of those four no longer exist:
@@ -752,6 +758,33 @@ So the plugin would ship an MCP server registration and a manifest. That is not 
 install beats "edit your settings.json by hand", and marketplace presence is the distribution
 channel. But it should be built as what it is, and the plugin README updated, rather than shipping
 against a description that no longer matches.
+
+**Built to that narrower description.** `plugin/.claude-plugin/plugin.json`, `plugin/.mcp.json`, and
+a `.claude-plugin/marketplace.json` at the repo root so the repository is its own marketplace. The
+README carries a table of what ships and what does not, including the two pieces that were specified
+and then cut.
+
+Three things came out of building it that the scope above did not anticipate:
+
+- **The MCP command is a wrapper script, not `"command": "loom"`.** Claude Code launches an MCP
+  server with the environment it was itself launched with. `go install` puts the binary in
+  `~/go/bin`, which is on an interactive shell's PATH and is not on the PATH a desktop app inherits
+  from the launcher - verified, not assumed. Registering the bare name works from a terminal and
+  fails from the app, which is the worst available failure mode because it reads as a Loom bug.
+  `plugin/bin/loom-mcp` checks `$LOOM_BIN`, then PATH, then where the documented install methods
+  actually put it, and says so in words when it finds nothing.
+
+- **The plugin does not fetch or verify a binary**, which is what "Distribution" below said it
+  would. That needs signed releases to verify against and there are none (B6a). A fetch step with
+  no signature to check would be the shape of supply-chain safety without the substance. It
+  resolves a binary the user installed and is explicit that this is what it does.
+
+- **`claude plugin validate --strict` exists**, is first-party, runs unauthenticated, and is now a
+  CI job. It checks schema shape only: a manifest pointing at a command that does not exist, a
+  wrapper that has lost its executable bit, and a version that disagrees with the server being
+  shipped all passed validation while broken. Each was planted and confirmed to pass, which is why
+  `internal/mcp/plugin_test.go` covers those three and the validator covers the schema. The two are
+  complementary rather than redundant.
 
 #### B6d. Going public - a decision, with prerequisites
 
@@ -776,15 +809,30 @@ Not a build. The prerequisites are already written down in the publishability ru
   without exactly that corpus.
 
 There is also the owner's own standing rule that a repo goes public only for a concrete demonstrated
-benefit, never to unblock a feature. The benefit here is concrete and was not invented for the
-occasion: **the plugin marketplace requires a public repository.** That is the reason, and if the
-plugin is not being pursued then going public has no forcing argument and should wait.
+benefit, never to unblock a feature.
+
+This section used to claim the benefit was that **the plugin marketplace requires a public
+repository**, and called that the forcing argument. Checked against the documentation while building
+B6c, and it is false: a marketplace can be private, and installs from it work for anyone with git
+credentials to the repo. The owner installing Loom's own plugin on their own machines needs nothing
+public at all. Public is only required for *strangers* to install without access being granted.
+
+So the forcing argument is weaker than it was written to be, and the honest version is narrower:
+going public buys distribution to people the owner does not know. That may well be worth it, but it
+is a choice about who this tool is for, not a prerequisite dropping out of a tooling constraint. If
+the answer is "for me, on my machines", a private marketplace already does the job and B6d has no
+deadline.
 
 #### Order
 
-~~B6b first~~ **done**. Then B6a, then B6c, then B6d as a separate decision once those are green.
-B6b was the piece worth having whether or not the repo ever goes public, which is why it went
-first.
+~~B6b first~~ **done**. ~~Then B6a, then B6c~~ - B6c went before B6a, because the discovery above
+reverses their coupling: a private marketplace works today, so the plugin is usable now, whereas
+signed releases only matter once there are strangers downloading binaries. B6a is therefore part of
+going public rather than a prerequisite for the plugin.
+
+Remaining: **B6a** if and when B6d is decided yes, and **B6d** itself, still gated on at least one
+evidence path firing on real data. Both of the pieces worth having regardless of that decision -
+B6b and B6c - are done.
 
 ## Verification
 

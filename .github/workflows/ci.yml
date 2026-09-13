@@ -52,6 +52,30 @@ jobs:
         with:
           go-version-file: go.mod
 
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Schema-checks the plugin and marketplace manifests with the first-party
+      # validator, which is the only thing that knows the current plugin format.
+      #
+      # Deliberately unpinned, unlike every action above. Pinning would freeze
+      # the schema this is checked against, and catching "the format moved and
+      # ours no longer conforms" is the entire reason the job exists. The job
+      # gets no secrets and read-only contents, which is what makes an unpinned
+      # global install an acceptable trade here rather than a general one.
+      #
+      # It checks shape only. It does not check that the command a manifest
+      # points at exists, is executable, or matches the server being shipped -
+      # all three were verified to pass validation while broken. Those are
+      # covered in internal/mcp/plugin_test.go.
+      - name: Validate plugin and marketplace manifests
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude plugin validate ./plugin --strict
+          claude plugin validate . --strict
+
   secrets:
     runs-on: ubuntu-latest
     permissions:
