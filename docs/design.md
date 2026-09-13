@@ -713,7 +713,7 @@ A tool that asks people to download a binary is a supply chain and should behave
 coupling though: nobody downloads a binary until there is a public release, so this is worth
 building *as part of* going public rather than before deciding to.
 
-#### B6b. Fixture-provenance check - needed, but it cannot do what its name claims
+#### B6b. Fixture-hygiene check - BUILT 2026-09-13
 
 The publishability rules require this in CI before the repo goes public. It is worth building and
 worth being honest about: **provenance cannot be verified from content.** Nothing can prove a file
@@ -728,8 +728,13 @@ should be made in those words:
 - a manifest in `testdata/README.md` naming each fixture and asserting it was hand-written, so the
   claim is at least recorded and reviewable rather than assumed
 
-Call it a fixture-hygiene check in the CI job name. Naming it provenance would be the tool claiming
-more than its evidence supports, which this project keeps telling other people not to do.
+Naming it provenance would be the tool claiming more than its evidence supports, which this project
+keeps telling other people not to do - so it is called hygiene.
+
+Built as a Go test (`internal/ingest/fixtures_test.go`) rather than a separate CI job, so it runs
+wherever `go test` does with no new machinery. Each check was verified to fail against a planted
+violation rather than assumed to work: an undeclared fixture, a `/Users/<name>` path, a
+600-character unbroken string, and a 60KB file were each caught.
 
 #### B6c. The Claude Code plugin - thinner than this doc says
 
@@ -753,7 +758,7 @@ against a description that no longer matches.
 Not a build. The prerequisites are already written down in the publishability rules:
 
 - secret scanning green in CI - **done** (gitleaks, 2026-09-12)
-- fixture-hygiene check green - **B6b**
+- fixture-hygiene check green - **done 2026-09-13**
 - a manual pass for real names in docs, README and examples - currently clean, checked 2026-09-13,
   and worth re-checking immediately before rather than trusting this line
 - signed releases actually working - **B6a**
@@ -777,9 +782,9 @@ plugin is not being pursued then going public has no forcing argument and should
 
 #### Order
 
-B6b first (cheap, and the gate everything else waits on), then B6a, then B6c, then B6d as a separate
-decision once the first three are green. Stopping after B6b leaves the repo in a better state than
-it is now whether or not it ever goes public.
+~~B6b first~~ **done**. Then B6a, then B6c, then B6d as a separate decision once those are green.
+B6b was the piece worth having whether or not the repo ever goes public, which is why it went
+first.
 
 ## Verification
 

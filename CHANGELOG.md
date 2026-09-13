@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Fixture-hygiene check (B6b), one of the gates the publishability rules require before this repo
+  could go public. Catches the markers of real data in `testdata/` - absolute home paths, email
+  addresses, a size ceiling, and the very long unbroken strings a real `thinking` signature
+  produces - and requires every fixture to be declared in a manifest, so "this was written by hand"
+  is an explicit claim in a diff rather than an assumption. Named hygiene, not provenance: nothing
+  can prove from content that a file was not derived from a real transcript.
+
 - Loop closure: applying a policy now records the baseline it was measured against, and later runs
   are compared against it. A regression surfaces as a `revert_policy` proposal carrying before/after
   evidence and saying what got worse; applying it restores the shipped default and re-opens the
