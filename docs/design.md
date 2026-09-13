@@ -632,7 +632,38 @@ and an assistant can call an MCP tool without the human asking. The terminal is 
 that changes state belongs.
 
 Status: pull shipped (B5a), MCP surface shipped (B5b), nudge cut, auto-apply rejected and replaced
-by `loom propose apply` (B5d). **B5 complete.**
+by `loom propose apply` (B5d). **B5 complete as scoped.**
+
+### Loop closure, scoped 2026-09-13, not built
+
+Applying a policy currently ends the story. The doc above already says it should not: *"Applying
+writes a marker so the next measurement window compares against the previous one. That comparison is
+what makes this a loop rather than a report."* That marker does not exist, so the self-tuning loop
+is currently a one-way trip.
+
+**The asymmetry that makes this work.** Auto-*apply* was rejected, but auto-*revert* is a different
+proposition and a more defensible one: applying moves you to an unproven state, whereas reverting
+restores a known-good state you were already in and had evidence for. So the position is
+**apply manually, verify automatically, revert automatically when the evidence turns** - which is
+coherent in a way "apply automatically" never was.
+
+What it needs:
+
+- **A marker on apply.** `Apply` records what changed, when, and the baseline it was justified by
+  (the median cost, tool count and rework rates behind the proposal). Attached to *apply*, not to
+  auto-apply: a policy change needs verifying whoever made it, and manual apply is what exists.
+- **A comparison window.** Runs for that agent type *after* the marker, measured the same way, so
+  before and after are like for like.
+- **A regression threshold**, stated rather than implied, and a minimum post-apply sample so a
+  regression cannot be declared on two runs (constraint 11 applies to this judgement as much as to
+  the original proposal).
+- **A revert path that says why**, not merely that. "Reverted Explore to the shipped default: median
+  cost rose 40% over 22 runs since the pin" is actionable; "reverted" is not.
+
+**Honest limitation, stated up front.** This needs enough runs *after* an apply to mean anything.
+With a 20-run threshold to propose in the first place, a comparable window afterwards is not quick.
+It will ship correct and quiet, like the evidence path in B3 - which is the intended behaviour, not
+a shortfall.
 
 ---
 
