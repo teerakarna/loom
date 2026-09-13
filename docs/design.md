@@ -51,7 +51,31 @@ Issue #9 (the headline figure is uninterpretable and hides that 75% of weighted 
 reads) was moved to B4 rather than held against B3: it is report presentation, not correctness, and
 nothing in B3 depends on it. The B3 milestone is closed.
 
-B4 (lanes) not started. Ledger-backed coordination was **cut on 2026-09-12** rather than deferred:
+**B4 done (2026-09-13): lanes.** Runs are tagged with the project directory their session ran in,
+taken from the transcript path. `loom report` gained a by-lane breakdown and a `--lane` filter, and
+`loom status` reports lanes seen plus how many runs could not be placed in one.
+
+Notable for what it did *not* ship. B4 arrived as a six-field manifest with a four-position
+write-enforcement dial and left as one column, one filter and a display helper:
+
+- **Write enforcement cut.** `scope`, `paths` and `promote_to` all policed what a session may touch.
+  Loom has no hook into writes, constraint 9 forbids it writing to human-authored files, and
+  enforcing would need a blocking `PreToolUse` hook - the blast-radius category, and a
+  contradiction of "measures and recommends, the human applies".
+- **The manifest cut.** The lane is already in the transcript path, so labelling needs no declared
+  input. Labelling by path is a *description* and claims nothing; inferring a boundary would be a
+  *decision*, which is the path-guessing this doc forbids by name.
+- **Hard ledger separation deferred.** It is the only part that genuinely needs a manifest, and
+  filtering one local ledger turned out to be enough. Constraint 12, not separation, is what makes
+  the ledger safe on a machine mixing personal and work lanes - a correction recorded in the Lanes
+  section rather than quietly fixed.
+
+Also shipped alongside: `loom status` (#21), a cost-by-token-class breakdown so the headline figure
+explains itself (#9), and `loom init` cut from the CLI list (#22) because it had no job the tool did
+not already do.
+
+B5 (advisor proposals for promotion and retirement) not started. Ledger-backed coordination was
+**cut on 2026-09-12** rather than deferred:
 it breaks constraint 7 by making sessions depend on Loom being installed, and it invents a mechanism
 rather than optimising an existing one. Full reasoning under "Coordination between lanes: rejected".
 
