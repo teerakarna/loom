@@ -61,3 +61,35 @@ func TestKnownRunsReportsRecordedSizes(t *testing.T) {
 		t.Errorf("KnownRuns = %+v, want one row with size 1234", known)
 	}
 }
+
+func TestStatusCountsLanes(t *testing.T) {
+	db := openTestDB(t)
+	for _, r := range []struct {
+		path, lane string
+	}{
+		{"a.jsonl", "-u-work"},
+		{"b.jsonl", "-u-work"},
+		{"c.jsonl", "-u-personal"},
+		{"d.jsonl", ""}, // outside the projects root: real run, no lane
+	} {
+		if err := db.InsertRun(RunRecord{Path: r.path, Kind: "session", Lane: r.lane}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s, err := db.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Lanes != 2 {
+		t.Errorf("Lanes = %d, want 2 (distinct attributed lanes only)", s.Lanes)
+	}
+	if s.UnattributedLanes != 1 {
+		t.Errorf("UnattributedLanes = %d, want 1", s.UnattributedLanes)
+	}
+	// Unattributed runs are counted, never dropped: the run is real and so is
+	// its cost, whatever the tool can or cannot say about where it came from.
+	if s.Runs != 4 {
+		t.Errorf("Runs = %d, want 4", s.Runs)
+	}
+}
