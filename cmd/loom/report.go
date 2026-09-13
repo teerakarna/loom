@@ -36,8 +36,19 @@ func runReport(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(args) > 0 {
-		root = args[0]
+	// `loom report --lane <lane>` narrows to one project directory; a bare
+	// argument is still the projects root, as before.
+	var lane string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--lane" {
+			if i+1 >= len(args) {
+				return fmt.Errorf("--lane needs a value (see `loom report` for the lanes in your ledger)")
+			}
+			lane = args[i+1]
+			i++
+			continue
+		}
+		root = args[i]
 	}
 
 	ledgerPath, err := defaultLedgerPath()
@@ -55,8 +66,18 @@ func runReport(args []string) error {
 	}
 
 	summary, err := db.Report()
+	if lane != "" {
+		summary, err = db.ReportForLane(lane)
+	}
 	if err != nil {
 		return err
+	}
+	if lane != "" {
+		fmt.Printf("Lane:            %s\n", ingest.LaneDisplay(lane))
+		if summary.TotalRuns == 0 {
+			fmt.Println("No runs in that lane. `loom report` with no filter lists the lanes it knows.")
+			return nil
+		}
 	}
 	printReport(summary)
 	return nil
@@ -124,6 +145,7 @@ func ingestAll(db *ledger.DB, root string) error {
 			SessionID:           rs.SessionID,
 			Kind:                rs.Kind,
 			Model:               rs.Model,
+			Lane:                ingest.LaneFromPath(root, path),
 			AgentType:           rs.AgentType,
 			Effort:              rs.Effort,
 			StartedAt:           rs.StartedAt,
@@ -181,6 +203,13 @@ func printReport(s ledger.Summary) {
 		m := s.ByModel[i]
 		return m.Model, m.Runs, m.WeightedCost, m.PerRun
 	})
+
+	if len(s.ByLane) > 1 {
+		printGroup(s, "By lane:", len(s.ByLane), func(i int) (string, int, float64, float64) {
+			l := s.ByLane[i]
+			return ingest.LaneDisplay(l.Lane), l.Runs, l.WeightedCost, l.PerRun
+		})
+	}
 
 	if len(s.ByAgentType) > 0 {
 		printGroup(s, "By agent type:", len(s.ByAgentType), func(i int) (string, int, float64, float64) {

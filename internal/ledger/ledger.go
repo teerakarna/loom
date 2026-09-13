@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS runs (
 	session_id          TEXT,
 	kind                TEXT NOT NULL, -- "session" | "agent"
 	model               TEXT,
+	lane                TEXT NOT NULL DEFAULT '', -- project directory the session ran in; '' if unattributable
 	agent_type          TEXT NOT NULL DEFAULT '', -- from the .meta.json companion; '' for sessions
 	effort              TEXT NOT NULL DEFAULT '', -- reasoning effort; '' when the transcript carried none
 	started_at          TEXT,
@@ -148,6 +149,7 @@ func migrate(db *sql.DB) error {
 		}},
 		{"runs", map[string]string{
 			"size_bytes": `ALTER TABLE runs ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0`,
+			"lane":       `ALTER TABLE runs ADD COLUMN lane TEXT NOT NULL DEFAULT ''`,
 		}},
 		{"policies", map[string]string{
 			"source":      `ALTER TABLE policies ADD COLUMN source TEXT NOT NULL DEFAULT 'human'`,
