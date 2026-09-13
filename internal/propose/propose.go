@@ -36,6 +36,32 @@ const (
 	// type with enough measured runs behind it. Touches only Loom's own
 	// policies table.
 	KindPinModel = "pin_model"
+
+	// KindRevertPolicy suggests undoing a policy whose measured results got
+	// worse after it was applied. This is what closes the loop: applying a
+	// policy writes a baseline, and runs after it are the test of whether the
+	// decision held. Touches only Loom's own policies table.
+	KindRevertPolicy = "revert_policy"
+)
+
+// Loop-closure thresholds, stated rather than implied.
+const (
+	// MinPostApplyRuns is how many runs must follow a policy before a
+	// regression can be claimed. Lower than policy.MinSampleSize deliberately:
+	// the asymmetry is that applying moves you to an unproven state while
+	// reverting restores a known-good one you already had evidence for, so the
+	// bar for going back is lower than the bar for going forward. It is not
+	// zero, because a regression declared on two runs is a guess.
+	MinPostApplyRuns = 10
+
+	// RegressionCostRatio is how much worse the median cost must get before it
+	// counts. 25% absorbs ordinary variance without hiding a real change.
+	RegressionCostRatio = 1.25
+
+	// RegressionReworkDelta is the rise in denials or corrections per run that
+	// counts as a quality regression. Rework matters more than cost: a cheaper
+	// model that gets things wrong is not a saving.
+	RegressionReworkDelta = 0.2
 )
 
 // TouchesUserFiles reports whether applying a proposal of this kind would
@@ -93,7 +119,97 @@ func Generate(db *ledger.DB, now time.Time) ([]Proposal, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(out, pin...), nil
+	out = append(out, pin...)
+
+	revert, err := revertRegressedPolicies(db)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, revert...), nil
+}
+
+// revertRegressedPolicies closes the loop. For every policy applied from
+// evidence, it compares runs since that policy was applied against the
+// baseline the decision rested on, and proposes going back when the result got
+// worse.
+//
+// Only evidence-sourced policies are checked. A policy set by hand is a
+// decision someone made for reasons Loom cannot see, and it is not Loom's
+// place to second-guess it with a number.
+func revertRegressedPolicies(db *ledger.DB) ([]Proposal, error) {
+	stats, err := db.StatsByAgentType()
+	if err != nil {
+		return nil, err
+	}
+
+	var out []Proposal
+	for _, s := range stats {
+		pol, err := db.GetPolicy(s.AgentType)
+		if err != nil {
+			return nil, err
+		}
+		if pol == nil || pol.Source != "evidence" || pol.BaselineMedianCost <= 0 {
+			continue
+		}
+		applied, err := time.Parse(time.RFC3339, pol.CreatedAt)
+		if err != nil {
+			continue
+		}
+
+		since, err := db.StatsByAgentTypeSince(s.AgentType, applied)
+		if err != nil {
+			return nil, err
+		}
+		if since.Runs < MinPostApplyRuns {
+			continue // not enough evidence since to say anything
+		}
+
+		reason, regressed := regressionReason(pol, since)
+		if !regressed {
+			continue
+		}
+
+		effect := since.MedianCost - pol.BaselineMedianCost
+		out = append(out, Proposal{
+			Kind:    KindRevertPolicy,
+			Subject: s.AgentType,
+			Evidence: map[string]any{
+				"agent_type": s.AgentType, "model": pol.Model,
+				"applied_at": pol.CreatedAt, "runs_since": since.Runs,
+				"baseline_median_cost": pol.BaselineMedianCost, "since_median_cost": since.MedianCost,
+				"baseline_denial_rate": pol.BaselineDenialRate, "since_denial_rate": since.DenialRate,
+				"baseline_feedback_rate": pol.BaselineFeedbackRate, "since_feedback_rate": since.FeedbackRate,
+				"reason": reason,
+			},
+			SampleSize: since.Runs,
+			EffectSize: &effect,
+			Summary:    fmt.Sprintf("revert %s: %s", s.AgentType, reason),
+			Rationale: fmt.Sprintf("Pinned to %s on %d runs, but %s over the %d runs since. "+
+				"Reverting restores the shipped default, which is the state you had evidence for.",
+				pol.Model, pol.SampleSize, reason, since.Runs),
+		})
+	}
+	return out, nil
+}
+
+// regressionReason says what got worse, in words a human can act on. Returning
+// the reason rather than a bare bool is the difference between "reverted" and
+// "reverted because median cost rose 40% over 22 runs".
+func regressionReason(pol *ledger.PolicyRow, since ledger.AgentTypeStats) (string, bool) {
+	if since.DenialRate-pol.BaselineDenialRate >= RegressionReworkDelta {
+		return fmt.Sprintf("tool denials rose from %.2f to %.2f per run",
+			pol.BaselineDenialRate, since.DenialRate), true
+	}
+	if since.FeedbackRate-pol.BaselineFeedbackRate >= RegressionReworkDelta {
+		return fmt.Sprintf("corrections rose from %.2f to %.2f per run",
+			pol.BaselineFeedbackRate, since.FeedbackRate), true
+	}
+	if pol.BaselineMedianCost > 0 && since.MedianCost >= pol.BaselineMedianCost*RegressionCostRatio {
+		pct := (since.MedianCost/pol.BaselineMedianCost - 1) * 100
+		return fmt.Sprintf("median cost rose %.0f%%, from %.0f to %.0f",
+			pct, pol.BaselineMedianCost, since.MedianCost), true
+	}
+	return "", false
 }
 
 // retireStaleArtifacts proposes retiring artifacts unseen for StaleAfter.
@@ -218,13 +334,19 @@ func Apply(db *ledger.DB, id int64, now time.Time) (string, error) {
 		if model == "" {
 			return "", fmt.Errorf("#%d has no model in its evidence", id)
 		}
+		// Record what this decision was measured against. Without the
+		// baseline the loop cannot close: there would be nothing to compare
+		// later runs to, and "did this help" would be unanswerable.
 		if err := db.UpsertPolicy(ledger.PolicyRow{
-			CriteriaVersion: policy.CriteriaVersion,
-			AgentType:       p.Subject,
-			Model:           model,
-			Effort:          "",
-			Source:          "evidence",
-			SampleSize:      p.SampleSize,
+			CriteriaVersion:      policy.CriteriaVersion,
+			AgentType:            p.Subject,
+			Model:                model,
+			Effort:               "",
+			Source:               "evidence",
+			SampleSize:           p.SampleSize,
+			BaselineMedianCost:   asFloat(ev["median_cost"]),
+			BaselineDenialRate:   asFloat(ev["denial_rate"]),
+			BaselineFeedbackRate: asFloat(ev["feedback_rate"]),
 		}, now); err != nil {
 			return "", err
 		}
@@ -233,9 +355,33 @@ func Apply(db *ledger.DB, id int64, now time.Time) (string, error) {
 		}
 		return fmt.Sprintf("Pinned %s to %s, on %d measured runs.\n"+
 			"Revert with: loom policy unset %s", p.Subject, model, p.SampleSize, p.Subject), nil
+	case KindRevertPolicy:
+		if err := db.DeletePolicy(p.Subject); err != nil {
+			return "", err
+		}
+		if err := db.MarkProposalApplied(id); err != nil {
+			return "", err
+		}
+		reason, _ := ev["reason"].(string)
+		// Reverting re-opens the question rather than settling it: with no
+		// policy in place, the original pin becomes proposable again once the
+		// evidence supports it. That is the loop closing and re-opening, which
+		// is the point.
+		return fmt.Sprintf("Reverted %s to the shipped default.\nWhy: %s.\n"+
+			"The pin can be proposed again once the evidence supports it.", p.Subject, reason), nil
+
 	default:
 		return "", fmt.Errorf("loom does not know how to apply a %q proposal", p.Kind)
 	}
+}
+
+// asFloat reads a number out of decoded JSON evidence, where every number is a
+// float64. Missing or wrong-typed values become 0, which for a baseline means
+// "no baseline recorded" and correctly disables regression checking rather
+// than inventing a comparison.
+func asFloat(v any) float64 {
+	f, _ := v.(float64)
+	return f
 }
 
 // Store writes generated proposals to the ledger, applying the dedupe rule.

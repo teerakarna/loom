@@ -3,6 +3,7 @@ package propose
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -324,5 +325,233 @@ func TestApplyRejectsUnknownAndRepeatIDs(t *testing.T) {
 	}
 	if _, err := Apply(db, pending[0].ID, now); err == nil {
 		t.Error("applying twice should be refused, not silently repeated")
+	}
+}
+
+// seedAgentRunsAt seeds runs with an explicit start time, so before/after a
+// marker can be distinguished.
+func seedAgentRunsAt(t *testing.T, db *ledger.DB, agentType string, n int, cost float64, denials int, at time.Time, prefix string) {
+	t.Helper()
+	for i := range n {
+		d := 0
+		if i < denials {
+			d = 1
+		}
+		if err := db.InsertRun(ledger.RunRecord{
+			Path: fmt.Sprintf("/%s/%s-%d.jsonl", prefix, agentType, i), Kind: "agent",
+			AgentType: agentType, Model: "claude-haiku-4-5",
+			WeightedCost: cost, ToolUseCount: 3, DenialCount: d,
+			StartedAt: at, EndedAt: at,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// applyAPin drives the real path: propose, then apply, so the baseline is
+// recorded the way it would be in use rather than hand-written.
+func applyAPin(t *testing.T, db *ledger.DB, agentType string, at time.Time) {
+	t.Helper()
+	ps, err := Generate(db, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Store(db, ps, at); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := db.ListProposals(true)
+	for _, p := range pending {
+		if p.Kind == KindPinModel && p.Subject == agentType {
+			if _, err := Apply(db, p.ID, at); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+	}
+	t.Fatalf("no pin proposal to apply for %s", agentType)
+}
+
+func TestApplyRecordsTheBaselineThatClosesTheLoop(t *testing.T) {
+	db := openDB(t)
+	before := now.Add(-30 * 24 * time.Hour)
+	seedAgentRunsAt(t, db, "Explore", policy.MinSampleSize, 100, 0, before, "pre")
+	applyAPin(t, db, "Explore", now)
+
+	pol, err := db.GetPolicy("Explore")
+	if err != nil || pol == nil {
+		t.Fatalf("GetPolicy = (%v, %v)", pol, err)
+	}
+	if pol.BaselineMedianCost != 100 {
+		t.Errorf("BaselineMedianCost = %v, want 100 - without it the loop cannot close", pol.BaselineMedianCost)
+	}
+}
+
+func TestNoRevertProposedBeforeEnoughRunsSince(t *testing.T) {
+	db := openDB(t)
+	before := now.Add(-30 * 24 * time.Hour)
+	seedAgentRunsAt(t, db, "Explore", policy.MinSampleSize, 100, 0, before, "pre")
+	applyAPin(t, db, "Explore", now)
+
+	// Far worse, but too few runs to say so.
+	seedAgentRunsAt(t, db, "Explore", MinPostApplyRuns-1, 1000, 0, now.Add(time.Hour), "post")
+
+	ps, err := Generate(db, now.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ps {
+		if p.Kind == KindRevertPolicy {
+			t.Errorf("declared a regression on %d runs, below the %d minimum", MinPostApplyRuns-1, MinPostApplyRuns)
+		}
+	}
+}
+
+func TestRevertProposedWhenCostRegresses(t *testing.T) {
+	db := openDB(t)
+	before := now.Add(-30 * 24 * time.Hour)
+	seedAgentRunsAt(t, db, "Explore", policy.MinSampleSize, 100, 0, before, "pre")
+	applyAPin(t, db, "Explore", now)
+
+	// Clearly worse, with enough runs behind it.
+	seedAgentRunsAt(t, db, "Explore", MinPostApplyRuns, 200, 0, now.Add(time.Hour), "post")
+
+	ps, err := Generate(db, now.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rev *Proposal
+	for i := range ps {
+		if ps[i].Kind == KindRevertPolicy {
+			rev = &ps[i]
+		}
+	}
+	if rev == nil {
+		t.Fatal("expected a revert proposal after a clear cost regression")
+	}
+	if TouchesUserFiles(rev.Kind) {
+		t.Error("a revert touches only loom's own state")
+	}
+	// The reason must be actionable, not a bare flag.
+	if !strings.Contains(rev.Summary, "median cost rose") {
+		t.Errorf("summary should say what got worse: %q", rev.Summary)
+	}
+}
+
+func TestRevertNotProposedWhenResultsHeld(t *testing.T) {
+	db := openDB(t)
+	before := now.Add(-30 * 24 * time.Hour)
+	seedAgentRunsAt(t, db, "Explore", policy.MinSampleSize, 100, 0, before, "pre")
+	applyAPin(t, db, "Explore", now)
+	// Slightly better, plenty of runs.
+	seedAgentRunsAt(t, db, "Explore", MinPostApplyRuns*2, 90, 0, now.Add(time.Hour), "post")
+
+	ps, err := Generate(db, now.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ps {
+		if p.Kind == KindRevertPolicy {
+			t.Errorf("proposed a revert when results held or improved: %+v", p)
+		}
+	}
+}
+
+// Rework matters more than cost: a cheaper model that gets things wrong is not
+// a saving.
+func TestRevertProposedWhenReworkRises(t *testing.T) {
+	db := openDB(t)
+	before := now.Add(-30 * 24 * time.Hour)
+	seedAgentRunsAt(t, db, "Explore", policy.MinSampleSize, 100, 0, before, "pre")
+	applyAPin(t, db, "Explore", now)
+	// Cheaper, but denials on every run.
+	seedAgentRunsAt(t, db, "Explore", MinPostApplyRuns, 50, MinPostApplyRuns, now.Add(time.Hour), "post")
+
+	ps, err := Generate(db, now.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range ps {
+		if p.Kind == KindRevertPolicy {
+			found = true
+			if !strings.Contains(p.Summary, "denials rose") {
+				t.Errorf("expected the denial rate to be named: %q", p.Summary)
+			}
+		}
+	}
+	if !found {
+		t.Error("cheaper but with rework on every run should still propose a revert")
+	}
+}
+
+// The loop must close AND re-open: applying a revert removes the policy, which
+// makes the original pin proposable again.
+func TestApplyingARevertReopensTheQuestion(t *testing.T) {
+	db := openDB(t)
+	before := now.Add(-30 * 24 * time.Hour)
+	seedAgentRunsAt(t, db, "Explore", policy.MinSampleSize, 100, 0, before, "pre")
+	applyAPin(t, db, "Explore", now)
+	seedAgentRunsAt(t, db, "Explore", MinPostApplyRuns, 200, 0, now.Add(time.Hour), "post")
+
+	later := now.Add(2 * time.Hour)
+	ps, _ := Generate(db, later)
+	if _, err := Store(db, ps, later); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := db.ListProposals(true)
+	var revertID int64
+	for _, p := range pending {
+		if p.Kind == KindRevertPolicy {
+			revertID = p.ID
+		}
+	}
+	if revertID == 0 {
+		t.Fatal("no revert proposal to apply")
+	}
+
+	msg, err := Apply(db, revertID, later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(msg, "Why:") {
+		t.Errorf("a revert must say why, not just that: %q", msg)
+	}
+	if pol, _ := db.GetPolicy("Explore"); pol != nil {
+		t.Error("the policy should be gone after reverting")
+	}
+
+	// And the pin becomes proposable again.
+	ps, _ = Generate(db, later)
+	reopened := false
+	for _, p := range ps {
+		if p.Kind == KindPinModel && p.Subject == "Explore" {
+			reopened = true
+		}
+	}
+	if !reopened {
+		t.Error("reverting should re-open the question, not settle it")
+	}
+}
+
+// A policy someone set by hand is a decision Loom cannot see the reasons for.
+func TestHandSetPolicyIsNeverSecondGuessed(t *testing.T) {
+	db := openDB(t)
+	before := now.Add(-30 * 24 * time.Hour)
+	seedAgentRunsAt(t, db, "Explore", policy.MinSampleSize, 100, 0, before, "pre")
+	if err := db.UpsertPolicy(ledger.PolicyRow{
+		CriteriaVersion: "v1", AgentType: "Explore", Model: "opus", Effort: "high", Source: "human",
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	seedAgentRunsAt(t, db, "Explore", MinPostApplyRuns*3, 100000, MinPostApplyRuns*3, now.Add(time.Hour), "post")
+
+	ps, err := Generate(db, now.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ps {
+		if p.Kind == KindRevertPolicy {
+			t.Error("second-guessed a hand-set policy with a number")
+		}
 	}
 }

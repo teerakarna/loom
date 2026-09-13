@@ -109,6 +109,8 @@ func summaryFor(p ledger.ProposalRow, ev map[string]any) string {
 	case propose.KindPinModel:
 		return fmt.Sprintf("pin %v to %v, measured over %v runs",
 			ev["agent_type"], ev["observed_model"], ev["runs"])
+	case propose.KindRevertPolicy:
+		return fmt.Sprintf("revert %v: %v", ev["agent_type"], ev["reason"])
 	default:
 		return fmt.Sprintf("%s: %s", p.Kind, p.Subject)
 	}
@@ -120,6 +122,11 @@ func compactEvidence(ev map[string]any) string {
 	switch {
 	case ev["path"] != nil:
 		return fmt.Sprintf("%v (last seen %v)", ev["path"], ev["last_seen"])
+	case ev["since_median_cost"] != nil:
+		return fmt.Sprintf("applied %v, %v runs since; median cost %.0f -> %.0f, denials %.2f -> %.2f",
+			ev["applied_at"], ev["runs_since"],
+			asFloat(ev["baseline_median_cost"]), asFloat(ev["since_median_cost"]),
+			asFloat(ev["baseline_denial_rate"]), asFloat(ev["since_denial_rate"]))
 	case ev["median_cost"] != nil:
 		return fmt.Sprintf("median cost %.0f, %.0f tool calls/run, %.2f denials/run",
 			asFloat(ev["median_cost"]), asFloat(ev["median_tools"]), asFloat(ev["denial_rate"]))

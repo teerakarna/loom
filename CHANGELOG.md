@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Loop closure: applying a policy now records the baseline it was measured against, and later runs
+  are compared against it. A regression surfaces as a `revert_policy` proposal carrying before/after
+  evidence and saying what got worse; applying it restores the shipped default and re-opens the
+  original question. Rework is weighed before cost, because a cheaper model that gets things wrong
+  is not a saving.
+
+### Fixed
+
+- Stored timestamps are now always UTC. They were written with the local offset, but SQLite compares
+  them as strings and RFC3339 only orders lexically when offsets match - so a run at `12:04Z` sorted
+  *before* a policy written at `18:04+07:00` an hour earlier, and every comparison against a stored
+  time was silently wrong off UTC. Found by running loop closure for real; every unit test passed
+  because they all build times in UTC.
+
 - `loom propose apply <id>` (B5d): takes a proposal that touches only Loom's own state, records the
   policy with its evidence and sample size, and tells you the one command that reverts it. Refuses
   anything touching your files, unconditionally. Auto-apply was rejected: a pin can fire at most
