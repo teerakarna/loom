@@ -703,6 +703,8 @@ Each stage is independently useful. Stopping after any of them leaves something 
   single local ledger turned out to be enough).
 - **B5** Advisor proposals for promotion and retirement.
 - **B6** Signed releases, plugin packaging, and the decision to go public. Scoped in detail below.
+- **B7** Context occupancy: what fills the window, how fast, and what compaction costs. Plus the
+  three credibility issues the advisory half rests on. Scoped in detail below.
 
 ### B6 scope, agreed 2026-09-13
 
@@ -834,6 +836,204 @@ Remaining: **B6a** if and when B6d is decided yes, and **B6d** itself, still gat
 evidence path firing on real data. Both of the pieces worth having regardless of that decision -
 B6b and B6c - are done.
 
+### B7 scope, agreed 2026-09-22
+
+Two independent reassessments arrived at the same place within a fortnight. One was written on a
+machine with no checkout, reading the repo over the GitHub API against a context-lifecycle spec. The
+other was measured here, against real transcripts. They agree on the diagnosis and on which verbs to
+refuse, and the measurements settle two questions the blind reassessment had to leave open. Both are
+folded in below.
+
+#### The active-steward role, refused for the fifth time
+
+An aligned spec proposed an `execute_context_action` tool: retire a rule, filter a hook, compact a
+plan, consolidate artifacts. Each of those writes to a human-authored file.
+
+**DECIDED 2026-09-22 by the owner: not at all, at this stage.** Not as a loom tool, and not as a
+separate tool alongside it either. Constraint 8 stands unchanged, and B7c is settled before it
+begins: promotion emits a rendered diff, never a write.
+
+This is the fifth time the same role has been examined and declined, which is worth stating plainly
+so it is not re-derived a sixth time:
+
+1. Constraint 8 itself, written because a tool in this space once shipped a version that deleted
+   users' hand-written hook entries
+2. B4, where lane write enforcement was cut as a contradiction of "measures and recommends, the
+   human applies"
+3. B5, on proposals touching user files: render a diff, nothing more, never
+4. B2's pre-compact note, answering whether Loom should take an active role in context lifecycle
+   before the question was asked again
+5. This decision
+
+The reasoning is kept rather than the conclusion alone: if it is ever wanted, it is a separate tool
+consuming Loom's ledger over MCP, never a write path bolted in. Bolting it on requires deleting
+constraint 8, and constraint 8 is why this design has held up under scrutiny.
+
+The same decision disposes of `context-mode`'s mechanism, which Loom inherited motivation from and
+not implementation. Storing raw artifacts out of band and handing the model a reference is a durable
+secondary copy of whatever was in the session. It would delete the planted-secret test that backs
+constraint 6, which is the whole safety argument on any machine that has seen confidential work. It
+also overlaps the host's own compaction rather than complementing it. Measured here: native
+compaction already achieves a **97.0% mean reduction** across eleven real events, so the mechanism
+buys a marginal improvement over something that already exists, at the cost of Loom's strongest
+property.
+
+#### The framing moved onto a different metric
+
+Loom measures **spend per run**. The new framing is about **context occupancy**: how fast the window
+fills, what fills it, and what that costs. Both come off the same transcripts. They are not the same
+number and Loom computes only the first. Nothing in the ledger answers "how full is the window, and
+what put it there".
+
+That is the real gap, and it is bigger than any tool name in the spec. It is also the cheapest to
+close honestly, because occupancy is derivable from data already ingested, needs no content store, no
+write access, and no interrupt.
+
+#### What the measurements settled
+
+Three findings from the personal corpus that the API-only reassessment could not reach.
+
+**Tool output is the thing that fills the window, and one tool dominates it.** Across the lane:
+
+| bucket | result output | leading callers |
+|---|---|---|
+| file I/O | 32.2 MB | Read 539, Edit 712, Write 317 |
+| shell | 2.96 MB | Bash 3,340 |
+| MCP server | 1.33 MB | Drive `search_files` 43, `read_file_content` 51 |
+| web | 329 KB | WebSearch 88, WebFetch 60 |
+| harness / UI | 109 KB | ExitPlanMode, AskUserQuestion, ToolSearch |
+| delegation | 26 KB | Agent 21, TaskCreate 38 |
+
+**Read alone is 86% of all tool output**, 539 calls averaging 60KB. This is the actionable half of
+occupancy and it was absent from both the spec and the reassessment, which reasoned about how fast
+the window fills without asking what fills it.
+
+**Compaction does not need modelling.** An early attempt here inferred compaction from a drop in
+`cache_read` and produced 42 candidates, every one of them a `<synthetic>` placeholder record with
+zero tokens in every field. A 100% false positive rate. The host already writes the ground truth as a
+`compact_boundary` system record carrying `compactMetadata`: `trigger`, `preTokens`, `postTokens`,
+`cumulativeDroppedTokens`, `durationMs`, and `preCompactDiscoveredTools`. Read it; do not infer it.
+
+Measured across the lane: 11 compactions, ~6.5M tokens dropped after deduping, **31.4 minutes of
+wall clock spent compacting**. That last figure is not a token cost and nothing reports it anywhere.
+
+**Occupancy does not depend on the artifact-to-run join (#39).** The reassessment left this open and
+suspected it. Confirmed: `tool_use` blocks carry the tool name directly, so tool-output accounting
+and compaction pressure need only a tool name and a byte count. The join is per-artifact; occupancy
+is per-session and time-ordered. They are independent, which means **B7b can go before B7a** for
+faster signal, though B7a still gates every claim that uses the word "unused".
+
+#### B7a. Close the three credibility issues (#42, #39, #38)
+
+Nothing else is worth building on an advisor whose central claim it cannot support. Three of five
+open issues undercut it: #39 means "unused" cannot be answered, #41 means every promotion rule is
+still prose, #38 means retirement can never fire for an artifact that exists on disk.
+
+- **#42**, skill discovery: require `<name>/SKILL.md`. Report a flat `.md` in a skills directory as a
+  distinct finding, "present but never loadable", rather than counting it as a skill. Worth doing for
+  its own sake and not only Loom's: six personal skills on another machine turned out to be dead this
+  way, and the same measurement here found eight of nine.
+- **#39**, artifact-to-run join: record which discovered artifacts a run touched. Prerequisite for
+  every staleness or disuse claim.
+- **#38**, retirement condition.
+
+#### B7b. Occupancy metrics, and `loom context`
+
+Measurement only. Two new tables, both derived metrics and identifiers, so constraint 6 holds:
+
+```
+tool_usage(run_id, tool_name, calls, result_bytes)
+compactions(run_id, seq, trigger, pre_tokens, post_tokens,
+            dropped_cumulative, duration_ms, at)
+```
+
+Per session: tool output by tool and by bucket; cumulative input tokens over time and the derived
+slope; compaction events, time-to-first-compaction, and wall clock spent compacting; cache-read
+share, already computed; per-fire hook output volume, since hook stdout lands in the transcript.
+Surfaced through a read-only `loom context` and a `query_ledger` dimension.
+
+Stated limits, up front rather than discovered later:
+
+- **Bytes are not tokens.** Store the measured byte count; label any token figure an estimate. JSON
+  and code tokenise worse than prose and a quiet conversion would make every downstream number wrong.
+- **No attribution from compaction to cause.** You will see that Read dominates output and that
+  compaction fired. "This Read caused it" is not derivable.
+- **Resumed sessions carry the prior session's compaction records**, so the same event appears in two
+  transcripts. Naive summing inflated the first measurement here by 1.7M tokens. Dedupe on boundary
+  identity, and test it: this is the exact shape of the 2.12x over-count bug.
+
+B7b also accrues far faster than per-agent-type run counts, so it is the cheapest route to satisfying
+B6d's own evidence gate.
+
+#### B7c. Promotion rules as read-only proposals (#41)
+
+Turn the promotion-rules table into code emitting `promote_*` proposals, each carrying evidence and a
+rendered diff into Loom's own proposal directory. Same output as the spec's `promote_to_mechanism`,
+minus the write.
+
+One rule is already mechanically detectable with no inference at all, and it should be the first:
+**a memory file that exists byte-identically across three or more project stores is a cross-project
+fact in the wrong mechanism**, and belongs as a reference skill. Measured here: 6 stores, 58 memory
+files, 17 exact duplicates, 5 files appearing in three stores each. Hashing only. No threshold, no
+recurrence inference, no content retained.
+
+The same pass covers three further structural checks that need no judgement: broken `[[links]]` (3 of
+6 here), artifacts absent from the index that loads them and therefore unreachable (2 here), and
+filename-to-slug convention drift, which is what breaks the links (4 here).
+
+Add path-scoped rules to discovery in the same change, since the spec names them and Loom does not
+model them. Discovery only: an orphaned rule or an overlapping pair becomes a finding, never a
+deletion.
+
+Constraint 10 applies and is satisfied in the same PR, not deferred: state the generation cap, the
+dedupe key and the retention rule before merging.
+
+**Not in B7c: semantic staleness.** Tested here and rejected on measurement. Extracting the claims an
+artifact makes and checking whether they still resolve produced 44 candidates and 6 flags, all 6 false
+positives: a slash command read as a path, two documentation examples, and two work-machine paths
+correctly absent on a personal machine. Separating an assertion from an illustration needs to read for
+intent, which needs a model, which is the cost this is meant to reduce. Recorded so it is not retried
+without a new idea behind it.
+
+#### B7d. Surfacing: MCP pull, and nothing else
+
+No scheduler, no sweep hook, no session-start nudge. The trigger is the session asking, through
+`list_proposals` and the new `query_ledger` dimension. The nudge was cut on measurement, not taste:
+20ms budget, 960ms measured cold, and session start is exactly when the binary is cold.
+
+If something must fire proactively, the only place it can go without reopening a cut decision is the
+pre-compact hook, already specified as a pointer-writer with a 50ms budget and an
+overwrite-never-append rule. It may carry an occupancy summary. It must not gate compaction.
+
+#### B7e. Doc and code hygiene, first commit
+
+Small, and all of it is drift between what the code does and what it says:
+
+- `cmd/loom/main.go`'s usage string and `internal/mcp/doc.go` both say four MCP tools and omit
+  `dismiss_proposal`. There are five. `doc.go` also still describes B2 as the current scope.
+- The never-write rule is constraint **8**. Three places cite it as constraint 9, which is
+  "artifact-derived text is data". Residue from the renumbering that produced the append-never-insert
+  rule.
+- Line 444 still describes a Unix domain socket fast path. `serve.go` is stdio-only and says so.
+- 19 em or en dashes remain in this file. The hyphen rule was made a rule elsewhere and this repo has
+  not had the sweep. Mechanical, and worth doing in the same pass rather than drifting further.
+
+#### Open, and deliberately not decided here
+
+- **Provenance of the dogfooding figures already committed to this doc.** If any were measured on a
+  corpus including employer sessions, that needs adjudicating before B6d rather than after. Aggregate
+  derived metrics are a far weaker exposure than content and the figures are unattributable on their
+  face, so this is probably fine. It should be a decision with a date on it, not an assumption.
+- **The "artifact" noun collision.** Loom's artifact is a skill, plan, agent, hook or memory. The
+  spec's is a versioned render block. If the spec's vocabulary should win, rename once, deliberately,
+  before B7c writes it into proposal kinds.
+
+#### Order
+
+B7e first, since it is minutes and makes later failures attributable. Then **B7b**, because occupancy
+is independent of the join, accrues evidence fastest, and feeds B6d's gate. Then B7a, then B7c, then
+B7d last so surfacing earns its place on measurement the way B5's did.
+
 ## Verification
 
 - **Ingest correctness.** Replay fixtures and assert computed subagent totals reconcile with the
@@ -852,6 +1052,27 @@ B6b and B6c - are done.
   silent no-ops.
 - **Loop closure.** Apply a policy change, run a second window, confirm the delta is attributed and
   that revert restores the prior policy.
+
+### Added for B7
+
+- **Skill shape (#42).** Point discovery at a fixture tree holding both `foo/SKILL.md` and a flat
+  `bar.md`; assert one skill and one "present but never loadable" finding.
+- **The join is real, not inferred (#39).** Report over a corpus where a known skill was invoked;
+  assert a non-zero use count against a known-dormant one showing zero. State the sample size, per
+  constraint 11.
+- **Compaction is read, not guessed.** Assert the recorded event comes from the host's
+  `compact_boundary` record. A test that reconstructs compaction from a `cache_read` drop must fail:
+  that inference was tried and was wrong 42 times out of 42.
+- **Resumed sessions do not double-count.** Ingest two transcripts where the second resumes the
+  first and carries the same compaction boundary; assert the event is counted once. Same shape as the
+  2.12x over-count, so it gets its own fixture.
+- **Bytes stay bytes.** Assert no stored column holds a token estimate. The conversion belongs at the
+  display edge, labelled, or downstream arithmetic inherits an error it cannot see.
+- **The privacy property survives the migration.** The planted-secret test must pass unchanged after
+  B7b's schema change. If B7b makes that test harder to write, the design drifted.
+- **Write containment catches the refused verb.** The existing containment test is what stops
+  `execute_context_action` arriving by increments. Extend its assertion set to the proposal
+  directory and leave it strictly enforced.
 
 ## Publishability rules
 
