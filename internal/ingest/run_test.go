@@ -178,34 +178,29 @@ func TestIngestFile_ToolUsageByBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	readStat, ok := rs.ToolUsage["Read"]
-	if !ok {
-		t.Fatal("no ToolUsage entry for Read")
-	}
-	wantReadBytes := int64(len("NOT-A-REAL-SECRET-abcdefgh12345678"))
-	if readStat.Calls != 1 || readStat.ResultBytes != wantReadBytes {
-		t.Errorf("Read = %+v, want {Calls:1 ResultBytes:%d}", readStat, wantReadBytes)
+	byName := map[string][]ToolUsageEvent{}
+	for _, e := range rs.ToolUsage {
+		byName[e.ToolName] = append(byName[e.ToolName], e)
 	}
 
-	mcpStat, ok := rs.ToolUsage["mcp__synth__search"]
-	if !ok {
-		t.Fatal("no ToolUsage entry for mcp__synth__search")
+	wantReadBytes := int64(len("NOT-A-REAL-SECRET-abcdefgh12345678"))
+	if got := byName["Read"]; len(got) != 1 || got[0].ResultBytes != wantReadBytes {
+		t.Errorf("Read events = %+v, want one event with ResultBytes %d", got, wantReadBytes)
+	} else if got[0].ToolUseID == "" {
+		t.Error("ToolUseID must be populated - it's the dedup key a resumed session needs")
 	}
+
 	// List-shaped content is measured as its marshaled JSON, not the text
 	// alone - see toolResultBytes.
 	wantMCPBytes := int64(len(`[{"text":"twelve chars","type":"text"}]`))
-	if mcpStat.Calls != 1 || mcpStat.ResultBytes != wantMCPBytes {
-		t.Errorf("mcp__synth__search = %+v, want {Calls:1 ResultBytes:%d}", mcpStat, wantMCPBytes)
+	if got := byName["mcp__synth__search"]; len(got) != 1 || got[0].ResultBytes != wantMCPBytes {
+		t.Errorf("mcp__synth__search events = %+v, want one event with ResultBytes %d", got, wantMCPBytes)
 	}
 
 	// A tool_result whose tool_use never appeared in this file (the fixture's
 	// "synthtool-unseen") is attributed to (unknown), not dropped.
-	unknownStat, ok := rs.ToolUsage[unknownTool]
-	if !ok {
-		t.Fatal("no ToolUsage entry for (unknown)")
-	}
-	if unknownStat.Calls != 1 || unknownStat.ResultBytes != int64(len("orphaned result")) {
-		t.Errorf("(unknown) = %+v, want {Calls:1 ResultBytes:%d}", unknownStat, len("orphaned result"))
+	if got := byName[UnknownTool]; len(got) != 1 || got[0].ResultBytes != int64(len("orphaned result")) {
+		t.Errorf("(unknown) events = %+v, want one event with ResultBytes %d", got, len("orphaned result"))
 	}
 }
 
@@ -222,22 +217,20 @@ func TestIngestFile_ArtifactUsageOnlyFromStructuredInput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := rs.SkillTouches["example-skill"]; got != 1 {
-		t.Errorf("SkillTouches[example-skill] = %d, want 1", got)
-	}
-	if len(rs.SkillTouches) != 1 {
-		t.Errorf("SkillTouches = %+v, want exactly one entry - the Bash decoy must not add one", rs.SkillTouches)
+	if len(rs.SkillTouches) != 1 || rs.SkillTouches[0].Signal != "example-skill" {
+		t.Errorf("SkillTouches = %+v, want exactly one touch on example-skill - the Bash decoy must not add one", rs.SkillTouches)
+	} else if rs.SkillTouches[0].ToolUseID == "" {
+		t.Error("ToolUseID must be populated")
 	}
 
 	const path = "/workspace/.claude/plans/my-plan.md"
 	// Read once, Edit once, both on the same path: 2 total. The Bash
 	// command's own file_path-shaped text (a shell string, not a tool_use
 	// input field) must not add a third.
-	if got := rs.FileTouches[path]; got != 2 {
-		t.Errorf("FileTouches[%s] = %d, want 2 (one Read, one Edit)", path, got)
-	}
-	if len(rs.FileTouches) != 1 {
-		t.Errorf("FileTouches = %+v, want exactly one path", rs.FileTouches)
+	if len(rs.FileTouches) != 2 || rs.FileTouches[0].Signal != path || rs.FileTouches[1].Signal != path {
+		t.Errorf("FileTouches = %+v, want exactly two touches on %s (one Read, one Edit)", rs.FileTouches, path)
+	} else if rs.FileTouches[0].ToolUseID == rs.FileTouches[1].ToolUseID {
+		t.Error("Read and Edit are different tool_use blocks and must carry different ids")
 	}
 }
 

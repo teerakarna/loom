@@ -28,14 +28,16 @@ func TestReplaceToolUsage_ReplacesNotAccumulates(t *testing.T) {
 	db := openTestDB(t)
 	id := insertTestRun(t, db, "run-a.jsonl")
 
-	if err := db.ReplaceToolUsage(id, map[string]ingest.ToolUsageStat{
-		"Read": {Calls: 1, ResultBytes: 100},
+	if err := db.ReplaceToolUsage(id, []ingest.ToolUsageEvent{
+		{ToolUseID: "t1", ToolName: "Read", ResultBytes: 100},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ReplaceToolUsage(id, map[string]ingest.ToolUsageStat{
-		"Read": {Calls: 3, ResultBytes: 900},
-		"Bash": {Calls: 1, ResultBytes: 50},
+	if err := db.ReplaceToolUsage(id, []ingest.ToolUsageEvent{
+		{ToolUseID: "t2", ToolName: "Read", ResultBytes: 300},
+		{ToolUseID: "t3", ToolName: "Read", ResultBytes: 300},
+		{ToolUseID: "t4", ToolName: "Read", ResultBytes: 300},
+		{ToolUseID: "t5", ToolName: "Bash", ResultBytes: 50},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -49,13 +51,63 @@ func TestReplaceToolUsage_ReplacesNotAccumulates(t *testing.T) {
 		byTool[r.ToolName] = r
 	}
 	if len(byTool) != 2 {
-		t.Fatalf("ByTool = %+v, want exactly 2 rows (the second call's set, not a union with the first)", occ.ByTool)
+		t.Fatalf("ByTool = %+v, want exactly 2 rows (the second call's set, not a union with the first - t1 must be gone)", occ.ByTool)
 	}
 	if r := byTool["Read"]; r.Calls != 3 || r.ResultBytes != 900 {
 		t.Errorf("Read = %+v, want {Calls:3 ResultBytes:900}", r)
 	}
 	if r := byTool["Bash"]; r.Calls != 1 || r.ResultBytes != 50 {
 		t.Errorf("Bash = %+v, want {Calls:1 ResultBytes:50}", r)
+	}
+}
+
+// TestReplaceToolUsage_DedupesAcrossResumedSessions is the regression test
+// for the bug code review found: a resumed session replays its prior
+// tool_use/tool_result lines verbatim (confirmed on a real corpus - 325 of
+// 1203 tool_use ids shared between an original session and its resumed
+// continuation), and an earlier version of this table had no per-event
+// identity to dedupe a replay against, so it double-counted every replayed
+// call. Same shape as TestInsertCompactions_DedupesAcrossResumedSessions.
+func TestReplaceToolUsage_DedupesAcrossResumedSessions(t *testing.T) {
+	db := openTestDB(t)
+	original := insertTestRun(t, db, "original-session.jsonl")
+	resumed := insertTestRun(t, db, "resumed-session.jsonl")
+
+	shared := ingest.ToolUsageEvent{ToolUseID: "shared-call", ToolName: "Read", ResultBytes: 1000}
+	if err := db.ReplaceToolUsage(original, []ingest.ToolUsageEvent{shared}); err != nil {
+		t.Fatal(err)
+	}
+	// The resumed session's own file replays the same call, plus one
+	// genuinely new call that happened after resuming.
+	newCall := ingest.ToolUsageEvent{ToolUseID: "new-after-resume", ToolName: "Read", ResultBytes: 500}
+	if err := db.ReplaceToolUsage(resumed, []ingest.ToolUsageEvent{shared, newCall}); err != nil {
+		t.Fatal(err)
+	}
+
+	occ, err := db.Occupancy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(occ.ByTool) != 1 {
+		t.Fatalf("ByTool = %+v, want exactly one Read row", occ.ByTool)
+	}
+	// 2 calls (shared once, new once), 1500 bytes - not 3 calls / 2500 bytes,
+	// which is what double-counting the shared call would produce.
+	if occ.ByTool[0].Calls != 2 || occ.ByTool[0].ResultBytes != 1500 {
+		t.Errorf("Read = %+v, want {Calls:2 ResultBytes:1500}", occ.ByTool[0])
+	}
+
+	// Re-inserting the same run's own events again (a re-ingest after the
+	// file merely grew) must stay idempotent too.
+	if err := db.ReplaceToolUsage(resumed, []ingest.ToolUsageEvent{shared, newCall}); err != nil {
+		t.Fatal(err)
+	}
+	occ2, err := db.Occupancy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if occ2.ByTool[0].Calls != 2 || occ2.ByTool[0].ResultBytes != 1500 {
+		t.Errorf("after re-ingest, Read = %+v, want {Calls:2 ResultBytes:1500} (re-inserting must not duplicate)", occ2.ByTool[0])
 	}
 }
 
@@ -118,12 +170,15 @@ func TestInsertCompactions_DedupesAcrossResumedSessions(t *testing.T) {
 func TestOccupancy_BucketRollup(t *testing.T) {
 	db := openTestDB(t)
 	id := insertTestRun(t, db, "run-a.jsonl")
-	if err := db.ReplaceToolUsage(id, map[string]ingest.ToolUsageStat{
-		"Read":                               {Calls: 2, ResultBytes: 200},
-		"Edit":                               {Calls: 1, ResultBytes: 50},
-		"Bash":                               {Calls: 3, ResultBytes: 30},
-		"mcp__claude_ai_Drive__search_files": {Calls: 1, ResultBytes: 400},
-		"SomeUnclassifiedTool":               {Calls: 1, ResultBytes: 10},
+	if err := db.ReplaceToolUsage(id, []ingest.ToolUsageEvent{
+		{ToolUseID: "t1", ToolName: "Read", ResultBytes: 100},
+		{ToolUseID: "t2", ToolName: "Read", ResultBytes: 100},
+		{ToolUseID: "t3", ToolName: "Edit", ResultBytes: 50},
+		{ToolUseID: "t4", ToolName: "Bash", ResultBytes: 10},
+		{ToolUseID: "t5", ToolName: "Bash", ResultBytes: 10},
+		{ToolUseID: "t6", ToolName: "Bash", ResultBytes: 10},
+		{ToolUseID: "t7", ToolName: "mcp__claude_ai_Drive__search_files", ResultBytes: 400},
+		{ToolUseID: "t8", ToolName: "SomeUnclassifiedTool", ResultBytes: 10},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -174,10 +229,10 @@ func TestOccupancy_LaneFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ReplaceToolUsage(idA, map[string]ingest.ToolUsageStat{"Read": {Calls: 1, ResultBytes: 100}}); err != nil {
+	if err := db.ReplaceToolUsage(idA, []ingest.ToolUsageEvent{{ToolUseID: "t1", ToolName: "Read", ResultBytes: 100}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ReplaceToolUsage(idB, map[string]ingest.ToolUsageStat{"Bash": {Calls: 1, ResultBytes: 200}}); err != nil {
+	if err := db.ReplaceToolUsage(idB, []ingest.ToolUsageEvent{{ToolUseID: "t2", ToolName: "Bash", ResultBytes: 200}}); err != nil {
 		t.Fatal(err)
 	}
 

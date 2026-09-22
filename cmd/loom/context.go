@@ -49,24 +49,28 @@ func printOccupancy(r ledger.OccupancyReport, lane string) {
 		fmt.Printf("Lane: %s\n\n", ingest.LaneDisplay(lane))
 	}
 
-	if len(r.ByTool) == 0 {
-		fmt.Println("No tool output recorded yet. Run `loom report` to ingest.")
+	if len(r.ByTool) == 0 && r.CompactionCount == 0 {
+		fmt.Println("Nothing recorded yet. Run `loom report` to ingest.")
 		return
 	}
 
-	fmt.Println("Tool output, by bucket:")
-	for _, b := range r.ByBucket {
-		fmt.Printf("  %-14s %8d calls  %12s\n", b.ToolName, b.Calls, formatBytes(b.ResultBytes))
-	}
+	if len(r.ByTool) == 0 {
+		fmt.Println("Tool output: none recorded.")
+	} else {
+		fmt.Println("Tool output, by bucket:")
+		for _, b := range r.ByBucket {
+			fmt.Printf("  %-14s %8d calls  %12s\n", b.ToolName, b.Calls, formatBytes(b.ResultBytes))
+		}
 
-	fmt.Println()
-	fmt.Println("Tool output, by tool (top 10):")
-	n := len(r.ByTool)
-	if n > 10 {
-		n = 10
-	}
-	for _, t := range r.ByTool[:n] {
-		fmt.Printf("  %-30s %8d calls  %12s\n", t.ToolName, t.Calls, formatBytes(t.ResultBytes))
+		fmt.Println()
+		fmt.Println("Tool output, by tool (top 10):")
+		n := len(r.ByTool)
+		if n > 10 {
+			n = 10
+		}
+		for _, t := range r.ByTool[:n] {
+			fmt.Printf("  %-30s %8d calls  %12s\n", t.ToolName, t.Calls, formatBytes(t.ResultBytes))
+		}
 	}
 
 	fmt.Println()

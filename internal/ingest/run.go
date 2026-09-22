@@ -21,17 +21,25 @@ import (
 // out. See docs/transcript-schema.md.
 const syntheticModel = "<synthetic>"
 
-// unknownTool is the ToolUsage bucket for a tool_result whose matching
+// UnknownTool is the ToolUsage bucket for a tool_result whose matching
 // tool_use block was not seen in this file - the call happened in a
 // transcript this file doesn't contain (e.g. before a resume). Attributed
 // here rather than dropped, so the byte count is never silently lost.
-const unknownTool = "(unknown)"
+// Exported so internal/ledger's bucket classifier can reference this value
+// directly rather than keep its own hand-copied string in sync by comment
+// alone (found drifting apart was never caught by a test: occupancy_test.go
+// only exercised hand-built values, never a real ingest-produced one).
+const UnknownTool = "(unknown)"
 
-// ToolUsageStat aggregates one tool's calls and result size within a run.
-// ResultBytes is a measured byte count, never a token estimate - see
+// ToolUsageEvent is one tool_result, kept as its own row rather than
+// pre-aggregated into a per-tool count: ToolUseID is the identity a
+// resumed session's replayed transcript gets deduped against at the ledger
+// layer (docs/transcript-schema.md - the same reasoning as CompactionEvent's
+// UUID). ResultBytes is a measured byte count, never a token estimate - see
 // docs/design.md, B7b, "bytes are not tokens".
-type ToolUsageStat struct {
-	Calls       int
+type ToolUsageEvent struct {
+	ToolUseID   string
+	ToolName    string
 	ResultBytes int64
 }
 
@@ -70,10 +78,11 @@ type RunSummary struct {
 	// spawnDepth field on the .meta.json companion).
 	AgentReconciliations map[string]AgentUsage
 
-	// ToolUsage aggregates tool_result byte counts by the tool that produced
-	// them (B7b). Keyed by tool name, resolved via the matching tool_use's
-	// id - see docs/transcript-schema.md, "tool_use / tool_result".
-	ToolUsage map[string]ToolUsageStat
+	// ToolUsage is every tool_result this file recorded (B7b), one entry per
+	// call - not pre-aggregated by tool name, so the ledger layer can dedupe
+	// on each event's own ToolUseID before aggregating. See
+	// docs/transcript-schema.md, "tool_use / tool_result".
+	ToolUsage []ToolUsageEvent
 
 	// Compactions is every compact_boundary this file recorded, in file
 	// order. Cross-file dedup - a resumed session replays its prior
@@ -81,14 +90,13 @@ type RunSummary struct {
 	// each event's UUID; see docs/transcript-schema.md.
 	Compactions []CompactionEvent
 
-	// SkillTouches and FileTouches are issue #39's raw usage counts, keyed
-	// by the signal itself (a skill name, or a file path) rather than by
-	// artifact path - resolving a skill name to the artifact it names, and
-	// filtering file paths to ones matching a currently discovered
-	// artifact, both happen at the ledger layer. Neither counts a mention
-	// in message text; see Event.SkillInvocations.
-	SkillTouches map[string]int
-	FileTouches  map[string]int
+	// SkillTouches and FileTouches are issue #39's raw usage signals, one
+	// entry per tool_use block rather than pre-aggregated by name/path - the
+	// ledger layer resolves each to an artifact path and dedupes on ToolUseID
+	// before counting, the same reasoning as ToolUsage above. Neither counts
+	// a mention in message text; see Event.SkillInvocations.
+	SkillTouches []ArtifactTouch
+	FileTouches  []ArtifactTouch
 
 	// countedMessages tracks which message.id values have already had their
 	// usage added, so one API response written across several transcript
@@ -120,9 +128,6 @@ func IngestFile(path string) (RunSummary, error) {
 		Path:                 path,
 		Kind:                 kindForPath(path),
 		AgentReconciliations: map[string]AgentUsage{},
-		ToolUsage:            map[string]ToolUsageStat{},
-		SkillTouches:         map[string]int{},
-		FileTouches:          map[string]int{},
 		countedMessages:      map[string]struct{}{},
 		toolNames:            map[string]string{},
 	}
@@ -229,24 +234,19 @@ func applyEvent(rs *RunSummary, ev Event) {
 	for _, tr := range ev.ToolResults {
 		name := rs.toolNames[tr.ToolUseID]
 		if name == "" {
-			name = unknownTool
+			name = UnknownTool
 		}
-		stat := rs.ToolUsage[name]
-		stat.Calls++
-		stat.ResultBytes += tr.Bytes
-		rs.ToolUsage[name] = stat
+		rs.ToolUsage = append(rs.ToolUsage, ToolUsageEvent{
+			ToolUseID: tr.ToolUseID, ToolName: name, ResultBytes: tr.Bytes,
+		})
 	}
 
 	if ev.Compaction != nil {
 		rs.Compactions = append(rs.Compactions, *ev.Compaction)
 	}
 
-	for _, s := range ev.SkillInvocations {
-		rs.SkillTouches[s]++
-	}
-	for _, f := range ev.FileTouches {
-		rs.FileTouches[f]++
-	}
+	rs.SkillTouches = append(rs.SkillTouches, ev.SkillInvocations...)
+	rs.FileTouches = append(rs.FileTouches, ev.FileTouches...)
 }
 
 func kindForPath(path string) string {

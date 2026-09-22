@@ -27,9 +27,15 @@ func TestNoContentStored(t *testing.T) {
 	}
 	// Sanity check the fixture actually contains the secret this test looks
 	// for, or the rest of this test would pass for the wrong reason.
-	if rs.ToolUsage["Read"].ResultBytes != int64(len(plantedSecret)) {
+	var readBytes int64
+	for _, e := range rs.ToolUsage {
+		if e.ToolName == "Read" {
+			readBytes = e.ResultBytes
+		}
+	}
+	if readBytes != int64(len(plantedSecret)) {
 		t.Fatalf("fixture drifted: Read.ResultBytes = %d, want len(plantedSecret) = %d",
-			rs.ToolUsage["Read"].ResultBytes, len(plantedSecret))
+			readBytes, len(plantedSecret))
 	}
 
 	db := openTestDB(t)

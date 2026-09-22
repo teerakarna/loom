@@ -16,12 +16,16 @@ func (d *DB) RunIDByPath(path string) (int64, error) {
 	return id, err
 }
 
-// ReplaceToolUsage writes runID's tool_usage rows, replacing whatever was
-// there before. A full replace, not an upsert-and-accumulate: usage is
-// recomputed from a full re-read of the file every ingest (see
-// ledger.NeedsIngest), so the stored rows must reflect that fresh count
-// exactly, the same contract InsertRun keeps for the runs table itself.
-func (d *DB) ReplaceToolUsage(runID int64, usage map[string]ingest.ToolUsageStat) error {
+// ReplaceToolUsage writes runID's tool_usage rows, one per event, replacing
+// whatever this run previously owned. The DELETE covers only rows this
+// run_id owns, so a re-ingest of a grown file rebuilds cleanly; the
+// ON CONFLICT(tool_use_id) DO NOTHING on insert is what stops a resumed
+// session's replayed events from being recounted under a second run_id -
+// first-seen keeps ownership, the same rule InsertCompactions uses for
+// boundary_uuid. Found missing by code review: an earlier version
+// aggregated calls/bytes per tool name with no per-event identity to dedupe
+// against, and double-counted every tool call a resumed session replayed.
+func (d *DB) ReplaceToolUsage(runID int64, events []ingest.ToolUsageEvent) error {
 	tx, err := d.sql.Begin()
 	if err != nil {
 		return err
@@ -31,13 +35,16 @@ func (d *DB) ReplaceToolUsage(runID int64, usage map[string]ingest.ToolUsageStat
 	if _, err := tx.Exec(`DELETE FROM tool_usage WHERE run_id = ?`, runID); err != nil {
 		return err
 	}
-	stmt, err := tx.Prepare(`INSERT INTO tool_usage (run_id, tool_name, calls, result_bytes) VALUES (?, ?, ?, ?)`)
+	stmt, err := tx.Prepare(`
+		INSERT INTO tool_usage (tool_use_id, run_id, tool_name, result_bytes)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(tool_use_id) DO NOTHING`)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = stmt.Close() }()
-	for name, stat := range usage {
-		if _, err := stmt.Exec(runID, name, stat.Calls, stat.ResultBytes); err != nil {
+	for _, ev := range events {
+		if _, err := stmt.Exec(ev.ToolUseID, runID, ev.ToolName, ev.ResultBytes); err != nil {
 			return err
 		}
 	}
@@ -132,17 +139,12 @@ func bucketFor(name string) string {
 		name == "TaskGet" || name == "TaskStop" || name == "ListAgents" || name == "SendMessage" ||
 		name == "Monitor" || name == "ScheduleWakeup":
 		return "delegation"
-	case name == unknownToolLabel:
-		return unknownToolLabel
+	case name == ingest.UnknownTool:
+		return ingest.UnknownTool
 	default:
 		return "other"
 	}
 }
-
-// unknownToolLabel mirrors internal/ingest's unexported unknownTool constant.
-// Kept as its own copy rather than exporting ingest's - the two packages
-// should not need to agree on more surface area than this one string.
-const unknownToolLabel = "(unknown)"
 
 // Occupancy computes the whole-ledger occupancy report. ReportOccupancyForLane
 // narrows the same report to one lane, same split as Report/ReportForLane.
@@ -160,7 +162,7 @@ func (d *DB) occupancy(lane string) (OccupancyReport, error) {
 	}
 
 	rows, err := d.sql.Query(`
-		SELECT tu.tool_name, COALESCE(SUM(tu.calls),0), COALESCE(SUM(tu.result_bytes),0)
+		SELECT tu.tool_name, COUNT(*), COALESCE(SUM(tu.result_bytes),0)
 		FROM tool_usage tu JOIN runs r ON r.id = tu.run_id`+where+`
 		GROUP BY tu.tool_name ORDER BY SUM(tu.result_bytes) DESC`, args...)
 	if err != nil {

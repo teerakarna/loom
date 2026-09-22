@@ -110,7 +110,7 @@ func TestRetireNotProposedWhenRecentlyUsed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ReplaceArtifactUsage(runID, map[string]int{"/s/used.md": 1}); err != nil {
+	if err := db.ReplaceArtifactUsage(runID, []ledger.ResolvedTouch{{ToolUseID: "t1", ArtifactPath: "/s/used.md"}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -120,6 +120,56 @@ func TestRetireNotProposedWhenRecentlyUsed(t *testing.T) {
 	}
 	if len(ps) != 0 {
 		t.Errorf("got %+v, want no proposals - this artifact was used an hour ago", ps)
+	}
+}
+
+// TestRetireNotProposedForActivelyInvokedAgent is the regression test for a
+// bug code review found: docs/design.md claims agent usage needs no new
+// signal because runs.agent_type already exists (B3a), but
+// retireStaleArtifacts never actually checked it - only the artifact_usage
+// join (Skill/Read/Edit/Write signals, which an Agent tool_use is none of).
+// A custom agent artifact with a stale first_seen but real, recent runs
+// under its agent_type must not be proposed for retirement.
+func TestRetireNotProposedForActivelyInvokedAgent(t *testing.T) {
+	db := openDB(t)
+	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "agent", Path: "/agents/reviewer.md", Name: "reviewer"},
+		now.Add(-StaleAfter-48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertRun(ledger.RunRecord{
+		Path: "/run/reviewer-1.jsonl", Kind: "agent", AgentType: "reviewer", StartedAt: now.Add(-1 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ps, err := Generate(db, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != 0 {
+		t.Errorf("got %+v, want no proposals - this agent was invoked an hour ago", ps)
+	}
+}
+
+// TestRetireProposedForAgentNeverInvoked is the flip side: an agent artifact
+// discovered on disk but with no runs recorded under its agent_type falls
+// back to first_seen, same as any other never-used artifact.
+func TestRetireProposedForAgentNeverInvoked(t *testing.T) {
+	db := openDB(t)
+	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "agent", Path: "/agents/unused.md", Name: "unused"},
+		now.Add(-StaleAfter-48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	ps, err := Generate(db, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != 1 || ps[0].Subject != "/agents/unused.md" {
+		t.Fatalf("got %+v, want one retire proposal for /agents/unused.md", ps)
+	}
+	if everUsed, _ := ps[0].Evidence["ever_used"].(bool); everUsed {
+		t.Error("evidence must say this agent was never used")
 	}
 }
 

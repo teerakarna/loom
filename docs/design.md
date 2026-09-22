@@ -1027,6 +1027,36 @@ corpus earlier - see "What the measurements settled" above). Consistent with the
 figures this section was scoped against, which is the actual test of whether the tables mean what
 they claim to.
 
+**A real correctness bug survived that "consistent with the hand-measured figures" check, and
+`/code-review high` is what found it, not the tests or the dogfooding above.** `tool_usage` and
+`artifact_usage` were both written as one row per `(run_id, tool_name)` / `(run_id, artifact_path)`,
+aggregated at ingest time - with no per-event identity, unlike `compactions`, which had
+`boundary_uuid` from the start specifically to dedupe a resumed session's replayed history. Ordinary
+`tool_use`/`tool_result` lines turn out to replay the same way compact_boundary records do -
+confirmed directly: 325 of 1203 `tool_use` ids shared between one real session and its resumed
+continuation - so both tables double-counted every call a resumed session's transcript replayed.
+The Read/compaction figures quoted just above are themselves overstated by however much of this
+machine's corpus went through a resume, which was not separately measured.
+
+**Fixed by giving both tables the same identity `compactions` already had.** Each `tool_use` block
+carries its own globally unique `id`; `tool_usage`/`artifact_usage` now store one row per id
+(`tool_use_id` as the primary key, `ON CONFLICT DO NOTHING` on insert), aggregated at query time
+instead of at write time. A ledger built before this fix has the old, un-deduped shape; `migrate`
+drops and rebuilds both tables the next time `loom` opens it; rebuilt at the next `loom report`,
+which is the only reasonable trigger to backfill it, and see issue #49 for the gap that already sits
+under this exact situation.
+
+The same review pass, verified against the code before acting on any of it, found three more real
+issues in the same two features: `retireStaleArtifacts` never actually checked `runs.agent_type` for
+agent-kind artifacts, contradicting this section's own claim two paragraphs up that agent usage
+needs no new signal - a custom agent invoked constantly via the `Agent` tool could be proposed for
+retirement as "never used" purely because that tool isn't Skill/Read/Edit/Write. `loom context`
+printed nothing about compaction at all when a lane had compactions but no tool-output rows, because
+its early return covered both sections at once. `BuildArtifactLookup` had no `ORDER BY`, so two
+artifacts sharing a name (a project-level skill overriding a global one - `discover.go` scans both
+dirs by design) resolved to whichever row SQLite felt like returning that call. All three fixed
+alongside the dedup fix, each with its own regression test reproducing the original failure shape.
+
 #### B7c. Promotion rules as read-only proposals (#41)
 
 Turn the promotion-rules table into code emitting `promote_*` proposals, each carrying evidence and a
@@ -1127,7 +1157,10 @@ B7d last so surfacing earns its place on measurement the way B5's did.
   that inference was tried and was wrong 42 times out of 42.
 - **Resumed sessions do not double-count.** Ingest two transcripts where the second resumes the
   first and carries the same compaction boundary; assert the event is counted once. Same shape as the
-  2.12x over-count, so it gets its own fixture.
+  2.12x over-count, so it gets its own fixture. Not compaction-only: `tool_usage` and
+  `artifact_usage` need the identical test, on the identical shape of evidence (a `tool_use` id
+  shared between two runs) - missing here is exactly what let the double-count into both tables
+  in the first place, caught only once by code review, not by this list.
 - **Bytes stay bytes.** Assert no stored column holds a token estimate. The conversion belongs at the
   display edge, labelled, or downstream arithmetic inherits an error it cannot see.
 - **The privacy property survives the migration.** The planted-secret test must pass unchanged after

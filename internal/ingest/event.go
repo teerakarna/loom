@@ -59,6 +59,21 @@ type ToolResult struct {
 	Bytes     int64
 }
 
+// ArtifactTouch is one tool_use block that issue #39 counts as an artifact
+// usage signal: a Skill invocation, or a Read/Edit/Write call. ToolUseID is
+// the block's own id - the identity a resumed session's replayed history
+// gets deduped on at the ledger layer, the same pattern CompactionEvent's
+// UUID already uses (confirmed on a real corpus: ordinary tool_use blocks
+// are replayed verbatim on resume just like compact_boundary records are -
+// found by code review, not by the tests this was first built and shipped
+// with). Signal is a skill name (from Skill) or a file path (from
+// Read/Edit/Write); resolving it to the artifact it names happens at the
+// ledger layer, which is what knows what is currently discovered.
+type ArtifactTouch struct {
+	ToolUseID string
+	Signal    string
+}
+
 // CompactionEvent is one compact_boundary system record, read directly off
 // the host's own accounting rather than inferred (docs/design.md, B7b).
 // UUID is the record's own uuid field - a resumed session's transcript
@@ -131,9 +146,9 @@ type Event struct {
 	// SkillInvocations holds a Skill tool_use's "skill" input verbatim -
 	// resolving it to the artifact it names happens at the ledger layer,
 	// which is what knows what is currently discovered; ingest does not.
-	SkillInvocations []string
+	SkillInvocations []ArtifactTouch
 	// FileTouches holds a Read/Edit/Write tool_use's "file_path" input.
 	// Already a path, so it can be matched against a discovered artifact's
 	// Path by exact equality with no resolution step.
-	FileTouches []string
+	FileTouches []ArtifactTouch
 }

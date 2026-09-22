@@ -237,10 +237,14 @@ func retireStaleArtifacts(db *ledger.DB, now time.Time) ([]Proposal, error) {
 	if err != nil {
 		return nil, err
 	}
+	agentUsage, err := db.AgentTypeLastUsed()
+	if err != nil {
+		return nil, err
+	}
 
 	var out []Proposal
 	for _, a := range rows {
-		clock, everUsed, err := lastUsedOrFirstSeen(a, usage)
+		clock, everUsed, err := lastUsedOrFirstSeen(a, usage, agentUsage, now)
 		if err != nil {
 			continue // unparseable timestamp is not grounds for a deletion suggestion
 		}
@@ -279,8 +283,39 @@ func retireStaleArtifacts(db *ledger.DB, now time.Time) ([]Proposal, error) {
 // staleness against for a, and whether any run has ever used it (issue
 // #39's join). Preferring the last-used time over first_seen is the fix for
 // issue #38.
-func lastUsedOrFirstSeen(a ledger.ArtifactRow, usage map[string]ledger.ArtifactUsageSummary) (time.Time, bool, error) {
-	if u, ok := usage[a.Path]; ok && u.LastUsedAt != "" {
+//
+// Agent-kind artifacts are checked against agentUsage (runs.agent_type)
+// rather than the artifact_usage join: runs.agent_type already existed for
+// B3a's policy attribution, so agent usage needs no new signal -
+// docs/design.md said so, and this is where that claim is actually wired
+// in. Found missing by code review: it was documented but never checked
+// here, so a custom agent invoked constantly via the Agent tool (never a
+// Skill/Read/Edit/Write call, so never an artifact_usage row) could be
+// proposed for retirement as "never used" while in active use.
+//
+// A usage row with real evidence (Uses > 0 / an agent_type with a run) but
+// no parseable timestamp - every contributing run had unparseable
+// started_at and ended_at, an edge case rather than the common path - is
+// treated as used just now, not as never used: real evidence of use with
+// an unmeasurable age is safer read as "don't know how stale" than
+// "definitely stale".
+func lastUsedOrFirstSeen(a ledger.ArtifactRow, usage map[string]ledger.ArtifactUsageSummary,
+	agentUsage map[string]string, now time.Time) (time.Time, bool, error) {
+	if a.Kind == "agent" {
+		if lastUsed, ok := agentUsage[a.Name]; ok {
+			if lastUsed == "" {
+				return now, true, nil
+			}
+			t, err := time.Parse(time.RFC3339, lastUsed)
+			return t, true, err
+		}
+		t, err := time.Parse(time.RFC3339, a.FirstSeen)
+		return t, false, err
+	}
+	if u, ok := usage[a.Path]; ok {
+		if u.LastUsedAt == "" {
+			return now, true, nil
+		}
 		t, err := time.Parse(time.RFC3339, u.LastUsedAt)
 		return t, true, err
 	}

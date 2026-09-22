@@ -95,7 +95,10 @@ func TestQueryLedgerOccupancyDimension(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ReplaceToolUsage(id, map[string]ingest.ToolUsageStat{"Read": {Calls: 2, ResultBytes: 500}}); err != nil {
+	if err := db.ReplaceToolUsage(id, []ingest.ToolUsageEvent{
+		{ToolUseID: "t1", ToolName: "Read", ResultBytes: 250},
+		{ToolUseID: "t2", ToolName: "Read", ResultBytes: 250},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.InsertCompactions(id, []ingest.CompactionEvent{
