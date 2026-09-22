@@ -1107,7 +1107,7 @@ substantive - e.g. `feedback_working_preferences` renamed to `working-preference
 without the file following - 10 a systematic underscore-vs-hyphen convention difference, both real
 drift by the same definition, not distinguished further since the design doc's own rule draws no
 line between them). `loom propose` on the clean, reset local ledger returned exactly 20 - the
-generation cap doing its job, not a coincidence.
+generation cap doing its job.
 
 **A real bug found and fixed before this shipped, not after.** The MCP `list_proposals` handler
 originally called `os.UserHomeDir()` inside the request handler itself. That made every test of it
@@ -1118,6 +1118,41 @@ generator started finding real findings on the developer machine that ran it. Fi
 `os.UserHomeDir()` call) rather than per-request, and test setup now passes an isolated `t.TempDir()`.
 Caught by running the test suite, the same discipline that found B7a/B7b's resumed-session
 double-count - the tests are what caught this one, which is the system working as intended.
+
+**Then `/code-review high` was run against the PR before merging, not after, for the first time this
+project has done that.** Three more real, verified bugs, all fixed in the same PR:
+
+- **A permission problem on one project's memory store took the whole scan down.**
+  `DiscoverAllMemory` only tolerated `os.IsNotExist` on a per-store read, propagating anything else -
+  and because this function scans dozens of stores at once, unlike the single-project `Discover()`,
+  the blast radius of one bad store was every other store's findings too, and beyond that everything
+  `list_proposals`/`loom propose` return, including proposals with nothing to do with memory. A
+  regression against constraint 7 in spirit even though the specific pattern (only special-casing
+  `IsNotExist`) already existed in `scanMarkdownDir` - it mattered here because of the fan-out, not
+  because the pattern itself was new. Fixed: any per-store read error now skips that store, not the
+  scan; `MemoryIndex`'s signature dropped its `error` return entirely, since every failure mode it
+  can hit now collapses to the same empty-index answer.
+- **`detectMemoryDuplicates`'s output order was randomized per call**, from ranging directly over a
+  Go map keyed by content hash. Harmless until the total findings across every check exceeded the
+  20-proposal cap - the exact situation this machine's corpus produces - at which point which subset
+  of duplicate findings actually got a slot depended on map iteration order, so two back-to-back runs
+  against identical, unchanged disk state could persist a different set each time. The "not a
+  coincidence" claim above was true of the count, not yet of which 20. Fixed with an explicit sort by
+  subject before returning.
+- **The subdirectory memory convention (`topic/SKILL.md`) was invisible to every B7c check.**
+  `DiscoverAllMemory` unconditionally skipped directory entries, while `scanMarkdownDir` - used for
+  this exact kind in the single-project `Discover()` path - already treats a subdirectory containing
+  its own `SKILL.md` as an equally valid memory artifact. A `[[link]]` to such an artifact would have
+  been reported `broken_link` even though the target genuinely existed. Fixed by mirroring
+  `scanMarkdownDir`'s two-shape handling.
+
+Two findings from the same pass considered and not fixed, reasoning kept rather than the conclusion
+alone: no caching of the per-call filesystem walk (matches `Discover()`'s own existing, uncached
+behaviour exactly - not a regression, and premature caching risks a staleness bug bigger than the
+walk cost at this corpus's measured scale); and a `ReadFile`-then-separate-`Open` pair in
+`readMemoryFile` that could theoretically observe two different versions of a file edited mid-scan -
+a real but vanishingly narrow race, self-correcting on the next run, not worth the complexity of a
+single-read refactor for what it would prevent.
 
 **Not in B7c: semantic staleness.** Tested here and rejected on measurement. Extracting the claims an
 artifact makes and checking whether they still resolve produced 44 candidates and 6 flags, all 6 false

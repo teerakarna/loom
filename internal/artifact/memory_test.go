@@ -1,6 +1,7 @@
 package artifact
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -82,10 +83,7 @@ func TestMemoryIndex(t *testing.T) {
 	writeFile(t, filepath.Join(home, ".claude", "projects", "store-a", "memory", "MEMORY.md"),
 		"# Memory Index\n\n- [A fact](a.md) - hook\n- [Another](b-c.md) - hook\n")
 
-	idx, err := MemoryIndex(home, "store-a")
-	if err != nil {
-		t.Fatal(err)
-	}
+	idx := MemoryIndex(home, "store-a")
 	if !idx["a"] || !idx["b-c"] {
 		t.Errorf("idx = %+v, want a and b-c present", idx)
 	}
@@ -96,11 +94,70 @@ func TestMemoryIndex(t *testing.T) {
 
 func TestMemoryIndex_MissingIndexIsEmptyNotError(t *testing.T) {
 	home := t.TempDir()
-	idx, err := MemoryIndex(home, "no-such-store")
+	idx := MemoryIndex(home, "no-such-store")
+	if len(idx) != 0 {
+		t.Errorf("idx = %+v, want empty", idx)
+	}
+}
+
+// TestDiscoverAllMemory_OneUnreadableStoreDoesNotFailTheScan is the
+// regression test for a bug code review found: an earlier version only
+// tolerated os.IsNotExist on a per-store read, so any other error (a
+// permission problem, say) on one store's memory directory propagated all
+// the way up and failed the whole cross-project scan - taking every other
+// store's findings down with it, and beyond that everything list_proposals
+// returns, including proposals with nothing to do with memory. Constraint
+// 7 (degrade, never block) means one bad store must not do that.
+func TestDiscoverAllMemory_OneUnreadableStoreDoesNotFailTheScan(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".claude", "projects", "good-store", "memory", "a.md"),
+		"---\nname: a\n---\nReadable.")
+
+	// A "memory" entry that is a file, not a directory - os.ReadDir on it
+	// fails with ENOTDIR, the same shape a permission error takes: a
+	// real, non-IsNotExist error on one store's own memory path.
+	badStore := filepath.Join(home, ".claude", "projects", "bad-store", "memory")
+	writeFile(t, filepath.Join(home, ".claude", "projects", "bad-store", "memory-placeholder"), "")
+	if err := os.MkdirAll(filepath.Dir(badStore), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(badStore, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := DiscoverAllMemory(home)
+	if err != nil {
+		t.Fatalf("DiscoverAllMemory returned an error, want the bad store skipped: %v", err)
+	}
+	if len(files) != 1 || files[0].Store != "good-store" {
+		t.Errorf("got %+v, want the good store's file, unaffected by the bad one", files)
+	}
+}
+
+// TestDiscoverAllMemory_SubdirectoryConvention is the regression test for a
+// bug code review found: an earlier version unconditionally skipped
+// directory entries, so a memory artifact using the "name/SKILL.md"
+// subdirectory convention (a real convention scanMarkdownDir already
+// recognizes for this exact kind in the single-project Discover path) was
+// invisible to every B7c check - including producing a false broken_link
+// report against a [[link]] whose target genuinely existed this way.
+func TestDiscoverAllMemory_SubdirectoryConvention(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".claude", "projects", "store-a", "memory", "deep-topic", "SKILL.md"),
+		"---\nname: deep-topic\n---\nBody.")
+	// A subdirectory with no SKILL.md is not a memory artifact - same rule
+	// scanMarkdownDir applies.
+	writeFile(t, filepath.Join(home, ".claude", "projects", "store-a", "memory", "not-a-topic", "notes.md"),
+		"stray file, not SKILL.md")
+
+	files, err := DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(idx) != 0 {
-		t.Errorf("idx = %+v, want empty", idx)
+	if len(files) != 1 {
+		t.Fatalf("got %+v, want exactly one file (deep-topic/SKILL.md)", files)
+	}
+	if files[0].Filename != "deep-topic" {
+		t.Errorf("Filename = %q, want %q - the directory's name, not the literal SKILL.md basename", files[0].Filename, "deep-topic")
 	}
 }

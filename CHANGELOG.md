@@ -79,6 +79,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Three bugs in B7c's memory checks, found by running `/code-review high` against the PR before
+  merging rather than after - the first time this project has done that. `DiscoverAllMemory`
+  propagated any per-store read error other than "missing", so one project with a permission
+  problem on its memory directory took every other store's findings down with it, and beyond that
+  everything `list_proposals`/`loom propose` return; now a bad store is skipped, not fatal, and
+  `MemoryIndex` dropped its `error` return entirely since every failure mode it can hit now
+  collapses to the same empty-index answer. `detectMemoryDuplicates` ranged directly over a Go map,
+  so its output order was randomized per call - harmless until the total findings exceeded the
+  20-proposal cap, at which point which subset of duplicates got a slot depended on map iteration
+  order; now sorted by subject before returning. The `topic/SKILL.md` subdirectory memory
+  convention (already recognized by the single-project `Discover()` path) was invisible to every
+  B7c check, including producing a false `broken_link` report against a target that genuinely
+  existed; `DiscoverAllMemory` now mirrors `scanMarkdownDir`'s two-shape handling.
+
 - `list_proposals`'s MCP handler resolved `os.UserHomeDir()` inside the request handler itself,
   which made every test of it non-hermetic - `go test` scanned whichever machine ran the suite's
   own real, private memory files once B7c's generator existed to find something there. Fixed by

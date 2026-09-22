@@ -96,10 +96,7 @@ func TestDetectUnreachableArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := detectUnreachableArtifacts(home, files)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := detectUnreachableArtifacts(home, files)
 	if len(got) != 1 || got[0].Evidence["filename"] != "orphan" {
 		t.Fatalf("got %+v, want exactly one unreachable finding for orphan", got)
 	}
@@ -113,10 +110,7 @@ func TestDetectUnreachableArtifacts_NoIndexMeansEveryFileUnreachable(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := detectUnreachableArtifacts(home, files)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := detectUnreachableArtifacts(home, files)
 	if len(got) != 1 {
 		t.Fatalf("got %+v, want the file unreachable - a missing index reaches nothing", got)
 	}
@@ -139,5 +133,45 @@ func TestGenerateMemoryFindings_MissingHomeIsNotError(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("got %+v, want none", got)
+	}
+}
+
+// TestDetectMemoryDuplicates_DeterministicOrder is the regression test for
+// a bug code review found: an earlier version ranged directly over a Go
+// map keyed by content hash, whose iteration order is randomized per call.
+// That mattered once the total findings across every B7c check exceeded
+// the pending-proposal cap (20): UpsertProposal accepts new subjects in
+// the order Store sees them, so two back-to-back runs against identical,
+// unchanged disk state could persist a different subset of duplicate
+// findings each time - contradicting Generate's own stated contract that
+// repeated runs do not reshuffle the list under a reader.
+func TestDetectMemoryDuplicates_DeterministicOrder(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{"aaa", "bbb", "ccc", "ddd", "eee"} {
+		for _, store := range []string{"store-1", "store-2", "store-3"} {
+			writeMemoryFile(t, home, store, name+".md",
+				"---\nname: "+name+"\n---\nContent for "+name)
+		}
+	}
+
+	files, err := artifact.DiscoverAllMemory(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := detectMemoryDuplicates(files)
+	if len(first) != 5 {
+		t.Fatalf("got %d duplicate proposals, want 5", len(first))
+	}
+	for i := 0; i < 20; i++ {
+		again := detectMemoryDuplicates(files)
+		if len(again) != len(first) {
+			t.Fatalf("run %d: got %d proposals, want %d", i, len(again), len(first))
+		}
+		for j := range first {
+			if again[j].Subject != first[j].Subject {
+				t.Fatalf("run %d: order changed at index %d: %q then %q", i, j, first[j].Subject, again[j].Subject)
+			}
+		}
 	}
 }
