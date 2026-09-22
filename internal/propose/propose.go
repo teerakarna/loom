@@ -212,39 +212,80 @@ func regressionReason(pol *ledger.PolicyRow, since ledger.AgentTypeStats) (strin
 	return "", false
 }
 
-// retireStaleArtifacts proposes retiring artifacts unseen for StaleAfter.
-// Evidence is the last-seen date, so re-running does not churn the hash, but
-// the artifact reappearing on disk does change it.
+// retireStaleArtifacts proposes retiring an artifact unused for StaleAfter.
+//
+// "Unused" is the last time a run actually touched it - issue #39's join -
+// falling back to first_seen for an artifact discovery has found but no run
+// has ever touched under usage tracking. first_seen is stable and never
+// reset by a later discovery pass, unlike last_seen.
+//
+// last_seen itself is never the clock here, on purpose: it is bumped by
+// UpsertArtifact on every discovery pass, so it resets every time `loom
+// advise` runs and can never reach the threshold for anything still on
+// disk. Before #39 that meant only a file already deleted from disk could
+// ever be proposed for retirement - the exact bug issue #38 recorded, found
+// by forcing an artifact's clock back and watching one `loom advise` erase
+// the evidence. last_seen still answers its own question correctly (is it
+// on disk - see MarkStaleArtifacts); it was never a valid answer to this
+// one.
 func retireStaleArtifacts(db *ledger.DB, now time.Time) ([]Proposal, error) {
 	rows, err := db.ListArtifacts()
+	if err != nil {
+		return nil, err
+	}
+	usage, err := db.UsageSummary()
 	if err != nil {
 		return nil, err
 	}
 
 	var out []Proposal
 	for _, a := range rows {
-		lastSeen, err := time.Parse(time.RFC3339, a.LastSeen)
+		clock, everUsed, err := lastUsedOrFirstSeen(a, usage)
 		if err != nil {
 			continue // unparseable timestamp is not grounds for a deletion suggestion
 		}
-		days := int(now.Sub(lastSeen).Hours() / 24)
-		if now.Sub(lastSeen) < StaleAfter {
+		if now.Sub(clock) < StaleAfter {
 			continue
 		}
+		days := int(now.Sub(clock).Hours() / 24)
+
+		onDisk := a.Status == "active"
+		rationale := "Loom will not delete it: this is a suggestion to review and remove yourself."
+		switch {
+		case !onDisk:
+			rationale = "Not found on disk by the last several discovery passes. " + rationale
+		case everUsed:
+			rationale = fmt.Sprintf("Still on disk, but no recorded run has used it in %d days. ", days) + rationale
+		default:
+			rationale = "Still on disk, but no recorded run has ever used it. " + rationale
+		}
+
 		out = append(out, Proposal{
 			Kind:    KindRetireArtifact,
 			Subject: a.Path,
 			Evidence: map[string]any{
 				"path": a.Path, "type": a.Kind, "name": a.Name,
-				"last_seen": a.LastSeen, "days_unseen": days,
+				"on_disk": onDisk, "ever_used": everUsed, "days_unused": days,
 			},
 			SampleSize: 0,
-			Summary:    fmt.Sprintf("retire %s %q, unseen for %d days", a.Kind, a.Name, days),
-			Rationale: "Not found on disk by the last several discovery passes. " +
-				"Loom will not delete it: this is a suggestion to review and remove yourself.",
+			Summary:    fmt.Sprintf("retire %s %q, unused for %d days", a.Kind, a.Name, days),
+			Rationale:  rationale,
 		})
 	}
 	return out, nil
+}
+
+// lastUsedOrFirstSeen returns the clock retireStaleArtifacts measures
+// staleness against for a, and whether any run has ever used it (issue
+// #39's join). Preferring the last-used time over first_seen is the fix for
+// issue #38.
+func lastUsedOrFirstSeen(a ledger.ArtifactRow, usage map[string]ledger.ArtifactUsageSummary) (time.Time, bool, error) {
+	if u, ok := usage[a.Path]; ok && u.LastUsedAt != "" {
+		t, err := time.Parse(time.RFC3339, u.LastUsedAt)
+		return t, true, err
+	}
+	t, err := time.Parse(time.RFC3339, a.FirstSeen)
+	return t, false, err
 }
 
 // pinModels proposes a deliberate model policy for agent types with enough

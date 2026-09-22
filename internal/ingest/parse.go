@@ -77,6 +77,18 @@ func parseAssistant(m map[string]any, ev *Event) {
 				if id != "" {
 					ev.ToolUses = append(ev.ToolUses, ToolUse{ID: id, Name: name})
 				}
+				if input, ok := b["input"].(map[string]any); ok {
+					switch name {
+					case "Skill":
+						if skill, _ := input["skill"].(string); skill != "" {
+							ev.SkillInvocations = append(ev.SkillInvocations, skill)
+						}
+					case "Read", "Edit", "Write":
+						if fp, _ := input["file_path"].(string); fp != "" {
+							ev.FileTouches = append(ev.FileTouches, fp)
+						}
+					}
+				}
 			}
 		}
 	}

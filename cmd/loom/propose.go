@@ -104,8 +104,8 @@ func runPropose(args []string) error {
 func summaryFor(p ledger.ProposalRow, ev map[string]any) string {
 	switch p.Kind {
 	case propose.KindRetireArtifact:
-		return fmt.Sprintf("retire %v %q, unseen for %v days",
-			ev["type"], ev["name"], ev["days_unseen"])
+		return fmt.Sprintf("retire %v %q, unused for %v days",
+			ev["type"], ev["name"], ev["days_unused"])
 	case propose.KindPinModel:
 		return fmt.Sprintf("pin %v to %v, measured over %v runs",
 			ev["agent_type"], ev["observed_model"], ev["runs"])
@@ -121,7 +121,15 @@ func summaryFor(p ledger.ProposalRow, ev map[string]any) string {
 func compactEvidence(ev map[string]any) string {
 	switch {
 	case ev["path"] != nil:
-		return fmt.Sprintf("%v (last seen %v)", ev["path"], ev["last_seen"])
+		state := "still on disk"
+		if onDisk, ok := ev["on_disk"].(bool); ok && !onDisk {
+			state = "gone from disk"
+		}
+		everUsed := "never used"
+		if u, ok := ev["ever_used"].(bool); ok && u {
+			everUsed = "used before"
+		}
+		return fmt.Sprintf("%v (%s, %s)", ev["path"], state, everUsed)
 	case ev["since_median_cost"] != nil:
 		return fmt.Sprintf("applied %v, %v runs since; median cost %.0f -> %.0f, denials %.2f -> %.2f",
 			ev["applied_at"], ev["runs_since"],

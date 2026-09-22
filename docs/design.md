@@ -923,7 +923,7 @@ and compaction pressure need only a tool name and a byte count. The join is per-
 is per-session and time-ordered. They are independent, which means **B7b can go before B7a** for
 faster signal, though B7a still gates every claim that uses the word "unused".
 
-#### B7a. Close the three credibility issues (#42, #39, #38)
+#### B7a. Close the three credibility issues (#42, #39, #38) - BUILT 2026-09-22
 
 Nothing else is worth building on an advisor whose central claim it cannot support. Three of five
 open issues undercut it: #39 means "unused" cannot be answered, #41 means every promotion rule is
@@ -936,6 +936,39 @@ still prose, #38 means retirement can never fire for an artifact that exists on 
 - **#39**, artifact-to-run join: record which discovered artifacts a run touched. Prerequisite for
   every staleness or disuse claim.
 - **#38**, retirement condition.
+
+**Measured before designing, not assumed.** String-matching an artifact's name or path against
+transcript content was tried by hand first and rejected on the same evidence the handover's worked
+example warned about: every session's system prompt lists every discovered skill's name and
+description whether it fires or not, and a `tool_result` can echo an artifact's name back as plain
+text from something unrelated (confirmed here: a `Read` of one file quoted a skill's name in
+passing, produced by this very machine). Both would have reproduced the near-identical count for
+every artifact the handover already flagged as a dead end.
+
+**#42 shipped as scoped.** `scanSkillDir` replaces `scanMarkdownDir` for skills only - agents, plans
+and memory keep the flat-file convention, which is correct for them. A flat `.md` in a skills
+directory is now `KindReference`, not `KindSkill`. Run against this machine's real skills directory:
+9 real skills, 1 reference - a leftover `records-management.md` sitting next to its own
+`records-management/SKILL.md`, exactly the ambiguity this issue was filed against, on this machine,
+not a hypothetical.
+
+**#39 shipped narrower than the credibility-issue framing implied, on the same measurement
+discipline B7b used.** Two structured signals only, both read from a `tool_use` block's own `input`
+field, never from message text: a `Skill` invocation's `skill` name, and a `Read`/`Edit`/`Write`
+call's `file_path`. Agent usage needed no new signal at all - `runs.agent_type` already existed for
+B3a's policy attribution, so it answers "was this agent invoked" by itself. Hook usage has no
+reliable transcript signal and is out of scope, the same conclusion B7b reached for hook output
+volume. A new `artifact_usage(run_id, artifact_path, uses)` table holds the result, resolved against
+the artifacts table at write time - a skill name or file path matching nothing currently discovered
+is dropped, not guessed at.
+
+**#38 turned out smaller than its own issue text once #39 existed.** No new column: retirement's
+staleness clock is `last_used` where `artifact_usage` has an entry for the path, falling back to
+`first_seen` - stable, never reset by a later discovery pass - when it does not. `last_seen` is
+untouched and keeps answering its own question (`MarkStaleArtifacts`, is it on disk). The regression
+test reproduces the original bug report exactly: discovery runs three times over weeks on an
+artifact nothing ever uses, staying on disk (`status = 'active'`) throughout, and the proposal now
+fires - which it could never do before, for anything still present.
 
 #### B7b. Occupancy metrics, and `loom context` - BUILT 2026-09-22
 

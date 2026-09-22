@@ -3,6 +3,7 @@ package ledger
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/teerakarna/loom/internal/ingest"
 )
@@ -51,7 +52,41 @@ func TestNoContentStored(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Also exercise B7a's artifact_usage table (#39): its raw signals come
+	// from tool_use input fields, but the fixture also plants both a skill
+	// name and a file path in plain tool_result text (see
+	// synthetic-artifact-usage.jsonl) - the same shape a planted secret
+	// would take if this join were ever built from message content instead
+	// of structured fields.
+	usageRS, err := ingest.IngestFile("../../testdata/synthetic-artifact-usage.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertArtifact(ArtifactRecord{Kind: "skill", Path: "/skills/example-skill/SKILL.md", Name: "example-skill"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertArtifact(ArtifactRecord{Kind: "plan", Path: "/workspace/.claude/plans/my-plan.md", Name: "my-plan"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertRun(RunRecord{Path: "synthetic-artifact-usage.jsonl", SessionID: usageRS.SessionID, Kind: usageRS.Kind}); err != nil {
+		t.Fatal(err)
+	}
+	usageID, err := db.RunIDByPath("synthetic-artifact-usage.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup, err := db.BuildArtifactLookup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceArtifactUsage(usageID, lookup.Resolve(usageRS.SkillTouches, usageRS.FileTouches)); err != nil {
+		t.Fatal(err)
+	}
+
 	assertNoSubstring(t, db, plantedSecret)
+	// The decoy text itself, planted in the second fixture's Bash tool_result
+	// specifically to prove it never gets stored anywhere as content.
+	assertNoSubstring(t, db, "must not count as usage")
 }
 
 // assertNoSubstring walks every table's every row and column and fails if

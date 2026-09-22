@@ -209,6 +209,38 @@ func TestIngestFile_ToolUsageByBytes(t *testing.T) {
 	}
 }
 
+// TestIngestFile_ArtifactUsageOnlyFromStructuredInput is B7a, issue #39: a
+// Skill tool_use's "skill" input and a Read/Edit/Write tool_use's
+// "file_path" input are the only two signals counted, and the fixture
+// deliberately repeats both the skill name and the file path as plain text
+// in a Bash command and its tool_result - the exact shape that inflated an
+// earlier attempt to a near-identical count for every artifact. Neither
+// decoy may move these counts.
+func TestIngestFile_ArtifactUsageOnlyFromStructuredInput(t *testing.T) {
+	rs, err := IngestFile("../../testdata/synthetic-artifact-usage.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := rs.SkillTouches["example-skill"]; got != 1 {
+		t.Errorf("SkillTouches[example-skill] = %d, want 1", got)
+	}
+	if len(rs.SkillTouches) != 1 {
+		t.Errorf("SkillTouches = %+v, want exactly one entry - the Bash decoy must not add one", rs.SkillTouches)
+	}
+
+	const path = "/workspace/.claude/plans/my-plan.md"
+	// Read once, Edit once, both on the same path: 2 total. The Bash
+	// command's own file_path-shaped text (a shell string, not a tool_use
+	// input field) must not add a third.
+	if got := rs.FileTouches[path]; got != 2 {
+		t.Errorf("FileTouches[%s] = %d, want 2 (one Read, one Edit)", path, got)
+	}
+	if len(rs.FileTouches) != 1 {
+		t.Errorf("FileTouches = %+v, want exactly one path", rs.FileTouches)
+	}
+}
+
 // TestIngestFile_CompactionReadNotGuessed is B7b: a compact_boundary record
 // is parsed directly off the host's own compactMetadata, never inferred from
 // a cache_read drop (that inference was tried and was wrong 42 times out of
