@@ -144,6 +144,21 @@ CREATE TABLE IF NOT EXISTS compactions (
 	                        -- not grounds for failing the whole insert
 );
 
+-- artifact_usage is B7a (#39): the join that lets "unused" be a question
+-- the ledger can answer. Two structured, ground-truth signals only - a
+-- Skill tool_use's skill name, resolved to the artifact it names, and a
+-- Read/Edit/Write tool_use's file_path, matched by exact equality - both
+-- resolved against the artifacts table at write time (see usage.go).
+-- Never a message-text mention: a skill's name and description appear in
+-- every session's system prompt whether invoked or not, and an earlier
+-- attempt at string-matching gave every artifact a near-identical count.
+CREATE TABLE IF NOT EXISTS artifact_usage (
+	run_id        INTEGER NOT NULL REFERENCES runs(id),
+	artifact_path TEXT NOT NULL REFERENCES artifacts(path),
+	uses          INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (run_id, artifact_path)
+);
+
 CREATE TABLE IF NOT EXISTS coordination (
 	id      INTEGER PRIMARY KEY AUTOINCREMENT,
 	kind    TEXT NOT NULL, -- "message" | "presence" | "task"

@@ -138,6 +138,14 @@ func ingestAll(db *ledger.DB, root string) error {
 		}
 	}
 
+	// Fetched once for the whole batch, not once per run: the artifacts
+	// table does not change mid-batch, and it is small (design doc
+	// "Ledger"). See ledger.BuildArtifactLookup.
+	lookup, err := db.BuildArtifactLookup()
+	if err != nil {
+		return err
+	}
+
 	for path, rs := range summaries {
 		rec := ledger.RunRecord{
 			Path:                path,
@@ -175,6 +183,9 @@ func ingestAll(db *ledger.DB, root string) error {
 		if err := recordOccupancy(db, path, rs); err != nil {
 			fmt.Fprintf(os.Stderr, "loom: failed to record occupancy for %s: %v\n", path, err)
 		}
+		if err := recordArtifactUsage(db, path, lookup, rs); err != nil {
+			fmt.Fprintf(os.Stderr, "loom: failed to record artifact usage for %s: %v\n", path, err)
+		}
 	}
 	return nil
 }
@@ -193,6 +204,22 @@ func recordOccupancy(db *ledger.DB, path string, rs ingest.RunSummary) error {
 		return err
 	}
 	return db.InsertCompactions(runID, rs.Compactions)
+}
+
+// recordArtifactUsage resolves rs's raw skill/file touch signals against
+// lookup and writes the result (B7a, #39). A skill invoked under a name
+// discovery has not seen, or a file outside any known artifact's path,
+// resolves to nothing - this answers "was a known artifact used", not "what
+// files exist". Requires discovery to have found something at least once
+// (an empty lookup resolves every signal to nothing), the same precondition
+// #38's staleness check already has.
+func recordArtifactUsage(db *ledger.DB, path string, lookup ledger.ArtifactLookup, rs ingest.RunSummary) error {
+	runID, err := db.RunIDByPath(path)
+	if err != nil {
+		return err
+	}
+	usage := lookup.Resolve(rs.SkillTouches, rs.FileTouches)
+	return db.ReplaceArtifactUsage(runID, usage)
 }
 
 func printReport(s ledger.Summary) {

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The artifact-to-run join (B7a, #39): a new `artifact_usage(run_id, artifact_path, uses)` table,
+  populated from two structured signals only - a `Skill` tool_use's skill name, and a
+  `Read`/`Edit`/`Write` tool_use's file_path - never from message text, which an earlier attempt
+  confirmed would give every artifact a near-identical count. Agent usage needed no new signal:
+  `runs.agent_type` already existed for B3a. `loom propose`'s retirement check now uses this, via
+  the #38 fix below, instead of `last_seen`.
+
 - Context occupancy (B7b): two new tables, `tool_usage` (calls and result bytes per tool per run)
   and `compactions` (read directly off the host's own `compact_boundary` records, never inferred -
   an earlier attempt at inferring compaction from a `cache_read` drop was wrong 42 times out of 42).
@@ -47,6 +54,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is not a saving.
 
 ### Fixed
+
+- Skill discovery (B7a, #42): a flat `.md` directly in a skills directory is discovered as a new
+  `KindReference`, not miscounted as a skill - Claude Code only ever loads `<name>/SKILL.md`. Run
+  against this machine's own skills directory: 9 real skills, 1 reference, and the reference turned
+  out to be a genuine leftover file next to its own skill directory, not a hypothetical case.
+
+- Retirement could never fire for an artifact that exists on disk (B7a, #38). `last_seen` is bumped
+  by `UpsertArtifact` on every discovery pass, so it reset every time `loom advise` ran and never
+  reached the staleness threshold for anything still present - only a file already deleted from disk
+  could ever be proposed for retirement. Fixed by using `last_used` (from the new artifact_usage
+  join) as the staleness clock, falling back to the stable `first_seen` when nothing has used it yet.
+  `last_seen` is untouched and keeps answering its own question, whether the artifact is on disk.
 
 - The privacy-verification test the design doc's "Verification" section has called for since B1 -
   "ingest a fixture containing a planted secret, then grep the database for it" - did not exist

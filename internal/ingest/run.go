@@ -81,6 +81,15 @@ type RunSummary struct {
 	// each event's UUID; see docs/transcript-schema.md.
 	Compactions []CompactionEvent
 
+	// SkillTouches and FileTouches are issue #39's raw usage counts, keyed
+	// by the signal itself (a skill name, or a file path) rather than by
+	// artifact path - resolving a skill name to the artifact it names, and
+	// filtering file paths to ones matching a currently discovered
+	// artifact, both happen at the ledger layer. Neither counts a mention
+	// in message text; see Event.SkillInvocations.
+	SkillTouches map[string]int
+	FileTouches  map[string]int
+
 	// countedMessages tracks which message.id values have already had their
 	// usage added, so one API response written across several transcript
 	// lines is counted once. Not part of the summary's output, just
@@ -112,6 +121,8 @@ func IngestFile(path string) (RunSummary, error) {
 		Kind:                 kindForPath(path),
 		AgentReconciliations: map[string]AgentUsage{},
 		ToolUsage:            map[string]ToolUsageStat{},
+		SkillTouches:         map[string]int{},
+		FileTouches:          map[string]int{},
 		countedMessages:      map[string]struct{}{},
 		toolNames:            map[string]string{},
 	}
@@ -228,6 +239,13 @@ func applyEvent(rs *RunSummary, ev Event) {
 
 	if ev.Compaction != nil {
 		rs.Compactions = append(rs.Compactions, *ev.Compaction)
+	}
+
+	for _, s := range ev.SkillInvocations {
+		rs.SkillTouches[s]++
+	}
+	for _, f := range ev.FileTouches {
+		rs.FileTouches[f]++
 	}
 }
 

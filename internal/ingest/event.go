@@ -117,4 +117,23 @@ type Event struct {
 	ToolResults []ToolResult
 	// Populated for a system line with subtype "compact_boundary".
 	Compaction *CompactionEvent
+
+	// SkillInvocations and FileTouches are issue #39's two structured usage
+	// signals, both read from a tool_use block's own input field on an
+	// assistant line - never from message text. A skill's name and
+	// description appear in every session's system prompt whether invoked
+	// or not, and a tool_result can echo an artifact's name back as plain
+	// content (confirmed on a real corpus: a Read of an unrelated file
+	// quoted a skill's name in passing). Counting either would reproduce
+	// the near-identical-count-for-every-artifact bug an earlier attempt
+	// already hit. See docs/design.md, B7a.
+	//
+	// SkillInvocations holds a Skill tool_use's "skill" input verbatim -
+	// resolving it to the artifact it names happens at the ledger layer,
+	// which is what knows what is currently discovered; ingest does not.
+	SkillInvocations []string
+	// FileTouches holds a Read/Edit/Write tool_use's "file_path" input.
+	// Already a path, so it can be matched against a discovered artifact's
+	// Path by exact equality with no resolution step.
+	FileTouches []string
 }

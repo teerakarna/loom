@@ -25,6 +25,17 @@ const (
 	KindPlan   = "plan"
 	KindHook   = "hook"
 	KindMemory = "memory"
+	// KindReference is a flat .md file sitting directly in a skills
+	// directory. Claude Code only ever loads a skill from <name>/SKILL.md
+	// (confirmed 2026-09-21, issue #42) - a flat file there is never loaded
+	// as a skill, no matter how skill-shaped its frontmatter looks. It is
+	// often real and relied on regardless: a hand-written index, or a
+	// reference doc a real skill points readers at. Discovered as its own
+	// kind rather than miscounted as a skill or silently dropped, because
+	// the two have opposite cost profiles - a skill's name and description
+	// sit in every session's system prompt whether invoked or not; a
+	// reference doc costs nothing until something opens it.
+	KindReference = "reference"
 )
 
 // Artifact is one discovered artifact instance. Description is best-effort —
@@ -92,7 +103,7 @@ func Discover(locs Locations) ([]Artifact, error) {
 	var out []Artifact
 
 	for _, d := range locs.SkillDirs {
-		found, err := scanMarkdownDir(d, KindSkill)
+		found, err := scanSkillDir(d)
 		if err != nil {
 			return nil, err
 		}
@@ -127,11 +138,52 @@ func Discover(locs Locations) ([]Artifact, error) {
 	return out, nil
 }
 
+// scanSkillDir finds skills in dir, the one location where the two shapes
+// scanMarkdownDir treats interchangeably actually mean different things
+// (issue #42). A subdirectory with its own SKILL.md is a real, loadable
+// skill. A flat "name.md" directly in dir is not - Claude Code never loads
+// it as a skill - but it is frequently real and relied on (a hand-written
+// index, a reference doc), so it is discovered as KindReference rather than
+// miscounted as KindSkill or silently dropped. A missing dir is not an
+// error.
+func scanSkillDir(dir string) ([]Artifact, error) {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var out []Artifact
+	for _, e := range entries {
+		if e.IsDir() {
+			sub := filepath.Join(dir, e.Name())
+			path := filepath.Join(sub, "SKILL.md")
+			if _, err := os.Stat(path); err != nil {
+				continue // a subdirectory with no SKILL.md isn't an artifact this package recognizes
+			}
+			out = append(out, artifactFromFile(path, e.Name(), KindSkill))
+			continue
+		}
+		if !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		name := strings.TrimSuffix(e.Name(), ".md")
+		out = append(out, artifactFromFile(path, name, KindReference))
+	}
+	return out, nil
+}
+
 // scanMarkdownDir finds artifacts of kind in dir. Two conventions are
-// recognized side by side, because both exist in the wild for skills and
-// nothing here should force a choice between them (design doc constraint 3):
-// a plain "name.md" file directly in dir, or a subdirectory containing its
-// own "SKILL.md". A missing dir is not an error.
+// recognized side by side for agents, plans and memory, where both are
+// genuinely equivalent and nothing here should force a choice between them
+// (design doc constraint 3): a plain "name.md" file directly in dir, or a
+// subdirectory containing its own "SKILL.md" (a convention borrowed from
+// skills; harmless to recognize here since these kinds have no equivalent
+// distinction to lose). Skills do not use this function - see scanSkillDir.
+// A missing dir is not an error.
 func scanMarkdownDir(dir, kind string) ([]Artifact, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {

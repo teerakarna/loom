@@ -49,6 +49,80 @@ func TestRetireOnlyWhenGenuinelyStale(t *testing.T) {
 	}
 }
 
+// TestRetireFiresForSomethingStillOnDiskButUnused is the regression test
+// for issue #38: UpsertArtifact bumps last_seen on every discovery pass, so
+// before #39's usage join existed, only a file already deleted from disk
+// could ever reach the staleness threshold - repeated discovery (`loom
+// advise` running before every recommendation) reset the clock on anything
+// still present, forever. This reproduces exactly that: discovery runs
+// three times, weeks apart, on an artifact nothing ever uses, and the
+// artifact stays present (status "active") throughout.
+func TestRetireFiresForSomethingStillOnDiskButUnused(t *testing.T) {
+	db := openDB(t)
+	firstSeen := now.Add(-StaleAfter - 48*time.Hour)
+	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "skill", Path: "/s/ignored.md", Name: "ignored"}, firstSeen); err != nil {
+		t.Fatal(err)
+	}
+	// Two more discovery passes, most recently just before `now` - old
+	// last_seen-based logic would compute an age of hours, not days, and
+	// never propose this.
+	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "skill", Path: "/s/ignored.md", Name: "ignored"}, firstSeen.Add(30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "skill", Path: "/s/ignored.md", Name: "ignored"}, now.Add(-1*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := db.ListArtifacts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[0].Status != "active" {
+		t.Fatalf("artifact status = %q, want active (still on disk is the whole point of this test)", rows[0].Status)
+	}
+
+	ps, err := Generate(db, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != 1 || ps[0].Subject != "/s/ignored.md" {
+		t.Fatalf("got %+v, want one retire proposal for /s/ignored.md", ps)
+	}
+	if onDisk, _ := ps[0].Evidence["on_disk"].(bool); !onDisk {
+		t.Error("evidence must say this is still on disk, not imply it was deleted")
+	}
+}
+
+// TestRetireNotProposedWhenRecentlyUsed is the flip side: an artifact whose
+// first_seen is old enough to be stale on its own, but that a run genuinely
+// touched recently, must not be proposed. Usage is the signal that matters,
+// not how long ago discovery first found it.
+func TestRetireNotProposedWhenRecentlyUsed(t *testing.T) {
+	db := openDB(t)
+	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "skill", Path: "/s/used.md", Name: "used"},
+		now.Add(-StaleAfter-48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertRun(ledger.RunRecord{Path: "/run/a.jsonl", Kind: "session", StartedAt: now.Add(-1 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := db.RunIDByPath("/run/a.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceArtifactUsage(runID, map[string]int{"/s/used.md": 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	ps, err := Generate(db, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != 0 {
+		t.Errorf("got %+v, want no proposals - this artifact was used an hour ago", ps)
+	}
+}
+
 func seedAgentRuns(t *testing.T, db *ledger.DB, agentType string, n int, denials int) {
 	t.Helper()
 	for i := range n {
