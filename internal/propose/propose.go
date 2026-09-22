@@ -6,7 +6,7 @@
 // what a proposal touches:
 //
 //   - the user's files: Loom renders it and never applies it, not once and not
-//     with permission, because constraint 9 says Loom does not write there
+//     with permission, because constraint 8 says Loom does not write there
 //   - Loom's own state: applying is defensible, since the blast radius is the
 //     ledger and the change reverts in one command
 //

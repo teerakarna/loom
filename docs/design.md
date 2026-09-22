@@ -4,38 +4,38 @@ Status: design agreed 2026-09-11.
 Licence: Apache-2.0. Repo: personal GitHub, private until v0.1.0, then public.
 Target: full open source project, distributed via the Claude Code plugin marketplace.
 
-**B1 done (2026-09-11):** ingest, ledger, `loom report` — working, tested, run against real
+**B1 done (2026-09-11):** ingest, ledger, `loom report` - working, tested, run against real
 history. Two real findings along the way, both in `docs/transcript-schema.md`: the subagent
 completion record is an XML-like `<usage>` block inside a `queue-operation` line's text content,
 not JSON fields, and does not reconcile with a naive sum of the agent's own transcript; and
 `message.model` can be the literal string `"<synthetic>"` (a locally-injected status/error line,
-always zero usage) — both handled, tested, documented.
+always zero usage) - both handled, tested, documented.
 
-**B2 done (2026-09-12):** artifact discovery (skills, agents, plans, hooks, per-project memory —
+**B2 done (2026-09-12):** artifact discovery (skills, agents, plans, hooks, per-project memory -
 `internal/artifact`), selector (`internal/selector`), MCP server over stdio exposing
 `query_ledger`/`get_recommendation`/`list_proposals`/`record_outcome` (`internal/mcp`), and
 `loom advise`/`loom serve` CLI commands. Two real findings running `loom advise` against this
-machine's actual skills: several real skills have no YAML frontmatter at all (just a `#` heading) —
+machine's actual skills: several real skills have no YAML frontmatter at all (just a `#` heading) -
 fixed with a first-heading fallback for the description signal; and naive word-overlap scoring
 without stopword filtering produced false-positive matches on shared function words ("the", "a",
-"and", "for") — fixed by filtering a stopword list before scoring. `list_proposals` correctly
-returns empty — nothing writes to that table until B5.
+"and", "for") - fixed by filtering a stopword list before scoring. `list_proposals` correctly
+returns empty - nothing writes to that table until B5.
 
 **B3 done (2026-09-12):** policy table, model pinning, generated agent definitions. Shipped in
 four slices:
 
-- **B3a** — `runs` now records `agent_type` and `effort`. Neither existed, so per-agent-type policy
+- **B3a** - `runs` now records `agent_type` and `effort`. Neither existed, so per-agent-type policy
   had nothing to key on. `agentType` lives only in the `.meta.json` companion beside each subagent
   transcript; `effort` is top level on assistant lines, not inside `message`. This closed a standing
   open item in `docs/transcript-schema.md`.
-- **B3b** — `loom report` gained per-run cost, cost concentration, a by-agent-type breakdown, and
+- **B3b** - `loom report` gained per-run cost, cost concentration, a by-agent-type breakdown, and
   the most expensive runs (closes #10). Totals alone invert the real ordering when run counts
   differ, which the policy engine would otherwise have inherited.
-- **B3c** — policy resolution per agent type: stored, then evidence meeting `MinSampleSize` (20),
+- **B3c** - policy resolution per agent type: stored, then evidence meeting `MinSampleSize` (20),
   then a shipped default. Every `Decision` carries `Source` and `SampleSize`, so constraint 11 is
   enforced by type rather than convention. `loom policy` shows it; `set`/`unset` give the
   deliberate override and its one-command revert.
-- **B3d** — `loom policy render` writes agent definitions into Loom's own directory, never a
+- **B3d** - `loom policy render` writes agent definitions into Loom's own directory, never a
   client's. A decision resting on a shipped default is not rendered at all.
 
 **The evidence path is deliberately unreached.** No agent type on a real corpus meets the 20-run
@@ -59,7 +59,7 @@ Notable for what it did *not* ship. B4 arrived as a six-field manifest with a fo
 write-enforcement dial and left as one column, one filter and a display helper:
 
 - **Write enforcement cut.** `scope`, `paths` and `promote_to` all policed what a session may touch.
-  Loom has no hook into writes, constraint 9 forbids it writing to human-authored files, and
+  Loom has no hook into writes, constraint 8 forbids it writing to human-authored files, and
   enforcing would need a blocking `PreToolUse` hook - the blast-radius category, and a
   contradiction of "measures and recommends, the human applies".
 - **The manifest cut.** The lane is already in the transcript path, so labelling needs no declared
@@ -161,11 +161,11 @@ to stop the design collapsing into one person's habits.
    gets designed out, not carefully avoided.
 9. **Artifact-derived text is data, never instructions.** A skill/agent/plan's name, description, or
    heading is read off disk and re-served verbatim through `get_recommendation` into whatever session
-   called it — that is untrusted content re-entering another agent's context, the same shape of
+   called it - that is untrusted content re-entering another agent's context, the same shape of
    problem as Candor's "all ingested telemetry is untrusted" rule. Loom cannot force a downstream
    client to treat it as data rather than commands, but it bounds the blast radius: every such field
    is length-capped, and every tool that returns one says so in its own schema. A cheap heuristic
-   flag on obviously injection-shaped text (`suspicious`) is surfaced alongside a match — advisory
+   flag on obviously injection-shaped text (`suspicious`) is surfaced alongside a match - advisory
    only, per constraint 1's whole ethos, never a filter. Full detection is not attempted: phrase-based
    classifiers are gameable and a false sense of security is worse than an honest gap.
 10. **Every accelerator ships with its brake, and nothing grows without a bound.** Any mechanism
@@ -205,7 +205,7 @@ to stop the design collapsing into one person's habits.
    discovered artifacts carry their names and descriptions. Keeping the ledger on the machine that
    produced it is what makes Loom safe to point at a sensitive corpus at all.
 
-   Corollary for anything published — docs, examples, issues, screenshots, write-ups: it comes only
+   Corollary for anything published - docs, examples, issues, screenshots, write-ups: it comes only
    from a corpus you are willing to publish from. Loom cannot know which of a user's machines that
    is, and does not guess. The discipline belongs to whoever is publishing.
 
@@ -337,9 +337,9 @@ be.
 
 The original manifest carried a `scope` dial: `pinned` (writes only to one repo), `scoped`,
 `themed` (writes outside the lane need confirmation), `open`. Every one of those is **write
-enforcement**, and Loom cannot do it. It has no hook into what a session writes, constraint 9
+enforcement**, and Loom cannot do it. It has no hook into what a session writes, constraint 8
 forbids it writing to human-authored files, and enforcing would require a blocking `PreToolUse`
-hook — the blast-radius category, and a direct contradiction of "it measures and recommends, the
+hook - the blast-radius category, and a direct contradiction of "it measures and recommends, the
 human applies".
 
 `promote_to` and `paths` went with it: both existed to serve enforcement.
@@ -441,9 +441,9 @@ measured outcomes). Deliberately **not** machine-learned: at realistic personal 
 is nothing to learn from, and a transparent function is debuggable, fast, and honest about its
 reasoning.
 
-**Serve.** Local only. Unix domain socket at mode 0600 for the fast path, so an integration point
-costs a sub-millisecond round trip rather than opening the database. No TCP, no network egress.
-Callers fall back to a one-shot read when the daemon is not running.
+**Serve.** Local only, stdio. `loom serve` runs the MCP server over stdio and blocks until the
+client disconnects - no daemon, no socket, no TCP, no network egress. A client spawns it as a
+subprocess per its own MCP server config, one process per session.
 
 ### 2. Integration - MCP first
 
@@ -463,13 +463,13 @@ want them get five, none LLM-backed, each with a stated latency budget:
 | pre-compact | Write a resume pointer: table of contents plus runnable queries, never content | < 50ms |
 
 **Note on pre-compact (2026-09-12):** this hook is a pointer-writer, not a gatekeeper, and that's a
-permanent design decision, not a placeholder to revisit. It pulls from the ledger — most expensive
-runs this session, denied/corrected tool calls, artifacts touched — and writes that as the resume
+permanent design decision, not a placeholder to revisit. It pulls from the ledger - most expensive
+runs this session, denied/corrected tool calls, artifacts touched - and writes that as the resume
 pointer; `session start` reads it back as the briefing. It never decides what Claude Code's own
 compaction keeps or drops. Same reasoning as "It measures and recommends. The human applies." above:
 a hook that prunes or rewrites context has the same blast-radius shape as a hook that denies or
-rewrites tool calls (Axis 2, cost shape) — cheap-if-wrong stays the only kind of hook Loom ships.
-Not yet built — B2 shipped selector + MCP server only, no hooks.
+rewrites tool calls (Axis 2, cost shape) - cheap-if-wrong stays the only kind of hook Loom ships.
+Not yet built - B2 shipped selector + MCP server only, no hooks.
 
 **CLI** for humans: `report`, `status`, `advise`, `policy`, `serve`, and `lane` once B4 lands.
 
@@ -546,7 +546,7 @@ compares against the previous one. That comparison is what makes this a loop rat
 
 #### Two kinds of proposal, and only one may ever be automated
 
-The split falls straight out of constraint 9 and decides everything else:
+The split falls straight out of constraint 8 and decides everything else:
 
 | A proposal that touches | Loom may | Automation |
 |---|---|---|
@@ -1040,7 +1040,7 @@ B7d last so surfacing earns its place on measurement the way B5's did.
   totals the transcripts themselves record. If they do not reconcile, the cost model is wrong and
   nothing downstream can be trusted.
 - **Memory bound.** Ingest a large synthetic corpus under a hard RSS ceiling, proving streaming.
-- **Latency.** Socket round trip under 20ms warm. Kill the daemon mid-session and confirm every
+- **Latency.** Cold start under 20ms. Kill the `loom serve` process mid-session and confirm every
   integration point still returns and the session is unaffected.
 - **Write containment.** Run against a read-only fixture tree; assert zero writes outside the
   database and generated-output directory, and assert settings files are never opened for write.
@@ -1086,7 +1086,7 @@ The tool's only input is transcripts, which on any real machine contain confiden
   skills) are user configuration and never enter the repo.
 - CI runs secret scanning plus a fixture-provenance check on every PR, and both are green before the
   repository is made public. **Secret scanning done (2026-09-12):** gitleaks, as a CI job, not
-  GitHub's native secret-scanning toggle — that feature requires the repo to already be public (or
+  GitHub's native secret-scanning toggle - that feature requires the repo to already be public (or
   paid GitHub Advanced Security), confirmed by trying to enable it via the API while private and
   getting "not available for this repository." Relying on it would have made this rule impossible to
   satisfy in the intended order. Fixture-provenance check not yet built.
