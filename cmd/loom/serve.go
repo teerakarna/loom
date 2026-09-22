@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -25,6 +26,10 @@ func runServe(_ []string) error {
 	}
 	defer func() { _ = db.Close() }()
 
-	server := mcp.NewServer(db)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	server := mcp.NewServer(db, home)
 	return server.Run(context.Background(), &gomcp.StdioTransport{})
 }

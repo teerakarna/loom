@@ -20,7 +20,7 @@ const version = "v0.2.0"
 // lifecycle (open before, close after) - the server never opens or closes it
 // itself, matching how internal/mcp is meant to be embedded by cmd/loom
 // rather than manage its own state.
-func NewServer(db *ledger.DB) *gomcp.Server {
+func NewServer(db *ledger.DB, home string) *gomcp.Server {
 	s := gomcp.NewServer(&gomcp.Implementation{Name: "loom", Version: version}, &gomcp.ServerOptions{
 		Instructions: "Loom: local, read-only-to-the-cluster artifact lifecycle and cost/routing engine for Claude Code. " +
 			"No network egress, no message content stored - see docs/design.md, 'Privacy by construction'. " +
@@ -45,7 +45,7 @@ func NewServer(db *ledger.DB) *gomcp.Server {
 			"the evidence behind it, and its sample size. CRITICAL: when touches_user_files is true, loom will not " +
 			"apply the proposal and neither should you - surface it and let the human act. When false, the change " +
 			"is confined to loom's own ledger and reverts in one command.",
-	}, listProposalsHandler(db))
+	}, listProposalsHandler(db, home))
 
 	gomcp.AddTool(s, &gomcp.Tool{
 		Name: "dismiss_proposal",
@@ -245,7 +245,7 @@ type Proposal struct {
 	CreatedAt        string         `json:"created_at"`
 }
 
-func listProposalsHandler(db *ledger.DB) gomcp.ToolHandlerFor[emptyInput, ProposalsOutput] {
+func listProposalsHandler(db *ledger.DB, home string) gomcp.ToolHandlerFor[emptyInput, ProposalsOutput] {
 	return func(_ context.Context, _ *gomcp.CallToolRequest, _ emptyInput) (*gomcp.CallToolResult, ProposalsOutput, error) {
 		// Regenerate from current ledger state before listing, so this never
 		// returns something stale just because nobody ran the CLI. Safe to do
@@ -257,6 +257,17 @@ func listProposalsHandler(db *ledger.DB) gomcp.ToolHandlerFor[emptyInput, Propos
 		if err != nil {
 			return nil, ProposalsOutput{}, err
 		}
+		// B7c (#41): memory-store structural findings, the one part of
+		// Generate that needs filesystem access rather than just the DB. home
+		// is resolved once at server construction, not here - resolving it
+		// per-call made this handler reach into whatever process happened to
+		// run the test suite, which is not the same thing as the server's own
+		// configured home and made tests non-hermetic.
+		memoryFindings, err := propose.GenerateMemoryFindings(home)
+		if err != nil {
+			return nil, ProposalsOutput{}, err
+		}
+		generated = append(generated, memoryFindings...)
 		if _, err := propose.Store(db, generated, now); err != nil {
 			return nil, ProposalsOutput{}, err
 		}

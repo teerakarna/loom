@@ -1057,7 +1057,7 @@ artifacts sharing a name (a project-level skill overriding a global one - `disco
 dirs by design) resolved to whichever row SQLite felt like returning that call. All three fixed
 alongside the dedup fix, each with its own regression test reproducing the original failure shape.
 
-#### B7c. Promotion rules as read-only proposals (#41)
+#### B7c. Promotion rules as read-only proposals (#41) - BUILT 2026-09-22
 
 Turn the promotion-rules table into code emitting `promote_*` proposals, each carrying evidence and a
 rendered diff into Loom's own proposal directory. Same output as the spec's `promote_to_mechanism`,
@@ -1079,6 +1079,45 @@ deletion.
 
 Constraint 10 applies and is satisfied in the same PR, not deferred: state the generation cap, the
 dedupe key and the retention rule before merging.
+
+**Built as scoped, with one piece deferred rather than guessed at.** The four structural checks
+shipped: `internal/artifact.DiscoverAllMemory` walks every project's memory store
+(`~/.claude/projects/*/memory`) cross-project - the one place in Loom that needs a wider view than
+"home plus the current project", since duplicate detection and index-reachability only mean anything
+across stores. Constraint 6 holds throughout: files are hashed and scanned for `[[links]]`, never
+retained. Four new proposal kinds route through the existing B5 machinery unchanged
+(`propose.Store`/`UpsertProposal`), which is what satisfies constraint 10 without a separate
+mechanism: the same `MaxPendingProposals` cap (20) and the same `(kind, subject)`-keyed,
+evidence-hash re-raise rule already governed B5's three kinds and now governs these four too.
+
+**Path-scoped rules: discovery not built, and said so rather than guessed.** "The spec names them
+and Loom does not model them" was the extent of the direction, with no measured numbers behind it
+anywhere in this document, unlike every other B7c check. The natural reading - CLAUDE.md files as a
+new artifact kind - runs into a real gap: Loom's other discovery is scoped to "home plus the current
+project" precisely because those are Claude Code's own standard locations (constraint 2), but a
+CLAUDE.md hierarchy lives under a user's own workspace tree, which has no standard root Claude Code
+defines. Guessing at one (this machine's own `~/projects/{work,personal,public}` convention, say)
+would be encoding one person's layout into the tool, which the design constraints open by forbidding.
+Deferred rather than built on a guess - revisit if a concrete shape turns up, the same treatment
+semantic staleness already got below.
+
+**Run against this machine's own corpus, all four checks firing for real:** 5 duplicate groups
+spanning 3 stores each, 5 broken links, 3 unreachable artifacts, 27 filename/slug drift cases (17
+substantive - e.g. `feedback_working_preferences` renamed to `working-preferences` at some point
+without the file following - 10 a systematic underscore-vs-hyphen convention difference, both real
+drift by the same definition, not distinguished further since the design doc's own rule draws no
+line between them). `loom propose` on the clean, reset local ledger returned exactly 20 - the
+generation cap doing its job, not a coincidence.
+
+**A real bug found and fixed before this shipped, not after.** The MCP `list_proposals` handler
+originally called `os.UserHomeDir()` inside the request handler itself. That made every test of it
+non-hermetic: `go test` was scanning whichever machine happened to run the suite's own real,
+private `~/.claude/projects/*/memory` files, and `TestListProposalsEmpty` failed outright once B7c's
+generator started finding real findings on the developer machine that ran it. Fixed by resolving
+`home` once at server construction (`NewServer(db, home)`, threaded from `cmd/loom/serve.go`'s own
+`os.UserHomeDir()` call) rather than per-request, and test setup now passes an isolated `t.TempDir()`.
+Caught by running the test suite, the same discipline that found B7a/B7b's resumed-session
+double-count - the tests are what caught this one, which is the system working as intended.
 
 **Not in B7c: semantic staleness.** Tested here and rejected on measurement. Extracting the claims an
 artifact makes and checking whether they still resolve produced 44 candidates and 6 flags, all 6 false
