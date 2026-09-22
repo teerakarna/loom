@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `golangci-lint` now runs `gosec`, `sqlclosecheck`, `errorlint`, `unconvert`, `misspell` and
+  `predeclared` alongside the existing standard set, free and zero new infrastructure. Real
+  findings on the codebase as of this change: 20 `noctx` hits (deliberately not enabled - a
+  single-user local CLI has no request lifecycle to cancel, so context-cancellable DB calls
+  would be pure churn), 8 `G202`/5 `G304`/2 `G703` gosec hits that are structural false positives
+  for a local CLI reading its own filesystem (excluded with a comment saying why, not silently),
+  3 real `sqlclosecheck` hits (fixed), one real `errorlint` hit and one `predeclared` shadow of
+  Go's builtin `max` (both fixed).
+
 - The artifact-to-run join (B7a, #39): a new `artifact_usage(run_id, artifact_path, uses)` table,
   populated from two structured signals only - a `Skill` tool_use's skill name, and a
   `Read`/`Edit`/`Write` tool_use's file_path - never from message text, which an earlier attempt

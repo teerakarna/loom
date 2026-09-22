@@ -363,13 +363,13 @@ func addMissingColumns(db *sql.DB, table string, columns map[string]string) erro
 	if err != nil {
 		return err
 	}
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var cid int
 		var name, ctype string
 		var notnull, pk int
 		var dflt any
 		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			_ = rows.Close()
 			return err
 		}
 		have[name] = true
@@ -377,7 +377,6 @@ func addMissingColumns(db *sql.DB, table string, columns map[string]string) erro
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	_ = rows.Close()
 
 	for col, ddl := range columns {
 		if have[col] {

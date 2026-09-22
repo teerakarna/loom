@@ -168,11 +168,11 @@ func (d *DB) occupancy(lane string) (OccupancyReport, error) {
 	if err != nil {
 		return r, err
 	}
+	defer func() { _ = rows.Close() }()
 	bucketIndex := map[string]int{}
 	for rows.Next() {
 		var t ToolOutputRow
 		if err := rows.Scan(&t.ToolName, &t.Calls, &t.ResultBytes); err != nil {
-			_ = rows.Close()
 			return r, err
 		}
 		t.Bucket = bucketFor(t.ToolName)
@@ -188,10 +188,8 @@ func (d *DB) occupancy(lane string) (OccupancyReport, error) {
 		r.ByBucket[i].ResultBytes += t.ResultBytes
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return r, err
 	}
-	_ = rows.Close()
 	sortToolOutputByBytes(r.ByBucket)
 
 	crows, err := d.sql.Query(`

@@ -102,61 +102,63 @@ func TestNoContentStored(t *testing.T) {
 func assertNoSubstring(t *testing.T, db *DB, needle string) {
 	t.Helper()
 
-	tableRows, err := db.sql.Query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var tables []string
-	for tableRows.Next() {
-		var name string
-		if err := tableRows.Scan(&name); err != nil {
-			t.Fatal(err)
-		}
-		tables = append(tables, name)
-	}
-	if err := tableRows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	_ = tableRows.Close()
-
-	for _, table := range tables {
-		rows, err := db.sql.Query(`SELECT * FROM ` + table)
+	tables := func() []string {
+		tableRows, err := db.sql.Query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
 		if err != nil {
 			t.Fatal(err)
 		}
-		cols, err := rows.Columns()
-		if err != nil {
-			_ = rows.Close()
-			t.Fatal(err)
-		}
-		for rows.Next() {
-			vals := make([]any, len(cols))
-			ptrs := make([]any, len(cols))
-			for i := range vals {
-				ptrs[i] = &vals[i]
-			}
-			if err := rows.Scan(ptrs...); err != nil {
-				_ = rows.Close()
+		defer func() { _ = tableRows.Close() }()
+		var tables []string
+		for tableRows.Next() {
+			var name string
+			if err := tableRows.Scan(&name); err != nil {
 				t.Fatal(err)
 			}
-			for i, v := range vals {
-				s, ok := v.(string)
-				if !ok {
-					if b, ok := v.([]byte); ok {
-						s = string(b)
-					} else {
-						continue
-					}
-				}
-				if strings.Contains(s, needle) {
-					t.Errorf("%s.%s contains the planted secret: %q", table, cols[i], s)
-				}
-			}
+			tables = append(tables, name)
 		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
+		if err := tableRows.Err(); err != nil {
 			t.Fatal(err)
 		}
-		_ = rows.Close()
+		return tables
+	}()
+
+	for _, table := range tables {
+		func() {
+			rows, err := db.sql.Query(`SELECT * FROM ` + table)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = rows.Close() }()
+			cols, err := rows.Columns()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for rows.Next() {
+				vals := make([]any, len(cols))
+				ptrs := make([]any, len(cols))
+				for i := range vals {
+					ptrs[i] = &vals[i]
+				}
+				if err := rows.Scan(ptrs...); err != nil {
+					t.Fatal(err)
+				}
+				for i, v := range vals {
+					s, ok := v.(string)
+					if !ok {
+						if b, ok := v.([]byte); ok {
+							s = string(b)
+						} else {
+							continue
+						}
+					}
+					if strings.Contains(s, needle) {
+						t.Errorf("%s.%s contains the planted secret: %q", table, cols[i], s)
+					}
+				}
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+		}()
 	}
 }

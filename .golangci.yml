@@ -2,3 +2,37 @@ version: "2"
 
 linters:
   default: standard
+  enable:
+    - gosec
+    - sqlclosecheck
+    - errorlint
+    - unconvert
+    - misspell
+    - predeclared
+  exclusions:
+    rules:
+      # G202 (SQL string concatenation): every hit here concatenates a
+      # static, hardcoded WHERE-clause fragment before passing values as `?`
+      # placeholders - never user input. gosec's pattern match can't tell
+      # that apart from real injection; confirmed by hand for every current
+      # hit before this exclusion was added.
+      - linters: [gosec]
+        text: "G202:"
+      # G304 (file inclusion via variable) and G703 (path traversal via
+      # taint analysis): loom is a local CLI reading the user's own
+      # filesystem, discovered via filepath.WalkDir or the user's own
+      # settings.json - there is no privilege boundary being crossed, and
+      # the user running `loom` already has full access to every path it
+      # might read.
+      - linters: [gosec]
+        text: "G304:"
+      - linters: [gosec]
+        text: "G703:"
+      # gosec's file/dir-permission and hardcoded-credential rules (G101,
+      # G301, G306) fire on test fixtures - temp files under t.TempDir() with
+      # no real access-control need, and the planted-secret constant
+      # privacy_test.go exists specifically to prove never leaks. Test code
+      # has a different risk profile than the binary it tests; excluded by
+      # path rather than one #nosec per line.
+      - linters: [gosec]
+        path: "_test\\.go"
