@@ -170,6 +170,10 @@ func ingestAll(db *ledger.DB, root string) error {
 		}
 		if err := db.InsertRun(rec); err != nil {
 			fmt.Fprintf(os.Stderr, "loom: failed to record %s: %v\n", path, err)
+			continue
+		}
+		if err := recordOccupancy(db, path, rs); err != nil {
+			fmt.Fprintf(os.Stderr, "loom: failed to record occupancy for %s: %v\n", path, err)
 		}
 	}
 	return nil
@@ -177,9 +181,23 @@ func ingestAll(db *ledger.DB, root string) error {
 
 func ptr[T any](v T) *T { return &v }
 
+// recordOccupancy writes rs's tool_usage and compaction rows (B7b), looking
+// up the run id InsertRun just wrote rather than threading it back from the
+// insert itself - path is unique, so this is one indexed lookup.
+func recordOccupancy(db *ledger.DB, path string, rs ingest.RunSummary) error {
+	runID, err := db.RunIDByPath(path)
+	if err != nil {
+		return err
+	}
+	if err := db.ReplaceToolUsage(runID, rs.ToolUsage); err != nil {
+		return err
+	}
+	return db.InsertCompactions(runID, rs.Compactions)
+}
+
 func printReport(s ledger.Summary) {
 	fmt.Printf("Runs ingested:   %d (%d sessions, %d agents)\n", s.TotalRuns, s.SessionRuns, s.AgentRuns)
-	fmt.Printf("Weighted cost:   %.0f (relative units — see docs/design.md, not real currency)\n", s.TotalWeightedCost)
+	fmt.Printf("Weighted cost:   %.0f (relative units - see docs/design.md, not real currency)\n", s.TotalWeightedCost)
 	printCostByKind(s)
 	fmt.Printf("Tool uses:       %d\n", s.TotalToolUses)
 	fmt.Printf("Tool denials:    %d\n", s.TotalDenials)
@@ -237,7 +255,7 @@ func printReport(s ledger.Summary) {
 	if s.AgentRuns > 0 {
 		fmt.Println()
 		fmt.Printf("%d/%d agent runs have a reported subagent_tokens figure from their parent's\n", s.UnreconciledAgents, s.AgentRuns)
-		fmt.Println("task-notification. This is NOT reconciled against the weighted cost above —")
+		fmt.Println("task-notification. This is NOT reconciled against the weighted cost above -")
 		fmt.Println("see docs/transcript-schema.md, \"Reconciliation does NOT hold\".")
 	}
 }

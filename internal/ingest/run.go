@@ -10,18 +10,32 @@ import (
 )
 
 // syntheticModel is a real, confirmed value of message.model on some
-// assistant lines — a locally-injected status/error message (e.g. a
+// assistant lines - a locally-injected status/error message (e.g. a
 // rate-limit notice), not a real API call. Confirmed by direct inspection: it
 // always carries all-zero usage. It must never be allowed to win "last
 // non-empty model" attribution for a run, or a run's real cost (from its
 // actual model calls earlier in the same file) gets mislabeled under a model
-// name that did no real work and cost nothing — found by running against
+// name that did no real work and cost nothing - found by running against
 // real history, where a failed agent's entire cost was attributed to
 // "<synthetic>" because that was the last assistant line before it errored
 // out. See docs/transcript-schema.md.
 const syntheticModel = "<synthetic>"
 
-// RunSummary is one file's worth of ingest — one main session transcript, or
+// unknownTool is the ToolUsage bucket for a tool_result whose matching
+// tool_use block was not seen in this file - the call happened in a
+// transcript this file doesn't contain (e.g. before a resume). Attributed
+// here rather than dropped, so the byte count is never silently lost.
+const unknownTool = "(unknown)"
+
+// ToolUsageStat aggregates one tool's calls and result size within a run.
+// ResultBytes is a measured byte count, never a token estimate - see
+// docs/design.md, B7b, "bytes are not tokens".
+type ToolUsageStat struct {
+	Calls       int
+	ResultBytes int64
+}
+
+// RunSummary is one file's worth of ingest - one main session transcript, or
 // one subagent's own transcript. "One file = one run" for B1; the design
 // doc's richer run/session distinction (a session containing many runs) is a
 // later-phase refinement.
@@ -52,25 +66,39 @@ type RunSummary struct {
 	// task-notification lines, keyed by the agent's task-id. Only main
 	// session files produce these (a subagent's own transcript doesn't
 	// launch further subagents in the cases inspected so far, though
-	// nothing rules out spawnDepth > 1 doing so — see docs/design.md's
+	// nothing rules out spawnDepth > 1 doing so - see docs/design.md's
 	// spawnDepth field on the .meta.json companion).
 	AgentReconciliations map[string]AgentUsage
+
+	// ToolUsage aggregates tool_result byte counts by the tool that produced
+	// them (B7b). Keyed by tool name, resolved via the matching tool_use's
+	// id - see docs/transcript-schema.md, "tool_use / tool_result".
+	ToolUsage map[string]ToolUsageStat
+
+	// Compactions is every compact_boundary this file recorded, in file
+	// order. Cross-file dedup - a resumed session replays its prior
+	// compaction history verbatim - happens at the ledger layer, keyed on
+	// each event's UUID; see docs/transcript-schema.md.
+	Compactions []CompactionEvent
 
 	// countedMessages tracks which message.id values have already had their
 	// usage added, so one API response written across several transcript
 	// lines is counted once. Not part of the summary's output, just
 	// bookkeeping for the duration of one file's ingest.
 	countedMessages map[string]struct{}
+	// toolNames maps a tool_use id to its tool name, for this file only -
+	// bookkeeping for resolving ToolResults, not part of the output.
+	toolNames map[string]string
 }
 
-// maxLineSize allows for very large lines — a "thinking" block's signature
+// maxLineSize allows for very large lines - a "thinking" block's signature
 // field alone was observed to be tens of kilobytes; a generous ceiling here
 // is cheaper than a mysterious bufio.Scanner "token too long" failure on a
 // real transcript.
 const maxLineSize = 16 * 1024 * 1024
 
 // IngestFile reads one JSONL transcript file end to end and produces a
-// RunSummary. It never fails on an individual malformed line — ParseLine's
+// RunSummary. It never fails on an individual malformed line - ParseLine's
 // schema-tolerance means a bad line is just skipped, not fatal to the file.
 func IngestFile(path string) (RunSummary, error) {
 	f, err := os.Open(path)
@@ -83,7 +111,9 @@ func IngestFile(path string) (RunSummary, error) {
 		Path:                 path,
 		Kind:                 kindForPath(path),
 		AgentReconciliations: map[string]AgentUsage{},
+		ToolUsage:            map[string]ToolUsageStat{},
 		countedMessages:      map[string]struct{}{},
+		toolNames:            map[string]string{},
 	}
 
 	sc := bufio.NewScanner(f)
@@ -101,7 +131,7 @@ func IngestFile(path string) (RunSummary, error) {
 		applyEvent(&rs, ev)
 	}
 	// A line-too-long or read error partway through still leaves everything
-	// ingested so far intact — report it, don't discard the partial result.
+	// ingested so far intact - report it, don't discard the partial result.
 	if err := sc.Err(); err != nil && err != io.EOF {
 		return rs, err
 	}
@@ -176,6 +206,28 @@ func applyEvent(rs *RunSummary, ev Event) {
 	}
 	if tn := ev.TaskNotification; tn != nil && tn.Usage != nil {
 		rs.AgentReconciliations[tn.TaskID] = *tn.Usage
+	}
+
+	// tool_use blocks arrive on assistant lines, always before the
+	// tool_result that refers back to them (confirmed on a real corpus -
+	// see docs/transcript-schema.md), so recording id->name here and
+	// resolving ToolResults below in the same forward pass is enough.
+	for _, tu := range ev.ToolUses {
+		rs.toolNames[tu.ID] = tu.Name
+	}
+	for _, tr := range ev.ToolResults {
+		name := rs.toolNames[tr.ToolUseID]
+		if name == "" {
+			name = unknownTool
+		}
+		stat := rs.ToolUsage[name]
+		stat.Calls++
+		stat.ResultBytes += tr.Bytes
+		rs.ToolUsage[name] = stat
+	}
+
+	if ev.Compaction != nil {
+		rs.Compactions = append(rs.Compactions, *ev.Compaction)
 	}
 }
 

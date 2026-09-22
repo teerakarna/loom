@@ -8,7 +8,7 @@ import (
 )
 
 // ParseLine normalizes one raw JSONL transcript line into an Event. It never
-// returns an error for a line it doesn't recognize — unknown or malformed
+// returns an error for a line it doesn't recognize - unknown or malformed
 // lines yield a zero Event with Type == "" and ok == false, which the caller
 // should simply skip. This is deliberate (design doc constraint 3,
 // schema-tolerant): a new Claude Code version adding line types must not
@@ -38,16 +38,10 @@ func ParseLine(raw []byte) (Event, bool) {
 			ev.TaskNotification = ParseTaskNotification(content)
 		}
 	case "user":
-		// A task-notification is also echoed as a plain-string user message
-		// (message.content is a string in that case, not the richer
-		// tool_result structure). Only treat it as a notification if it
-		// actually parses as one.
-		if msg, ok := m["message"].(map[string]any); ok {
-			if content, ok := msg["content"].(string); ok {
-				if tn := ParseTaskNotification(content); tn != nil {
-					ev.TaskNotification = tn
-				}
-			}
+		parseUser(m, &ev)
+	case "system":
+		if subtype, _ := m["subtype"].(string); subtype == "compact_boundary" {
+			ev.Compaction = parseCompaction(m, ev.Timestamp)
 		}
 	}
 
@@ -78,6 +72,11 @@ func parseAssistant(m map[string]any, ev *Event) {
 			}
 			if bt, _ := b["type"].(string); bt == "tool_use" {
 				ev.ToolUseCount++
+				id, _ := b["id"].(string)
+				name, _ := b["name"].(string)
+				if id != "" {
+					ev.ToolUses = append(ev.ToolUses, ToolUse{ID: id, Name: name})
+				}
 			}
 		}
 	}
@@ -99,6 +98,87 @@ func parseAssistant(m map[string]any, ev *Event) {
 	ev.Usage = u
 }
 
+// parseUser handles a "user" line: an echoed task-notification (a plain
+// string message.content), or the richer structure carrying tool_result
+// blocks - see docs/transcript-schema.md, "tool_use / tool_result".
+func parseUser(m map[string]any, ev *Event) {
+	msg, ok := m["message"].(map[string]any)
+	if !ok {
+		return
+	}
+	switch content := msg["content"].(type) {
+	case string:
+		// A task-notification is also echoed as a plain-string user message.
+		// Only treat it as a notification if it actually parses as one.
+		if tn := ParseTaskNotification(content); tn != nil {
+			ev.TaskNotification = tn
+		}
+	case []any:
+		for _, block := range content {
+			b, ok := block.(map[string]any)
+			if !ok {
+				continue
+			}
+			if bt, _ := b["type"].(string); bt != "tool_result" {
+				continue
+			}
+			id, _ := b["tool_use_id"].(string)
+			if id == "" {
+				continue
+			}
+			ev.ToolResults = append(ev.ToolResults, ToolResult{
+				ToolUseID: id,
+				Bytes:     toolResultBytes(b["content"]),
+			})
+		}
+	}
+}
+
+// toolResultBytes measures a tool_result's content exactly as it is written
+// in the transcript - a byte count, never a token estimate (docs/design.md,
+// B7b: "bytes are not tokens"). content is either a plain string (the common
+// case) or a list of blocks (text, image, document, tool_reference); either
+// way this never inspects what is inside, only how large it is, per
+// constraint 6.
+func toolResultBytes(content any) int64 {
+	switch c := content.(type) {
+	case string:
+		return int64(len(c))
+	case []any:
+		b, err := json.Marshal(c)
+		if err != nil {
+			return 0
+		}
+		return int64(len(b))
+	default:
+		return 0
+	}
+}
+
+// parseCompaction reads a compact_boundary system record's compactMetadata.
+// Ground truth from the host, never inferred - see
+// docs/transcript-schema.md, "compact_boundary".
+func parseCompaction(m map[string]any, ts time.Time) *CompactionEvent {
+	uuid, _ := m["uuid"].(string)
+	if uuid == "" {
+		return nil // nothing to dedupe on; not worth recording
+	}
+	cm, ok := m["compactMetadata"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	trigger, _ := cm["trigger"].(string)
+	return &CompactionEvent{
+		UUID:                    uuid,
+		Timestamp:               ts,
+		Trigger:                 trigger,
+		PreTokens:               int64(toFloat(cm["preTokens"])),
+		PostTokens:              int64(toFloat(cm["postTokens"])),
+		CumulativeDroppedTokens: int64(toFloat(cm["cumulativeDroppedTokens"])),
+		DurationMs:              int64(toFloat(cm["durationMs"])),
+	}
+}
+
 // taskNotificationRe extracts the fields ingest actually needs from a
 // <task-notification> block. Deliberately not a full XML parser: the
 // transcript embeds this as a fixed, simple tag shape (see
@@ -118,7 +198,7 @@ var (
 
 // ParseTaskNotification extracts a TaskNotification from raw content if it
 // looks like one, else returns nil. Usage is only populated when a <usage>
-// block is present — absent for background-command completions and for
+// block is present - absent for background-command completions and for
 // failed agent completions, both confirmed by direct inspection (see
 // docs/transcript-schema.md).
 func ParseTaskNotification(content string) *TaskNotification {

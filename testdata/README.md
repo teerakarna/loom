@@ -1,7 +1,7 @@
 # Test fixtures
 
 Every fixture here is synthetic and hand-written. **No fixture may be derived from a real Claude
-Code transcript, even redacted** — redaction of a large corpus is not verifiable, invention is.
+Code transcript, even redacted** - redaction of a large corpus is not verifiable, invention is.
 See `docs/design.md`, "Publishability rules", and `docs/transcript-schema.md` for the format
 fixtures should exercise.
 
@@ -14,7 +14,8 @@ omission.
 | Fixture | Exercises |
 |---|---|
 | `synthetic-session.jsonl` | A session transcript: assistant lines with usage, a tool denial, user feedback, a task-notification |
-| `multiline-response.jsonl` | One API response written across several lines, each repeating the same `usage` — the shape behind the 2.12x over-count bug |
+| `synthetic-occupancy.jsonl` | B7b: `tool_use`/`tool_result` pairs (string and list content), an orphaned `tool_result` with no matching `tool_use` in this file, and a `compact_boundary` record |
+| `multiline-response.jsonl` | One API response written across several lines, each repeating the same `usage` - the shape behind the 2.12x over-count bug |
 | `subagents/agent-synthagent0001.jsonl` | A subagent transcript |
 | `subagents/agent-synthmeta01.jsonl` | A subagent transcript carrying an `effort` field |
 | `subagents/agent-synthmeta01.meta.json` | The companion file carrying `agentType` |
