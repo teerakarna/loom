@@ -59,7 +59,7 @@ Usage:
   loom policy render        Write agent definitions for pinned models into
                              ~/.loom/generated/agents/ (never installed for you).
   loom serve                Run the MCP server on stdio (query_ledger, get_recommendation,
-                             list_proposals, record_outcome).
+                             list_proposals, dismiss_proposal, record_outcome).
 
 See docs/design.md for the full design.`)
 }
