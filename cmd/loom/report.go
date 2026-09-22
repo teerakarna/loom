@@ -180,11 +180,8 @@ func ingestAll(db *ledger.DB, root string) error {
 			fmt.Fprintf(os.Stderr, "loom: failed to record %s: %v\n", path, err)
 			continue
 		}
-		if err := recordOccupancy(db, path, rs); err != nil {
-			fmt.Fprintf(os.Stderr, "loom: failed to record occupancy for %s: %v\n", path, err)
-		}
-		if err := recordArtifactUsage(db, path, lookup, rs); err != nil {
-			fmt.Fprintf(os.Stderr, "loom: failed to record artifact usage for %s: %v\n", path, err)
+		if err := recordOccupancyAndUsage(db, path, lookup, rs); err != nil {
+			fmt.Fprintf(os.Stderr, "loom: failed to record occupancy/usage for %s: %v\n", path, err)
 		}
 	}
 	return nil
@@ -192,10 +189,13 @@ func ingestAll(db *ledger.DB, root string) error {
 
 func ptr[T any](v T) *T { return &v }
 
-// recordOccupancy writes rs's tool_usage and compaction rows (B7b), looking
-// up the run id InsertRun just wrote rather than threading it back from the
-// insert itself - path is unique, so this is one indexed lookup.
-func recordOccupancy(db *ledger.DB, path string, rs ingest.RunSummary) error {
+// recordOccupancyAndUsage writes rs's tool_usage, compaction, and
+// artifact_usage rows (B7b, B7a/#39). One RunIDByPath lookup shared across
+// all three, rather than a separate lookup per table for a row InsertRun
+// just wrote a moment earlier in this same loop iteration - found by code
+// review as a redundant-query smell, not a correctness bug, but free to fix
+// in the same pass.
+func recordOccupancyAndUsage(db *ledger.DB, path string, lookup ledger.ArtifactLookup, rs ingest.RunSummary) error {
 	runID, err := db.RunIDByPath(path)
 	if err != nil {
 		return err
@@ -203,23 +203,17 @@ func recordOccupancy(db *ledger.DB, path string, rs ingest.RunSummary) error {
 	if err := db.ReplaceToolUsage(runID, rs.ToolUsage); err != nil {
 		return err
 	}
-	return db.InsertCompactions(runID, rs.Compactions)
-}
-
-// recordArtifactUsage resolves rs's raw skill/file touch signals against
-// lookup and writes the result (B7a, #39). A skill invoked under a name
-// discovery has not seen, or a file outside any known artifact's path,
-// resolves to nothing - this answers "was a known artifact used", not "what
-// files exist". Requires discovery to have found something at least once
-// (an empty lookup resolves every signal to nothing), the same precondition
-// #38's staleness check already has.
-func recordArtifactUsage(db *ledger.DB, path string, lookup ledger.ArtifactLookup, rs ingest.RunSummary) error {
-	runID, err := db.RunIDByPath(path)
-	if err != nil {
+	if err := db.InsertCompactions(runID, rs.Compactions); err != nil {
 		return err
 	}
-	usage := lookup.Resolve(rs.SkillTouches, rs.FileTouches)
-	return db.ReplaceArtifactUsage(runID, usage)
+	// A skill invoked under a name discovery has not seen, or a file outside
+	// any known artifact's path, resolves to nothing - this answers "was a
+	// known artifact used", not "what files exist". Requires discovery to
+	// have found something at least once (an empty lookup resolves every
+	// signal to nothing), the same precondition #38's staleness check
+	// already has.
+	touches := lookup.Resolve(rs.SkillTouches, rs.FileTouches)
+	return db.ReplaceArtifactUsage(runID, touches)
 }
 
 func printReport(s ledger.Summary) {

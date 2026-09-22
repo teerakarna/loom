@@ -77,15 +77,15 @@ func parseAssistant(m map[string]any, ev *Event) {
 				if id != "" {
 					ev.ToolUses = append(ev.ToolUses, ToolUse{ID: id, Name: name})
 				}
-				if input, ok := b["input"].(map[string]any); ok {
+				if input, ok := b["input"].(map[string]any); ok && id != "" {
 					switch name {
 					case "Skill":
 						if skill, _ := input["skill"].(string); skill != "" {
-							ev.SkillInvocations = append(ev.SkillInvocations, skill)
+							ev.SkillInvocations = append(ev.SkillInvocations, ArtifactTouch{ToolUseID: id, Signal: skill})
 						}
 					case "Read", "Edit", "Write":
 						if fp, _ := input["file_path"].(string); fp != "" {
-							ev.FileTouches = append(ev.FileTouches, fp)
+							ev.FileTouches = append(ev.FileTouches, ArtifactTouch{ToolUseID: id, Signal: fp})
 						}
 					}
 				}
@@ -146,12 +146,15 @@ func parseUser(m map[string]any, ev *Event) {
 	}
 }
 
-// toolResultBytes measures a tool_result's content exactly as it is written
-// in the transcript - a byte count, never a token estimate (docs/design.md,
-// B7b: "bytes are not tokens"). content is either a plain string (the common
-// case) or a list of blocks (text, image, document, tool_reference); either
-// way this never inspects what is inside, only how large it is, per
-// constraint 6.
+// toolResultBytes measures a tool_result's content - a byte count, never a
+// token estimate (docs/design.md, B7b: "bytes are not tokens"). content is
+// either a plain string (the common case, measured exactly via len) or a
+// list of blocks (text, image, document, tool_reference), re-marshaled to
+// measure its size - an approximation, not the original bytes as written:
+// re-marshaling an already-decoded value does not reproduce the source
+// JSON's exact whitespace, key order or number formatting. Close enough for
+// occupancy's purpose (which tool dominates, not to the byte), and never
+// inspects what is inside either way, per constraint 6.
 func toolResultBytes(content any) int64 {
 	switch c := content.(type) {
 	case string:

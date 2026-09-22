@@ -55,6 +55,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `tool_usage` and `artifact_usage` double-counted every call a resumed session's transcript
+  replayed (found by `/code-review high`, not by the tests or dogfooding either table shipped
+  with). Both stored one aggregated row per `(run_id, tool_name)`/`(run_id, artifact_path)` with no
+  per-event identity, unlike `compactions`, which already deduped on `boundary_uuid` for exactly
+  this reason. Ordinary `tool_use`/`tool_result` lines turn out to replay the same way
+  `compact_boundary` records do - confirmed directly, 325 of 1203 `tool_use` ids shared between one
+  real session and its resumed continuation. Fixed by giving both tables the same identity
+  `compactions` had from the start: one row per `tool_use_id` (its own globally unique id),
+  aggregated at query time instead of write time. A ledger built before this fix is migrated by
+  dropping and rebuilding both tables; rebuilt at the next `loom report` (see #49 for the separate,
+  pre-existing gap in when that backfill actually happens).
+
+  The same review pass found three more real bugs in the same two features, each fixed with its own
+  regression test: `retireStaleArtifacts` never checked `runs.agent_type` for agent-kind artifacts,
+  so a custom agent invoked constantly via the `Agent` tool could be proposed for retirement as
+  "never used"; `loom context` printed nothing about compaction when a lane had compactions but no
+  tool-output rows, because one early return covered both sections; `BuildArtifactLookup` had no
+  `ORDER BY`, so two artifacts sharing a name resolved to whichever row SQLite returned that call.
+
 - Skill discovery (B7a, #42): a flat `.md` directly in a skills directory is discovered as a new
   `KindReference`, not miscounted as a skill - Claude Code only ever loads `<name>/SKILL.md`. Run
   against this machine's own skills directory: 9 real skills, 1 reference, and the reference turned

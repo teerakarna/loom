@@ -114,12 +114,21 @@ CREATE TABLE IF NOT EXISTS runs (
 -- tool_usage and compactions are B7b: occupancy, not cost. Both are derived
 -- metrics and identifiers only (constraint 6) - see docs/design.md, "B7b.
 -- Occupancy metrics".
+--
+-- One row per tool_use block, not pre-aggregated per (run_id, tool_name):
+-- a resumed session replays its prior tool_use/tool_result lines verbatim,
+-- the same way it replays compact_boundary records (confirmed on a real
+-- corpus - 325 of 1203 tool_use ids shared between an original session and
+-- its resumed continuation). tool_use_id is the block's own id, globally
+-- unique, and is what dedup keys on - identical in spirit to compactions'
+-- boundary_uuid below. A pre-aggregated row had no identity to dedupe
+-- against and double-counted every replayed call; found by code review, not
+-- by the tests or the dogfooding run that shipped alongside it.
 CREATE TABLE IF NOT EXISTS tool_usage (
+	tool_use_id  TEXT PRIMARY KEY,
 	run_id       INTEGER NOT NULL REFERENCES runs(id),
 	tool_name    TEXT NOT NULL,
-	calls        INTEGER NOT NULL DEFAULT 0,
-	result_bytes INTEGER NOT NULL DEFAULT 0, -- a byte count, never a token estimate
-	PRIMARY KEY (run_id, tool_name)
+	result_bytes INTEGER NOT NULL DEFAULT 0 -- a byte count, never a token estimate
 );
 
 CREATE TABLE IF NOT EXISTS compactions (
@@ -152,11 +161,15 @@ CREATE TABLE IF NOT EXISTS compactions (
 -- Never a message-text mention: a skill's name and description appear in
 -- every session's system prompt whether invoked or not, and an earlier
 -- attempt at string-matching gave every artifact a near-identical count.
+--
+-- One row per tool_use block, keyed on its own id - same reasoning and
+-- same fix as tool_usage above: a resumed session replays these blocks
+-- verbatim, and an aggregated (run_id, artifact_path) row had nothing to
+-- dedupe a replay against.
 CREATE TABLE IF NOT EXISTS artifact_usage (
+	tool_use_id   TEXT PRIMARY KEY,
 	run_id        INTEGER NOT NULL REFERENCES runs(id),
-	artifact_path TEXT NOT NULL REFERENCES artifacts(path),
-	uses          INTEGER NOT NULL DEFAULT 0,
-	PRIMARY KEY (run_id, artifact_path)
+	artifact_path TEXT NOT NULL REFERENCES artifacts(path)
 );
 
 CREATE TABLE IF NOT EXISTS coordination (
@@ -182,6 +195,14 @@ func Open(path string) (*DB, error) {
 	if err := migrate(db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate schema: %w", err)
+	}
+	// migrate may have dropped a table whose shape predates this version
+	// (see dropIfMissingColumn) - re-apply schema so CREATE TABLE IF NOT
+	// EXISTS rebuilds it in the current shape. Idempotent against every
+	// table that didn't need dropping.
+	if _, err := db.Exec(schema); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("re-apply schema after migrate: %w", err)
 	}
 	return &DB{sql: db}, nil
 }
@@ -227,7 +248,45 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
-	return migratePoliciesUnique(db)
+	if err := migratePoliciesUnique(db); err != nil {
+		return err
+	}
+	return migrateOccupancyDedup(db)
+}
+
+// migrateOccupancyDedup drops tool_usage/artifact_usage if either predates
+// the per-tool_use_id dedup fix (found by code review, B7b/B7a): both
+// tables are pure derived caches, entirely rebuilt from transcripts by the
+// next `loom report`/`loom advise`, so a clean drop is correct and simpler
+// than a data-preserving rebuild - the old rows are exactly the
+// double-counted values this fix exists to stop trusting.
+func migrateOccupancyDedup(db *sql.DB) error {
+	for _, table := range []string{"tool_usage", "artifact_usage"} {
+		if err := dropIfMissingColumn(db, table, "tool_use_id"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// dropIfMissingColumn drops table entirely if it exists but its stored
+// CREATE statement lacks column - the table predates a schema change too
+// structural for ALTER TABLE ADD COLUMN, and the caller has already
+// established it holds nothing worth preserving.
+func dropIfMissingColumn(db *sql.DB, table, column string) error {
+	var sqlText string
+	err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&sqlText)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // no table yet; the next CREATE builds it correctly
+	}
+	if err != nil {
+		return err
+	}
+	if strings.Contains(sqlText, column) {
+		return nil
+	}
+	_, err = db.Exec(`DROP TABLE ` + table)
+	return err
 }
 
 // migratePoliciesUnique rebuilds the policies table when it predates the
