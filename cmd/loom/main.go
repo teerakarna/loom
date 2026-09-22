@@ -21,6 +21,8 @@ func main() {
 		err = runAdvise(os.Args[2:])
 	case "status":
 		err = runStatus(os.Args[2:])
+	case "context":
+		err = runContext(os.Args[2:])
 	case "propose":
 		err = runPropose(os.Args[2:])
 	case "policy":
@@ -39,7 +41,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `loom — artifact lifecycle and cost/routing engine for Claude Code
+	fmt.Fprintln(os.Stderr, `loom - artifact lifecycle and cost/routing engine for Claude Code
 
 Usage:
   loom report [path] [--lane <lane>]
@@ -50,6 +52,10 @@ Usage:
                              are relevant plus a cold-start model/effort choice.
   loom status [path]        Report on loom itself: freshness, what it knows, and what
                              it cannot answer. Read-only, never ingests.
+  loom context [--lane <lane>]
+                             Report on context occupancy: what filled the window (tool
+                             output, by tool and bucket) and what compaction cost.
+                             Read-only, never ingests - run "loom report" first.
   loom propose              List proposals loom's evidence supports, with what each
                              rests on. Add "apply <id>" or "dismiss <id>" to act on one.
   loom policy               Show the effective model/effort per agent type, with the

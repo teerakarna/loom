@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Context occupancy (B7b): two new tables, `tool_usage` (calls and result bytes per tool per run)
+  and `compactions` (read directly off the host's own `compact_boundary` records, never inferred -
+  an earlier attempt at inferring compaction from a `cache_read` drop was wrong 42 times out of 42).
+  Surfaced through a new read-only `loom context` command and a `query_ledger.occupancy` dimension.
+  A resumed session replays its prior compaction history verbatim, uuid included, so compaction rows
+  dedupe on that uuid - naive summing had inflated an earlier measurement by 1.7M tokens. Bytes stay
+  bytes throughout: no column holds a token estimate. Run against this machine's own corpus post-
+  build: 11 compactions, 6.82M tokens dropped, 30.6 minutes wall clock, Read 561 calls / 30.7 MiB -
+  consistent with the hand-measured figures docs/design.md's B7b section was scoped against.
+
 - Claude Code plugin (B6c). `plugin/` carries a manifest and an MCP server registration, and
   `.claude-plugin/marketplace.json` makes the repository its own marketplace, so installing is
   `/plugin marketplace add teerakarna/loom` then `/plugin install loom@loom`. The plugin does not
@@ -37,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is not a saving.
 
 ### Fixed
+
+- The privacy-verification test the design doc's "Verification" section has called for since B1 -
+  "ingest a fixture containing a planted secret, then grep the database for it" - did not exist
+  anywhere in the repo. Added (`internal/ledger/privacy_test.go`), generic over the schema so it
+  covers every table without needing an update when a later slice adds one.
+
+- Doc and code hygiene (B7e): `internal/mcp/doc.go` and `cmd/loom/main.go`'s usage string said four
+  MCP tools and omitted `dismiss_proposal` - there are five. Four citations of the never-write rule
+  as constraint 9 corrected to 8 (9 is "artifact-derived text is data"). `docs/design.md`'s `Serve`
+  section and a Verification bullet described a Unix domain socket and daemon `serve.go` never
+  implemented (stdio only, one process per session). 19 em dashes in `docs/design.md` swept to plain
+  hyphens.
 
 - Stored timestamps are now always UTC. They were written with the local offset, but SQLite compares
   them as strings and RFC3339 only orders lexically when offsets match - so a run at `12:04Z` sorted

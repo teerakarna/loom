@@ -167,3 +167,72 @@ func TestApplyEvent_RepeatedMessageIDCountedOnce(t *testing.T) {
 		t.Errorf("InputTokens = %d, want 19 (two id-less lines must both count)", rs.Usage.InputTokens)
 	}
 }
+
+// TestIngestFile_ToolUsageByBytes is B7b: tool_result byte counts, resolved
+// to a tool name via the matching tool_use's id. Covers both content shapes
+// (a plain string and a list of blocks - see docs/transcript-schema.md) and
+// an orphaned tool_result whose tool_use never appeared in this file.
+func TestIngestFile_ToolUsageByBytes(t *testing.T) {
+	rs, err := IngestFile("../../testdata/synthetic-occupancy.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readStat, ok := rs.ToolUsage["Read"]
+	if !ok {
+		t.Fatal("no ToolUsage entry for Read")
+	}
+	wantReadBytes := int64(len("NOT-A-REAL-SECRET-abcdefgh12345678"))
+	if readStat.Calls != 1 || readStat.ResultBytes != wantReadBytes {
+		t.Errorf("Read = %+v, want {Calls:1 ResultBytes:%d}", readStat, wantReadBytes)
+	}
+
+	mcpStat, ok := rs.ToolUsage["mcp__synth__search"]
+	if !ok {
+		t.Fatal("no ToolUsage entry for mcp__synth__search")
+	}
+	// List-shaped content is measured as its marshaled JSON, not the text
+	// alone - see toolResultBytes.
+	wantMCPBytes := int64(len(`[{"text":"twelve chars","type":"text"}]`))
+	if mcpStat.Calls != 1 || mcpStat.ResultBytes != wantMCPBytes {
+		t.Errorf("mcp__synth__search = %+v, want {Calls:1 ResultBytes:%d}", mcpStat, wantMCPBytes)
+	}
+
+	// A tool_result whose tool_use never appeared in this file (the fixture's
+	// "synthtool-unseen") is attributed to (unknown), not dropped.
+	unknownStat, ok := rs.ToolUsage[unknownTool]
+	if !ok {
+		t.Fatal("no ToolUsage entry for (unknown)")
+	}
+	if unknownStat.Calls != 1 || unknownStat.ResultBytes != int64(len("orphaned result")) {
+		t.Errorf("(unknown) = %+v, want {Calls:1 ResultBytes:%d}", unknownStat, len("orphaned result"))
+	}
+}
+
+// TestIngestFile_CompactionReadNotGuessed is B7b: a compact_boundary record
+// is parsed directly off the host's own compactMetadata, never inferred from
+// a cache_read drop (that inference was tried and was wrong 42 times out of
+// 42 - docs/design.md, B7b).
+func TestIngestFile_CompactionReadNotGuessed(t *testing.T) {
+	rs, err := IngestFile("../../testdata/synthetic-occupancy.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(rs.Compactions) != 1 {
+		t.Fatalf("Compactions = %+v, want exactly 1", rs.Compactions)
+	}
+	c := rs.Compactions[0]
+	want := CompactionEvent{
+		UUID: "synth-boundary-0001", Timestamp: c.Timestamp, // set below
+		Trigger: "manual", PreTokens: 1000, PostTokens: 100,
+		CumulativeDroppedTokens: 900, DurationMs: 5000,
+	}
+	want.Timestamp = c.Timestamp // timestamp compared separately, not zero-valued
+	if c != want {
+		t.Errorf("Compactions[0] = %+v, want %+v", c, want)
+	}
+	if c.Timestamp.IsZero() {
+		t.Error("Timestamp is zero, want the line's own timestamp")
+	}
+}

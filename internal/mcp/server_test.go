@@ -10,13 +10,14 @@ import (
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/teerakarna/loom/internal/ingest"
 	"github.com/teerakarna/loom/internal/ledger"
 	"github.com/teerakarna/loom/internal/policy"
 	"github.com/teerakarna/loom/internal/propose"
 )
 
 // connectTestClient wires an in-process client to a fresh Loom MCP server
-// backed by a temp-dir SQLite ledger — no stdio, no real process, so this
+// backed by a temp-dir SQLite ledger - no stdio, no real process, so this
 // runs as a normal fast unit test.
 func connectTestClient(t *testing.T) (*gomcp.ClientSession, *ledger.DB) {
 	t.Helper()
@@ -81,6 +82,40 @@ func TestQueryLedgerReflectsRuns(t *testing.T) {
 	}
 }
 
+// TestQueryLedgerOccupancyDimension is B7b: query_ledger's occupancy
+// dimension is a separate metric from cost, computed off the same
+// tool_usage/compactions tables `loom context` reads - see docs/design.md,
+// "The framing moved onto a different metric".
+func TestQueryLedgerOccupancyDimension(t *testing.T) {
+	session, db := connectTestClient(t)
+	if err := db.InsertRun(ledger.RunRecord{Path: "a.jsonl", Kind: "session", Model: "sonnet"}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := db.RunIDByPath("a.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceToolUsage(id, map[string]ingest.ToolUsageStat{"Read": {Calls: 2, ResultBytes: 500}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertCompactions(id, []ingest.CompactionEvent{
+		{UUID: "u1", PreTokens: 1000, PostTokens: 100, DurationMs: 2000},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := callTool[LedgerReport](t, session, "query_ledger", map[string]any{})
+	if len(out.Occupancy.ByTool) != 1 || out.Occupancy.ByTool[0].Name != "Read" || out.Occupancy.ByTool[0].ResultBytes != 500 {
+		t.Errorf("Occupancy.ByTool = %+v, want one Read row with 500 bytes", out.Occupancy.ByTool)
+	}
+	if len(out.Occupancy.ByBucket) != 1 || out.Occupancy.ByBucket[0].Name != "file I/O" {
+		t.Errorf("Occupancy.ByBucket = %+v, want one file I/O row", out.Occupancy.ByBucket)
+	}
+	if out.Occupancy.CompactionCount != 1 || out.Occupancy.CompactionDroppedTokens != 900 {
+		t.Errorf("Occupancy compaction fields = %+v, want count 1, dropped 900", out.Occupancy)
+	}
+}
+
 func TestGetRecommendationMatchesActiveArtifact(t *testing.T) {
 	session, db := connectTestClient(t)
 	rec := ledger.ArtifactRecord{Kind: "skill", Path: "/skills/deploy.md", Name: "deploy-helper", Description: "deploy the service to production"}
@@ -129,7 +164,7 @@ func TestGetRecommendationExcludesStaleArtifacts(t *testing.T) {
 
 	out := callTool[RecommendationOutput](t, session, "get_recommendation", map[string]any{"text": "deploy the service to production"})
 	if len(out.Matches) != 0 {
-		t.Errorf("got %+v, want no matches — the only candidate is stale", out)
+		t.Errorf("got %+v, want no matches - the only candidate is stale", out)
 	}
 }
 

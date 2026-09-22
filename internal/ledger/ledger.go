@@ -1,10 +1,10 @@
 // Package ledger is the SQLite-backed (WAL mode) local store: artifacts,
 // events, runs, policies, proposals, and coordination. No content or
-// full-text index — derived metrics and identifiers only (design doc,
+// full-text index - derived metrics and identifiers only (design doc,
 // "Privacy by construction"). See docs/design.md, "Ledger".
 //
 // B1 only writes to runs; the other five tables are created now
-// (schema-complete from the start) but populated starting in later phases —
+// (schema-complete from the start) but populated starting in later phases -
 // artifacts and events from B2 onward (see artifact.go and event.go).
 package ledger
 
@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"strings"
 
-	_ "modernc.org/sqlite" // pure-Go driver — keeps the single-static-binary,
+	_ "modernc.org/sqlite" // pure-Go driver - keeps the single-static-binary,
 	// cross-compile-from-one-machine property from docs/design.md ("Core
 	// engine"); a CGO driver would need a C toolchain per target platform.
 )
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	last_seen   TEXT NOT NULL
 );
 
--- Append-only. This IS the ledger — never UPDATE or DELETE a row here.
+-- Append-only. This IS the ledger - never UPDATE or DELETE a row here.
 CREATE TABLE IF NOT EXISTS events (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
 	ts         TEXT NOT NULL,
@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS runs (
 	feedback_count      INTEGER NOT NULL DEFAULT 0,
 	-- Reported by a parent transcript's task-notification <usage> block, for
 	-- agent runs only. NULL when unknown (session runs, or no notification
-	-- found yet). Deliberately NOT reconciled against weighted_cost — see
+	-- found yet). Deliberately NOT reconciled against weighted_cost - see
 	-- docs/transcript-schema.md, "Reconciliation does NOT hold".
 	reported_subagent_tokens INTEGER,
 	reported_tool_uses       INTEGER,
@@ -111,6 +111,39 @@ CREATE TABLE IF NOT EXISTS runs (
 
 ` + proposalsSchema + `
 
+-- tool_usage and compactions are B7b: occupancy, not cost. Both are derived
+-- metrics and identifiers only (constraint 6) - see docs/design.md, "B7b.
+-- Occupancy metrics".
+CREATE TABLE IF NOT EXISTS tool_usage (
+	run_id       INTEGER NOT NULL REFERENCES runs(id),
+	tool_name    TEXT NOT NULL,
+	calls        INTEGER NOT NULL DEFAULT 0,
+	result_bytes INTEGER NOT NULL DEFAULT 0, -- a byte count, never a token estimate
+	PRIMARY KEY (run_id, tool_name)
+);
+
+CREATE TABLE IF NOT EXISTS compactions (
+	id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+	run_id             INTEGER NOT NULL REFERENCES runs(id),
+	-- The host's own record id. A resumed session replays its prior
+	-- compaction history verbatim, uuid included - this is what dedup keys
+	-- on, so the same event is never counted twice across two transcripts
+	-- (docs/transcript-schema.md, "compact_boundary").
+	boundary_uuid      TEXT NOT NULL UNIQUE,
+	seq                INTEGER NOT NULL DEFAULT 0, -- order within run_id's own file
+	trigger            TEXT NOT NULL DEFAULT '',
+	pre_tokens         INTEGER NOT NULL DEFAULT 0,
+	post_tokens        INTEGER NOT NULL DEFAULT 0,
+	-- As reported by the host: cumulative WITHIN one session lineage, not
+	-- safely summable across events. See ToolOutputReport / CompactionSummary
+	-- for the per-event figure ingest actually sums.
+	cumulative_dropped INTEGER NOT NULL DEFAULT 0,
+	duration_ms        INTEGER NOT NULL DEFAULT 0,
+	at                 TEXT -- nullable, same as runs.started_at/ended_at: a
+	                        -- transcript line with no parseable timestamp is
+	                        -- not grounds for failing the whole insert
+);
+
 CREATE TABLE IF NOT EXISTS coordination (
 	id      INTEGER PRIMARY KEY AUTOINCREMENT,
 	kind    TEXT NOT NULL, -- "message" | "presence" | "task"
@@ -120,7 +153,7 @@ CREATE TABLE IF NOT EXISTS coordination (
 `
 
 // Open opens (creating if necessary) the SQLite database at path, in WAL
-// mode, and applies the schema. Safe to call repeatedly — every statement is
+// mode, and applies the schema. Safe to call repeatedly - every statement is
 // idempotent (CREATE TABLE IF NOT EXISTS).
 func Open(path string) (*DB, error) {
 	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)")
@@ -141,11 +174,11 @@ func Open(path string) (*DB, error) {
 // migrate adds columns that shipped after a table's original CREATE TABLE,
 // for databases created by an earlier version of Loom. CREATE TABLE IF NOT
 // EXISTS (above) only ever applies to a table that doesn't exist yet, so a
-// column added later needs its own ALTER TABLE here — guarded by checking
+// column added later needs its own ALTER TABLE here - guarded by checking
 // the table's actual columns first, since SQLite has no ADD COLUMN IF NOT
 // EXISTS. artifacts.name/description were added after B1 shipped the table
 // schema-complete but column-incomplete (docs/design.md, "B1 only writes to
-// runs and events" — the table existed before the selector needed these).
+// runs and events" - the table existed before the selector needed these).
 func migrate(db *sql.DB) error {
 	for _, m := range []struct {
 		table   string

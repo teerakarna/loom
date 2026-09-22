@@ -937,7 +937,7 @@ still prose, #38 means retirement can never fire for an artifact that exists on 
   every staleness or disuse claim.
 - **#38**, retirement condition.
 
-#### B7b. Occupancy metrics, and `loom context`
+#### B7b. Occupancy metrics, and `loom context` - BUILT 2026-09-22
 
 Measurement only. Two new tables, both derived metrics and identifiers, so constraint 6 holds:
 
@@ -964,6 +964,35 @@ Stated limits, up front rather than discovered later:
 
 B7b also accrues far faster than per-agent-type run counts, so it is the cheapest route to satisfying
 B6d's own evidence gate.
+
+**Built narrower than specified, deliberately.** Tool output by tool and by bucket, and compaction
+count/dropped-tokens/wall-clock, are what shipped - both surfaced through `loom context` (read-only,
+same reason `loom status` is: this answers "what does the ledger already know", never "go find out")
+and a `query_ledger.occupancy` dimension, the latter capped at the top 15 tools per constraint 10
+(`loom context` shows the full table). **Cumulative input tokens over time and its slope,
+time-to-first-compaction, and per-fire hook output volume did not ship in this pass** - none of them
+change what the owner asked for (docs/design.md, "What the owner wants loom to produce"), and adding
+them unmeasured would be exactly the scope creep B4's write-enforcement dial was cut for. Revisit
+if a finding actually needs them.
+
+Two things the plan above did not spell out, settled during the build:
+
+- **`compactMetadata.cumulativeDroppedTokens` is not what gets summed.** It is cumulative within one
+  session lineage, so summing it across several compactions in the same corpus double-counts. Ingest
+  sums `preTokens - postTokens` per event instead - not cumulative, safely summable, and exactly what
+  "tokens dropped by this compaction" means. See docs/transcript-schema.md, "compact_boundary".
+- **The privacy verification this section's own checklist calls for did not exist.** "Ingest a
+  fixture containing a planted secret, then grep the database for it" has been in the design doc's
+  Verification section since B1, but no test anywhere did it. Built now
+  (`internal/ledger/privacy_test.go`, `TestNoContentStored`) - generic over the schema (reads table
+  names from `sqlite_master`), so it covers B7b's two new tables and needs no update when a later
+  slice adds another.
+
+Run against this machine's own corpus post-build: 11 compactions, 6.82M tokens dropped, 30.6 minutes
+wall clock, Read 561 calls / 30.7 MiB (86% of tool output measured on a smaller slice of the same
+corpus earlier - see "What the measurements settled" above). Consistent with the hand-measured
+figures this section was scoped against, which is the actual test of whether the tables mean what
+they claim to.
 
 #### B7c. Promotion rules as read-only proposals (#41)
 
@@ -1005,13 +1034,13 @@ If something must fire proactively, the only place it can go without reopening a
 pre-compact hook, already specified as a pointer-writer with a 50ms budget and an
 overwrite-never-append rule. It may carry an occupancy summary. It must not gate compaction.
 
-#### B7e. Doc and code hygiene, first commit
+#### B7e. Doc and code hygiene, first commit - BUILT 2026-09-22
 
 Small, and all of it is drift between what the code does and what it says:
 
 - `cmd/loom/main.go`'s usage string and `internal/mcp/doc.go` both say four MCP tools and omit
   `dismiss_proposal`. There are five. `doc.go` also still describes B2 as the current scope.
-- The never-write rule is constraint **8**. Three places cite it as constraint 9, which is
+- The never-write rule is constraint **8**. Four places cite it as constraint 9, which is
   "artifact-derived text is data". Residue from the renumbering that produced the append-never-insert
   rule.
 - Line 444 still describes a Unix domain socket fast path. `serve.go` is stdio-only and says so.

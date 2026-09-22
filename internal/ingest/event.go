@@ -1,6 +1,6 @@
 // Package ingest reads Claude Code's session transcript JSONL files and
 // normalizes each line into an Event. See docs/transcript-schema.md for the
-// real (empirically confirmed) field names this parses against — several
+// real (empirically confirmed) field names this parses against - several
 // differ from what was originally assumed in docs/design.md.
 package ingest
 
@@ -20,10 +20,10 @@ type Usage struct {
 }
 
 // AgentUsage is the <usage> block from a successful agent completion
-// task-notification. Only present when Status == "completed" — a failed
+// task-notification. Only present when Status == "completed" - a failed
 // completion has no usage to report. Field names here are snake_case in the
 // source text (duration_ms), unlike the camelCase durationMs used elsewhere
-// in the transcript — see docs/transcript-schema.md.
+// in the transcript - see docs/transcript-schema.md.
 type AgentUsage struct {
 	SubagentTokens int64
 	ToolUses       int64
@@ -32,7 +32,7 @@ type AgentUsage struct {
 
 // TaskNotification is a parsed <task-notification> block. These appear for
 // both agent completions and background-command completions; Usage is nil
-// for the latter (and for failed agent completions) — that is the real
+// for the latter (and for failed agent completions) - that is the real
 // discriminator, not the shape of TaskID.
 type TaskNotification struct {
 	TaskID  string
@@ -41,8 +41,41 @@ type TaskNotification struct {
 	Usage   *AgentUsage
 }
 
+// ToolUse is one tool_use content block on an assistant line: the tool
+// invoked and the id its matching tool_result (on a later user line) refers
+// back to. See docs/transcript-schema.md, "tool_use / tool_result".
+type ToolUse struct {
+	ID   string
+	Name string
+}
+
+// ToolResult is one tool_result content block on a user line. Bytes is the
+// size of Content exactly as written in the transcript - a measured byte
+// count, never a token estimate (docs/design.md, B7b: "bytes are not
+// tokens"). ToolUseID resolves back to a tool name via the ToolUse blocks
+// seen earlier in the same file; see applyEvent.
+type ToolResult struct {
+	ToolUseID string
+	Bytes     int64
+}
+
+// CompactionEvent is one compact_boundary system record, read directly off
+// the host's own accounting rather than inferred (docs/design.md, B7b).
+// UUID is the record's own uuid field - a resumed session's transcript
+// replays a prior compaction verbatim, uuid included, and this is the
+// identity B7b dedupes on (see docs/transcript-schema.md).
+type CompactionEvent struct {
+	UUID                    string
+	Timestamp               time.Time
+	Trigger                 string
+	PreTokens               int64
+	PostTokens              int64
+	CumulativeDroppedTokens int64
+	DurationMs              int64
+}
+
 // Event is one normalized transcript line. Unrecognized or irrelevant line
-// types produce Type == "" and should be skipped by the caller — ingest must
+// types produce Type == "" and should be skipped by the caller - ingest must
 // never fail on a line it doesn't understand (design doc constraint 3,
 // schema-tolerant).
 type Event struct {
@@ -69,11 +102,19 @@ type Event struct {
 	ToolUseCount int // count of tool_use content blocks on this line
 
 	// Populated when this line records a tool being denied or the user
-	// correcting a result — both are rework signals per docs/design.md.
+	// correcting a result - both are rework signals per docs/design.md.
 	ToolDenialKind string
 	UserFeedback   string
 
 	// Populated when this line's content is a <task-notification> block
 	// (queue-operation lines, and the "user" lines that echo them).
 	TaskNotification *TaskNotification
+
+	// Populated for assistant lines: one entry per tool_use content block, in
+	// the order they appear. See docs/transcript-schema.md.
+	ToolUses []ToolUse
+	// Populated for user lines: one entry per tool_result content block.
+	ToolResults []ToolResult
+	// Populated for a system line with subtype "compact_boundary".
+	Compaction *CompactionEvent
 }
