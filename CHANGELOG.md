@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Promotion rules as read-only proposals (B7c, #41): four structural checks over every project's
+  memory store, cross-project via a new `artifact.DiscoverAllMemory` (the one place Loom looks
+  beyond home + the current project). A memory file byte-identical across three or more stores is
+  a cross-project fact stuck in a per-project mechanism (`promote_memory_duplicate`); a `[[link]]`
+  that does not resolve within its own store (`broken_link`); a file not linked from its store's
+  own `MEMORY.md` (`unreachable_artifact`); a filename that has drifted from its own frontmatter
+  name (`filename_slug_drift`). All four route through B5's existing proposal machinery unchanged,
+  so the generation cap (20) and evidence-hash dedupe already built for B5's three kinds cover
+  these too, satisfying constraint 10 without a separate mechanism. Path-scoped rule discovery
+  (the fifth item in scope) deferred rather than guessed at - no standard root for a CLAUDE.md
+  hierarchy the way there is for Claude Code's own transcript/skill locations, and no measured
+  numbers anywhere behind what "the spec" meant by it. Run against this machine's own corpus: 5
+  duplicate groups, 5 broken links, 3 unreachable artifacts, 27 filename/slug drift cases;
+  `loom propose` returned exactly the 20-item cap.
+
 - `golangci-lint` now runs `gosec`, `sqlclosecheck`, `errorlint`, `unconvert`, `misspell` and
   `predeclared` alongside the existing standard set, free and zero new infrastructure. Real
   findings on the codebase as of this change: 20 `noctx` hits (deliberately not enabled - a
@@ -63,6 +78,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is not a saving.
 
 ### Fixed
+
+- Three bugs in B7c's memory checks, found by running `/code-review high` against the PR before
+  merging rather than after - the first time this project has done that. `DiscoverAllMemory`
+  propagated any per-store read error other than "missing", so one project with a permission
+  problem on its memory directory took every other store's findings down with it, and beyond that
+  everything `list_proposals`/`loom propose` return; now a bad store is skipped, not fatal, and
+  `MemoryIndex` dropped its `error` return entirely since every failure mode it can hit now
+  collapses to the same empty-index answer. `detectMemoryDuplicates` ranged directly over a Go map,
+  so its output order was randomized per call - harmless until the total findings exceeded the
+  20-proposal cap, at which point which subset of duplicates got a slot depended on map iteration
+  order; now sorted by subject before returning. The `topic/SKILL.md` subdirectory memory
+  convention (already recognized by the single-project `Discover()` path) was invisible to every
+  B7c check, including producing a false `broken_link` report against a target that genuinely
+  existed; `DiscoverAllMemory` now mirrors `scanMarkdownDir`'s two-shape handling.
+
+- `list_proposals`'s MCP handler resolved `os.UserHomeDir()` inside the request handler itself,
+  which made every test of it non-hermetic - `go test` scanned whichever machine ran the suite's
+  own real, private memory files once B7c's generator existed to find something there. Fixed by
+  resolving `home` once at server construction (`NewServer(db, home)`) instead of per-request; test
+  setup now passes an isolated `t.TempDir()`. Found by the test suite itself failing, the same
+  discipline that caught the resumed-session double-count below.
 
 - `tool_usage` and `artifact_usage` double-counted every call a resumed session's transcript
   replayed (found by `/code-review high`, not by the tests or dogfooding either table shipped

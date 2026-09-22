@@ -68,7 +68,13 @@ const (
 // write outside Loom's own state. Used to decide what may ever be automated;
 // the answer for anything touching a user's files is permanently no.
 func TouchesUserFiles(kind string) bool {
-	return kind == KindRetireArtifact
+	switch kind {
+	case KindRetireArtifact, KindPromoteMemoryDuplicate, KindBrokenLink,
+		KindUnreachableArtifact, KindFilenameSlugDrift:
+		return true
+	default:
+		return false
+	}
 }
 
 // StaleAfter is how long an artifact must be unseen before retirement is even

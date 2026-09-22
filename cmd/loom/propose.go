@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -60,6 +61,15 @@ func runPropose(args []string) error {
 	if err != nil {
 		return err
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	memoryFindings, err := propose.GenerateMemoryFindings(home)
+	if err != nil {
+		return err
+	}
+	generated = append(generated, memoryFindings...)
 	if _, err := propose.Store(db, generated, now); err != nil {
 		return err
 	}
@@ -111,6 +121,16 @@ func summaryFor(p ledger.ProposalRow, ev map[string]any) string {
 			ev["agent_type"], ev["observed_model"], ev["runs"])
 	case propose.KindRevertPolicy:
 		return fmt.Sprintf("revert %v: %v", ev["agent_type"], ev["reason"])
+	case propose.KindPromoteMemoryDuplicate:
+		return fmt.Sprintf("promote %q to a reference skill, identical across %v stores",
+			ev["filename"], ev["stores"])
+	case propose.KindBrokenLink:
+		return fmt.Sprintf("%v links to [[%v]], which does not exist in its store",
+			ev["filename"], ev["target_slug"])
+	case propose.KindUnreachableArtifact:
+		return fmt.Sprintf("%v exists but is not linked from its store's MEMORY.md", ev["filename"])
+	case propose.KindFilenameSlugDrift:
+		return fmt.Sprintf("%v's filename no longer matches its own name: %v", ev["filename"], ev["slug"])
 	default:
 		return fmt.Sprintf("%s: %s", p.Kind, p.Subject)
 	}
@@ -138,6 +158,10 @@ func compactEvidence(ev map[string]any) string {
 	case ev["median_cost"] != nil:
 		return fmt.Sprintf("median cost %.0f, %.0f tool calls/run, %.2f denials/run",
 			asFloat(ev["median_cost"]), asFloat(ev["median_tools"]), asFloat(ev["denial_rate"]))
+	case ev["paths"] != nil:
+		return fmt.Sprintf("%v", ev["paths"])
+	case ev["store"] != nil && ev["filename"] != nil:
+		return fmt.Sprintf("%v/%v", ev["store"], ev["filename"])
 	default:
 		return ""
 	}

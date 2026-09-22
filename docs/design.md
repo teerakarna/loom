@@ -1057,7 +1057,7 @@ artifacts sharing a name (a project-level skill overriding a global one - `disco
 dirs by design) resolved to whichever row SQLite felt like returning that call. All three fixed
 alongside the dedup fix, each with its own regression test reproducing the original failure shape.
 
-#### B7c. Promotion rules as read-only proposals (#41)
+#### B7c. Promotion rules as read-only proposals (#41) - BUILT 2026-09-22
 
 Turn the promotion-rules table into code emitting `promote_*` proposals, each carrying evidence and a
 rendered diff into Loom's own proposal directory. Same output as the spec's `promote_to_mechanism`,
@@ -1079,6 +1079,80 @@ deletion.
 
 Constraint 10 applies and is satisfied in the same PR, not deferred: state the generation cap, the
 dedupe key and the retention rule before merging.
+
+**Built as scoped, with one piece deferred rather than guessed at.** The four structural checks
+shipped: `internal/artifact.DiscoverAllMemory` walks every project's memory store
+(`~/.claude/projects/*/memory`) cross-project - the one place in Loom that needs a wider view than
+"home plus the current project", since duplicate detection and index-reachability only mean anything
+across stores. Constraint 6 holds throughout: files are hashed and scanned for `[[links]]`, never
+retained. Four new proposal kinds route through the existing B5 machinery unchanged
+(`propose.Store`/`UpsertProposal`), which is what satisfies constraint 10 without a separate
+mechanism: the same `MaxPendingProposals` cap (20) and the same `(kind, subject)`-keyed,
+evidence-hash re-raise rule already governed B5's three kinds and now governs these four too.
+
+**Path-scoped rules: discovery not built, and said so rather than guessed.** "The spec names them
+and Loom does not model them" was the extent of the direction, with no measured numbers behind it
+anywhere in this document, unlike every other B7c check. The natural reading - CLAUDE.md files as a
+new artifact kind - runs into a real gap: Loom's other discovery is scoped to "home plus the current
+project" precisely because those are Claude Code's own standard locations (constraint 2), but a
+CLAUDE.md hierarchy lives under a user's own workspace tree, which has no standard root Claude Code
+defines. Guessing at one (this machine's own `~/projects/{work,personal,public}` convention, say)
+would be encoding one person's layout into the tool, which the design constraints open by forbidding.
+Deferred rather than built on a guess - revisit if a concrete shape turns up, the same treatment
+semantic staleness already got below.
+
+**Run against this machine's own corpus, all four checks firing for real:** 5 duplicate groups
+spanning 3 stores each, 5 broken links, 3 unreachable artifacts, 27 filename/slug drift cases (17
+substantive - e.g. `feedback_working_preferences` renamed to `working-preferences` at some point
+without the file following - 10 a systematic underscore-vs-hyphen convention difference, both real
+drift by the same definition, not distinguished further since the design doc's own rule draws no
+line between them). `loom propose` on the clean, reset local ledger returned exactly 20 - the
+generation cap doing its job.
+
+**A real bug found and fixed before this shipped, not after.** The MCP `list_proposals` handler
+originally called `os.UserHomeDir()` inside the request handler itself. That made every test of it
+non-hermetic: `go test` was scanning whichever machine happened to run the suite's own real,
+private `~/.claude/projects/*/memory` files, and `TestListProposalsEmpty` failed outright once B7c's
+generator started finding real findings on the developer machine that ran it. Fixed by resolving
+`home` once at server construction (`NewServer(db, home)`, threaded from `cmd/loom/serve.go`'s own
+`os.UserHomeDir()` call) rather than per-request, and test setup now passes an isolated `t.TempDir()`.
+Caught by running the test suite, the same discipline that found B7a/B7b's resumed-session
+double-count - the tests are what caught this one, which is the system working as intended.
+
+**Then `/code-review high` was run against the PR before merging, not after, for the first time this
+project has done that.** Three more real, verified bugs, all fixed in the same PR:
+
+- **A permission problem on one project's memory store took the whole scan down.**
+  `DiscoverAllMemory` only tolerated `os.IsNotExist` on a per-store read, propagating anything else -
+  and because this function scans dozens of stores at once, unlike the single-project `Discover()`,
+  the blast radius of one bad store was every other store's findings too, and beyond that everything
+  `list_proposals`/`loom propose` return, including proposals with nothing to do with memory. A
+  regression against constraint 7 in spirit even though the specific pattern (only special-casing
+  `IsNotExist`) already existed in `scanMarkdownDir` - it mattered here because of the fan-out, not
+  because the pattern itself was new. Fixed: any per-store read error now skips that store, not the
+  scan; `MemoryIndex`'s signature dropped its `error` return entirely, since every failure mode it
+  can hit now collapses to the same empty-index answer.
+- **`detectMemoryDuplicates`'s output order was randomized per call**, from ranging directly over a
+  Go map keyed by content hash. Harmless until the total findings across every check exceeded the
+  20-proposal cap - the exact situation this machine's corpus produces - at which point which subset
+  of duplicate findings actually got a slot depended on map iteration order, so two back-to-back runs
+  against identical, unchanged disk state could persist a different set each time. The "not a
+  coincidence" claim above was true of the count, not yet of which 20. Fixed with an explicit sort by
+  subject before returning.
+- **The subdirectory memory convention (`topic/SKILL.md`) was invisible to every B7c check.**
+  `DiscoverAllMemory` unconditionally skipped directory entries, while `scanMarkdownDir` - used for
+  this exact kind in the single-project `Discover()` path - already treats a subdirectory containing
+  its own `SKILL.md` as an equally valid memory artifact. A `[[link]]` to such an artifact would have
+  been reported `broken_link` even though the target genuinely existed. Fixed by mirroring
+  `scanMarkdownDir`'s two-shape handling.
+
+Two findings from the same pass considered and not fixed, reasoning kept rather than the conclusion
+alone: no caching of the per-call filesystem walk (matches `Discover()`'s own existing, uncached
+behaviour exactly - not a regression, and premature caching risks a staleness bug bigger than the
+walk cost at this corpus's measured scale); and a `ReadFile`-then-separate-`Open` pair in
+`readMemoryFile` that could theoretically observe two different versions of a file edited mid-scan -
+a real but vanishingly narrow race, self-correcting on the next run, not worth the complexity of a
+single-read refactor for what it would prevent.
 
 **Not in B7c: semantic staleness.** Tested here and rejected on measurement. Extracting the claims an
 artifact makes and checking whether they still resolve produced 44 candidates and 6 flags, all 6 false

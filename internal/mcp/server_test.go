@@ -27,7 +27,11 @@ func connectTestClient(t *testing.T) (*gomcp.ClientSession, *ledger.DB) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	server := NewServer(db)
+	// An isolated, empty home - not the real one. B7c's memory findings scan
+	// <home>/.claude/projects/*/memory; pointing that at whatever machine
+	// happens to run the test suite would make every list_proposals test
+	// depend on that machine's real, private memory files.
+	server := NewServer(db, t.TempDir())
 	client := gomcp.NewClient(&gomcp.Implementation{Name: "test-client", Version: "v0.0.1"}, nil)
 
 	ctx := context.Background()
