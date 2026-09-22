@@ -13,10 +13,32 @@ Please do not disclose the issue publicly until it has been addressed.
 
 ## Scope
 
-Loom's core has no network egress by design (see `docs/design.md`, "Design constraints"). The
-main areas of security interest are:
+Loom reads Claude Code session transcripts, which on any real machine contain confidential
+material. That single fact defines the threat model: the sensitive thing is already on disk, and
+Loom's job is to derive metrics from it without retaining, moving or re-emitting any of it.
 
-- The binary-fetch step in the plugin installer (verification of downloaded release binaries)
-- The Unix domain socket server (local-only, mode 0600 — a permissions regression here is a
-  real vulnerability)
-- Anything that could cause message content (not just derived metrics) to end up in the ledger
+The areas of real security interest, most serious first:
+
+- **Anything that could put message content, rather than derived metrics and identifiers, into the
+  ledger.** This is design constraint 6 and it is the property that makes Loom safe to point at a
+  confidential corpus at all. Enforced by a test that ingests a fixture containing a planted secret
+  and then greps every table for it (`internal/ledger/privacy_test.go`).
+- **Network egress from the core.** There is none, as an invariant rather than a default. A change
+  that introduces any is a vulnerability, not a feature.
+- **The ledger file itself.** Constraint 6 keeps content out; it does not keep *identifiers* out,
+  and transcript paths encode project directory names. The ledger is therefore machine-local by
+  rule (constraint 12) and must never be synced, committed or backed up to a shared location.
+- **Artifact-derived text re-served over MCP.** A skill, agent or plan's name and description are
+  read verbatim off disk and returned through `get_recommendation` into whatever session asked,
+  which is untrusted content entering another agent's context (constraint 9). It is length-capped,
+  every affected field says in its own schema that it is data rather than an instruction, and an
+  advisory `suspicious` flag marks obviously injection-shaped text. The flag is never a filter and
+  its absence is not a guarantee.
+- **The plugin's binary resolution.** `plugin/bin/loom-mcp` resolves an already-installed `loom`
+  via `$LOOM_BIN`, then PATH, then the locations the documented install methods use. It does not
+  download or execute a fetched artifact. Releases are not yet signed, so a user is trusting
+  whatever they installed themselves; signing is tracked in `docs/design.md` as B6a and is a
+  prerequisite for distributing binaries to strangers.
+
+`loom serve` speaks MCP over stdio only, as a subprocess of the client that spawned it. There is no
+daemon, no socket and no listening port.

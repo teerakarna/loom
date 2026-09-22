@@ -1,19 +1,35 @@
 # Contributing
 
-Loom is early — B1 and B2 are done (ingest/ledger/report; artifact discovery, selector, MCP
-server), see `docs/design.md` for current status and what's still ahead (B3 onward). The
-architecture is still settling, so discussion on an issue before a larger PR is still the most
-useful way to contribute.
+Loom is pre-1.0 and the architecture is still settling, so discussion on an issue before a larger
+PR is the most useful way to contribute.
+
+`docs/design.md` is the file to read first. It carries the current phase, the delivery slices, and
+the reasoning behind every design constraint, including the ones that say what Loom will not do.
+Status lives there and only there, deliberately, so it cannot drift out of sync with a summary
+kept somewhere else.
 
 ## Development
 
 - Go (see `go.mod` for the minimum version).
 - `go build ./...`, `go vet ./...`, `go test ./...`, and `golangci-lint run ./...` before opening
-  a PR — all four run in CI and must be clean.
-- No fixture may be derived from a real Claude Code transcript, even redacted — all test fixtures
-  under `testdata/` must be synthetic and hand-written. See `docs/design.md`, "Publishability
-  rules." This is a hard requirement, not a style preference: the tool's only input is transcripts,
-  which on any real machine contain confidential material.
+  a PR. All four run in CI and must be clean.
+- No fixture may be derived from a real Claude Code transcript, even redacted. All test fixtures
+  under `testdata/` must be synthetic and hand-written, and declared in `testdata/README.md`'s
+  manifest. See `docs/design.md`, "Publishability rules". This is a hard requirement, not a style
+  preference: the tool's only input is transcripts, which on any real machine contain confidential
+  material.
+
+## Merging
+
+`main` is protected. A change reaches it through a pull request, never a direct push, and:
+
+- **Five checks must be green**: `test`, `lint`, `govulncheck`, `plugin`, `secrets`. The branch
+  must also be up to date with `main` before merging.
+- **Commits must be signed.** An unsigned commit anywhere in the branch's history blocks the merge,
+  including one made by a CI job that commits back to the branch. Squashing does not wash it out,
+  and the error GitHub reports for this is generic, so check signatures first if a PR with green
+  checks refuses to merge.
+- **Review threads must be resolved**, and these rules apply to administrators too.
 
 ## Recording findings
 
