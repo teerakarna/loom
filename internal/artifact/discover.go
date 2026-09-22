@@ -244,12 +244,12 @@ func artifactFromFile(path, fallbackName, kind string) Artifact {
 // truncate returns s unchanged if it's within max runes, or its first
 // max-1 runes plus an ellipsis otherwise. Operates on runes, not bytes, so a
 // multi-byte character is never split.
-func truncate(s string, max int) string {
+func truncate(s string, maxRunes int) string {
 	r := []rune(s)
-	if len(r) <= max {
+	if len(r) <= maxRunes {
 		return s
 	}
-	return string(r[:max-1]) + "…"
+	return string(r[:maxRunes-1]) + "…"
 }
 
 // hooksSettings is the subset of settings.json this package reads. Every

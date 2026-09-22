@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -148,7 +149,7 @@ func IngestFile(path string) (RunSummary, error) {
 	}
 	// A line-too-long or read error partway through still leaves everything
 	// ingested so far intact - report it, don't discard the partial result.
-	if err := sc.Err(); err != nil && err != io.EOF {
+	if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
 		return rs, err
 	}
 
