@@ -1,4 +1,4 @@
-package artifact
+package asset
 
 import (
 	"os"
@@ -136,7 +136,7 @@ func TestDiscoverAllMemory_OneUnreadableStoreDoesNotFailTheScan(t *testing.T) {
 
 // TestDiscoverAllMemory_SubdirectoryConvention is the regression test for a
 // bug code review found: an earlier version unconditionally skipped
-// directory entries, so a memory artifact using the "name/SKILL.md"
+// directory entries, so a memory asset using the "name/SKILL.md"
 // subdirectory convention (a real convention scanMarkdownDir already
 // recognizes for this exact kind in the single-project Discover path) was
 // invisible to every B7c check - including producing a false broken_link
@@ -145,7 +145,7 @@ func TestDiscoverAllMemory_SubdirectoryConvention(t *testing.T) {
 	home := t.TempDir()
 	writeFile(t, filepath.Join(home, ".claude", "projects", "store-a", "memory", "deep-topic", "SKILL.md"),
 		"---\nname: deep-topic\n---\nBody.")
-	// A subdirectory with no SKILL.md is not a memory artifact - same rule
+	// A subdirectory with no SKILL.md is not a memory asset - same rule
 	// scanMarkdownDir applies.
 	writeFile(t, filepath.Join(home, ".claude", "projects", "store-a", "memory", "not-a-topic", "notes.md"),
 		"stray file, not SKILL.md")

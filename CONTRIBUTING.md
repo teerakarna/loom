@@ -15,7 +15,7 @@ kept somewhere else.
   a PR. All four run in CI and must be clean.
 - Run `/code-review` on the diff before opening a PR, sized to the change - low effort for a docs
   fix, high for a new table or schema change. Green CI is necessary, not sufficient: it was still
-  green the day `tool_usage` and `artifact_usage` shipped double-counting every call a resumed
+  green the day `tool_usage` and `asset_usage` shipped double-counting every call a resumed
   session replayed, and `/code-review high` is what found it, run after the fact against code
   already on `main`. Running it before merging, not after, is the whole point.
 - No fixture may be derived from a real Claude Code transcript, even redacted. All test fixtures

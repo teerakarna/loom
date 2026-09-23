@@ -1,6 +1,8 @@
 package ledger
 
 import (
+	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -162,5 +164,68 @@ func TestNeedsIngestDetectsAGrownFile(t *testing.T) {
 	}
 	if s.TotalWeightedCost != 1200 {
 		t.Errorf("TotalWeightedCost = %v, want 1200 (the fresh reading, not the stale one)", s.TotalWeightedCost)
+	}
+}
+
+// TestMigrateAssetRenameDropsOldTablesAndProposals is a regression test for
+// the artifact->asset rename: a pre-rename ledger has `artifacts`/
+// `artifact_usage` tables and may carry a pending `proposals` row stored
+// under an old kind string. Both must be gone after Open runs the
+// migration - the tables because CREATE TABLE IF NOT EXISTS never rebuilds
+// a table that already exists under its old name, and the proposal row
+// because propose.TouchesUserFiles no longer recognizes its kind and would
+// otherwise mis-report it as safe (found by code review before this
+// shipped).
+func TestMigrateAssetRenameDropsOldTablesAndProposals(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`
+		CREATE TABLE artifacts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, path TEXT UNIQUE,
+			name TEXT, description TEXT, status TEXT, first_seen TEXT, last_seen TEXT
+		);
+		INSERT INTO artifacts (type, path, status, first_seen, last_seen)
+			VALUES ('skill', '/s/old.md', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+		CREATE TABLE artifact_usage (
+			tool_use_id TEXT PRIMARY KEY, run_id INTEGER, artifact_path TEXT
+		);
+		CREATE TABLE proposals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
+			subject TEXT NOT NULL DEFAULT '', evidence TEXT NOT NULL,
+			evidence_hash TEXT NOT NULL DEFAULT '', sample_size INTEGER NOT NULL,
+			effect_size REAL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,
+			UNIQUE(kind, subject)
+		);
+		INSERT INTO proposals (kind, subject, evidence, sample_size, created_at)
+			VALUES ('retire_artifact', '/s/old.md', '{}', 1, '2026-01-01T00:00:00Z');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Open(path) // runs migrateAssetRename
+	if err != nil {
+		t.Fatalf("Open on a pre-rename ledger failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var name string
+	for _, table := range []string{"artifacts", "artifact_usage"} {
+		err := db.sql.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
+		if !errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("table %q still exists after migration (err=%v)", table, err)
+		}
+	}
+
+	rows, err := db.ListProposals(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("got %d proposal(s) after migration, want 0 - the retire_artifact row must be purged, not carried forward under a kind TouchesUserFiles no longer recognizes", len(rows))
 	}
 }

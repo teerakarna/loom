@@ -58,34 +58,34 @@ func TestNoContentStored(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Also exercise B7a's artifact_usage table (#39): its raw signals come
+	// Also exercise B7a's asset_usage table (#39): its raw signals come
 	// from tool_use input fields, but the fixture also plants both a skill
 	// name and a file path in plain tool_result text (see
-	// synthetic-artifact-usage.jsonl) - the same shape a planted secret
+	// synthetic-asset-usage.jsonl) - the same shape a planted secret
 	// would take if this join were ever built from message content instead
 	// of structured fields.
-	usageRS, err := ingest.IngestFile("../../testdata/synthetic-artifact-usage.jsonl")
+	usageRS, err := ingest.IngestFile("../../testdata/synthetic-asset-usage.jsonl")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertArtifact(ArtifactRecord{Kind: "skill", Path: "/skills/example-skill/SKILL.md", Name: "example-skill"}, time.Now()); err != nil {
+	if err := db.UpsertAsset(AssetRecord{Kind: "skill", Path: "/skills/example-skill/SKILL.md", Name: "example-skill"}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertArtifact(ArtifactRecord{Kind: "plan", Path: "/workspace/.claude/plans/my-plan.md", Name: "my-plan"}, time.Now()); err != nil {
+	if err := db.UpsertAsset(AssetRecord{Kind: "plan", Path: "/workspace/.claude/plans/my-plan.md", Name: "my-plan"}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.InsertRun(RunRecord{Path: "synthetic-artifact-usage.jsonl", SessionID: usageRS.SessionID, Kind: usageRS.Kind}); err != nil {
+	if err := db.InsertRun(RunRecord{Path: "synthetic-asset-usage.jsonl", SessionID: usageRS.SessionID, Kind: usageRS.Kind}); err != nil {
 		t.Fatal(err)
 	}
-	usageID, err := db.RunIDByPath("synthetic-artifact-usage.jsonl")
+	usageID, err := db.RunIDByPath("synthetic-asset-usage.jsonl")
 	if err != nil {
 		t.Fatal(err)
 	}
-	lookup, err := db.BuildArtifactLookup()
+	lookup, err := db.BuildAssetLookup()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ReplaceArtifactUsage(usageID, lookup.Resolve(usageRS.SkillTouches, usageRS.FileTouches)); err != nil {
+	if err := db.ReplaceAssetUsage(usageID, lookup.Resolve(usageRS.SkillTouches, usageRS.FileTouches)); err != nil {
 		t.Fatal(err)
 	}
 

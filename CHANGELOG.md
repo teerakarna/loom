@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Renamed Loom's core concept from "artifact" to "asset" throughout the codebase and docs
+  (`internal/artifact` -> `internal/asset`, `ArtifactRecord`/`ArtifactRow`/`ArtifactUsageSummary`/
+  `ArtifactLookup`/`ArtifactTouch` -> `Asset...`, `KindRetireArtifact`/`KindUnreachableArtifact` and
+  their stored kind strings -> `Kind...Asset`/`retire_asset`/`unreachable_asset`, the `artifacts`/
+  `artifact_usage` DB tables and `artifact_path` column -> `assets`/`asset_usage`/`asset_path`),
+  resolving the collision with the aligned spec's own "artifact" (a versioned render block) - an
+  open item left for the owner since B7 was scoped. `asset` chosen over `resource` (collides with
+  MCP's own first-class Resources concept), `definition` (collides with `loom policy render`'s
+  "agent definitions") and `fixture` (collides with `testdata/`'s established meaning). A new
+  `migrateAssetRename` drops the old-named tables on a pre-rename ledger; verified against this
+  machine's own real `~/.loom/loom.db`. Renamed throughout this changelog's own history too, not
+  just forward from here - every entry below describes code that has never shipped under any name
+  but this one (nothing has been tagged or released yet), so there is no locked-in "as published"
+  wording to preserve, unlike the MCP-narrowing entry above, which records an actual behaviour
+  change over time rather than a pure rename.
+
+  Reviewed before merge, and a real bug survived until it was: `TouchesUserFiles` defaulted an
+  unrecognized proposal kind to `false` ("safe to automate"), which would have silently mis-reported
+  a proposal stored under an old kind string as safe rather than as touching the user's files. Fixed
+  by having `migrateAssetRename` also delete any `proposals` row still carrying an old kind string
+  (dead the moment `Generate` stopped emitting it), and by flipping `TouchesUserFiles`'s default from
+  fail-open to fail-safe: it now names the two kinds that are genuinely safe and treats everything
+  else as touching the user's files.
+
 - MCP server narrowed to one tool, `get_recommendation`. `record_outcome` moves for the same reason
   B5 already made `loom propose apply` CLI-only: it writes, and an assistant can call an MCP tool
   without the human asking, so the terminal is where a decision that changes state belongs - B7d
@@ -23,18 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Promotion rules as read-only proposals (B7c, #41): four structural checks over every project's
-  memory store, cross-project via a new `artifact.DiscoverAllMemory` (the one place Loom looks
+  memory store, cross-project via a new `asset.DiscoverAllMemory` (the one place Loom looks
   beyond home + the current project). A memory file byte-identical across three or more stores is
   a cross-project fact stuck in a per-project mechanism (`promote_memory_duplicate`); a `[[link]]`
   that does not resolve within its own store (`broken_link`); a file not linked from its store's
-  own `MEMORY.md` (`unreachable_artifact`); a filename that has drifted from its own frontmatter
+  own `MEMORY.md` (`unreachable_asset`); a filename that has drifted from its own frontmatter
   name (`filename_slug_drift`). All four route through B5's existing proposal machinery unchanged,
   so the generation cap (20) and evidence-hash dedupe already built for B5's three kinds cover
   these too, satisfying constraint 10 without a separate mechanism. Path-scoped rule discovery
   (the fifth item in scope) deferred rather than guessed at - no standard root for a CLAUDE.md
   hierarchy the way there is for Claude Code's own transcript/skill locations, and no measured
   numbers anywhere behind what "the spec" meant by it. Run against this machine's own corpus: 5
-  duplicate groups, 5 broken links, 3 unreachable artifacts, 27 filename/slug drift cases;
+  duplicate groups, 5 broken links, 3 unreachable assets, 27 filename/slug drift cases;
   `loom propose` returned exactly the 20-item cap.
 
 - `golangci-lint` now runs `gosec`, `sqlclosecheck`, `errorlint`, `unconvert`, `misspell` and
@@ -46,10 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   3 real `sqlclosecheck` hits (fixed), one real `errorlint` hit and one `predeclared` shadow of
   Go's builtin `max` (both fixed).
 
-- The artifact-to-run join (B7a, #39): a new `artifact_usage(run_id, artifact_path, uses)` table,
+- The asset-to-run join (B7a, #39): a new `asset_usage(run_id, asset_path, uses)` table,
   populated from two structured signals only - a `Skill` tool_use's skill name, and a
   `Read`/`Edit`/`Write` tool_use's file_path - never from message text, which an earlier attempt
-  confirmed would give every artifact a near-identical count. Agent usage needed no new signal:
+  confirmed would give every asset a near-identical count. Agent usage needed no new signal:
   `runs.agent_type` already existed for B3a. `loom propose`'s retirement check now uses this, via
   the #38 fix below, instead of `last_seen`.
 
@@ -119,9 +143,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   setup now passes an isolated `t.TempDir()`. Found by the test suite itself failing, the same
   discipline that caught the resumed-session double-count below.
 
-- `tool_usage` and `artifact_usage` double-counted every call a resumed session's transcript
+- `tool_usage` and `asset_usage` double-counted every call a resumed session's transcript
   replayed (found by `/code-review high`, not by the tests or dogfooding either table shipped
-  with). Both stored one aggregated row per `(run_id, tool_name)`/`(run_id, artifact_path)` with no
+  with). Both stored one aggregated row per `(run_id, tool_name)`/`(run_id, asset_path)` with no
   per-event identity, unlike `compactions`, which already deduped on `boundary_uuid` for exactly
   this reason. Ordinary `tool_use`/`tool_result` lines turn out to replay the same way
   `compact_boundary` records do - confirmed directly, 325 of 1203 `tool_use` ids shared between one
@@ -132,23 +156,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pre-existing gap in when that backfill actually happens).
 
   The same review pass found three more real bugs in the same two features, each fixed with its own
-  regression test: `retireStaleArtifacts` never checked `runs.agent_type` for agent-kind artifacts,
+  regression test: `retireStaleAssets` never checked `runs.agent_type` for agent-kind assets,
   so a custom agent invoked constantly via the `Agent` tool could be proposed for retirement as
   "never used"; `loom context` printed nothing about compaction when a lane had compactions but no
-  tool-output rows, because one early return covered both sections; `BuildArtifactLookup` had no
-  `ORDER BY`, so two artifacts sharing a name resolved to whichever row SQLite returned that call.
+  tool-output rows, because one early return covered both sections; `BuildAssetLookup` had no
+  `ORDER BY`, so two assets sharing a name resolved to whichever row SQLite returned that call.
 
 - Skill discovery (B7a, #42): a flat `.md` directly in a skills directory is discovered as a new
   `KindReference`, not miscounted as a skill - Claude Code only ever loads `<name>/SKILL.md`. Run
   against this machine's own skills directory: 9 real skills, 1 reference, and the reference turned
   out to be a genuine leftover file next to its own skill directory, not a hypothetical case.
 
-- Retirement could never fire for an artifact that exists on disk (B7a, #38). `last_seen` is bumped
-  by `UpsertArtifact` on every discovery pass, so it reset every time `loom advise` ran and never
+- Retirement could never fire for an asset that exists on disk (B7a, #38). `last_seen` is bumped
+  by `UpsertAsset` on every discovery pass, so it reset every time `loom advise` ran and never
   reached the staleness threshold for anything still present - only a file already deleted from disk
-  could ever be proposed for retirement. Fixed by using `last_used` (from the new artifact_usage
+  could ever be proposed for retirement. Fixed by using `last_used` (from the new asset_usage
   join) as the staleness clock, falling back to the stable `first_seen` when nothing has used it yet.
-  `last_seen` is untouched and keeps answering its own question, whether the artifact is on disk.
+  `last_seen` is untouched and keeps answering its own question, whether the asset is on disk.
 
 - The privacy-verification test the design doc's "Verification" section has called for since B1 -
   "ingest a fixture containing a planted secret, then grep the database for it" - did not exist
@@ -157,7 +181,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Doc and code hygiene (B7e): `internal/mcp/doc.go` and `cmd/loom/main.go`'s usage string said four
   MCP tools and omitted `dismiss_proposal` - there are five. Four citations of the never-write rule
-  as constraint 9 corrected to 8 (9 is "artifact-derived text is data"). `docs/design.md`'s `Serve`
+  as constraint 9 corrected to 8 (9 is "asset-derived text is data"). `docs/design.md`'s `Serve`
   section and a Verification bullet described a Unix domain socket and daemon `serve.go` never
   implemented (stdio only, one process per session). 19 em dashes in `docs/design.md` swept to plain
   hyphens.
@@ -182,7 +206,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and rationale. New `dismiss_proposal` tool completes the loop in the place the user already is.
 
 - `loom propose` (B5a): generates, stores and lists proposals the ledger's evidence actually
-  supports. Two kinds so far - retiring an artifact unseen for 90 days, and pinning a model for an
+  supports. Two kinds so far - retiring an asset unseen for 90 days, and pinning a model for an
   agent type with enough measured runs. Each says plainly whether Loom may apply it: anything
   touching the user's files never can, anything touching only Loom's own state reverts in one
   command. Dismissals hold until the evidence behind them changes rather than until an interval
@@ -254,7 +278,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GitHub's Dependabot vulnerability alerts on the repo (a settings toggle, free on private repos,
   confirmed by testing, doesn't require going public).
 
-- Prompt-injection hardening for the artifact-recommendation path: `get_recommendation` and
+- Prompt-injection hardening for the asset-recommendation path: `get_recommendation` and
   `loom advise` re-serve name/description text read verbatim from local files, which is an
   indirect-injection surface once it lands back in another agent's context. Description text is
   now length-capped at discovery time, every affected MCP field and tool description says
@@ -262,12 +286,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `suspicious` flag (never a filter) surfaces obviously injection-shaped phrasing. Documented as
   design doc constraint 9.
 
-- Artifact discovery (`internal/artifact`): scans standard Claude Code locations plus the current
+- Asset discovery (`internal/asset`): scans standard Claude Code locations plus the current
   project for skills, agents, plans, hooks, and per-project memory. Tolerant of both the flat
   `name.md` and directory-with-`SKILL.md` conventions, and of files with no frontmatter at all
   (falls back to the first `#` heading as a description).
 - Selector (`internal/selector`): transparent word-overlap scoring of a free-text task descriptor
-  against discovered artifacts, plus a keyword-based cold-start model/effort recommendation.
+  against discovered assets, plus a keyword-based cold-start model/effort recommendation.
 - MCP server over stdio (`internal/mcp`), exposing `query_ledger`, `get_recommendation`,
   `list_proposals`, and `record_outcome`.
 - `loom advise <text>` and `loom serve` CLI commands.

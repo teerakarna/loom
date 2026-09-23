@@ -4,11 +4,11 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/go-1.27-blue.svg)](go.mod)
 
-An artifact lifecycle and cost/routing engine for [Claude Code](https://claude.com/claude-code)
+An asset lifecycle and cost/routing engine for [Claude Code](https://claude.com/claude-code)
 that needs no instrumentation, no hooks, and no write access to anything you own. It reads the
 session transcripts Claude Code already writes, and never touches a file it did not create itself.
 
-**Status: pre-1.0, under active development.** Ingest, ledger and reporting; artifact discovery,
+**Status: pre-1.0, under active development.** Ingest, ledger and reporting; asset discovery,
 selector and MCP server; the policy table and generated agent definitions; per-lane filtering;
 advisor proposals and the loop that re-measures after one is applied; context occupancy; promotion
 rules over memory stores. See [`docs/design.md`](docs/design.md) for the full design and current
@@ -16,7 +16,7 @@ phase.
 
 ## Why
 
-Claude Code accumulates durable artifacts - scratch drafts, memory, skills, plans, hooks, agents,
+Claude Code accumulates durable assets - scratch drafts, memory, skills, plans, hooks, agents,
 workflows, plugins - and nothing tracks which are used, which have gone stale, what each one costs,
 or which combination fits a given task. The predictable result is skills nobody invokes, plans
 nobody finishes, hooks that fire every session for no reason, and model selection by guesswork.
@@ -47,7 +47,7 @@ entries; that class of failure is designed out here, not carefully avoided.
 2. **Store, as derived metrics only.** Token usage, tool calls, denials, timestamps, byte counts,
    file paths. Never message content. A planted-secret test in CI enforces this on every change,
    not just on the day it was written.
-3. **Recommend, never apply.** Cost by model and by agent type, which artifacts a task actually
+3. **Recommend, never apply.** Cost by model and by agent type, which assets a task actually
    needs, which memory files have drifted or gone stale, which policy would pay for itself. Every
    answer carries its own sample size, so a figure backed by one run never renders identically to
    one backed by fifty.

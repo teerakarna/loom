@@ -81,11 +81,11 @@ func parseAssistant(m map[string]any, ev *Event) {
 					switch name {
 					case "Skill":
 						if skill, _ := input["skill"].(string); skill != "" {
-							ev.SkillInvocations = append(ev.SkillInvocations, ArtifactTouch{ToolUseID: id, Signal: skill})
+							ev.SkillInvocations = append(ev.SkillInvocations, AssetTouch{ToolUseID: id, Signal: skill})
 						}
 					case "Read", "Edit", "Write":
 						if fp, _ := input["file_path"].(string); fp != "" {
-							ev.FileTouches = append(ev.FileTouches, ArtifactTouch{ToolUseID: id, Signal: fp})
+							ev.FileTouches = append(ev.FileTouches, AssetTouch{ToolUseID: id, Signal: fp})
 						}
 					}
 				}

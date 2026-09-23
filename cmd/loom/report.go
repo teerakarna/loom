@@ -138,10 +138,10 @@ func ingestAll(db *ledger.DB, root string) error {
 		}
 	}
 
-	// Fetched once for the whole batch, not once per run: the artifacts
+	// Fetched once for the whole batch, not once per run: the assets
 	// table does not change mid-batch, and it is small (design doc
-	// "Ledger"). See ledger.BuildArtifactLookup.
-	lookup, err := db.BuildArtifactLookup()
+	// "Ledger"). See ledger.BuildAssetLookup.
+	lookup, err := db.BuildAssetLookup()
 	if err != nil {
 		return err
 	}
@@ -190,12 +190,12 @@ func ingestAll(db *ledger.DB, root string) error {
 func ptr[T any](v T) *T { return &v }
 
 // recordOccupancyAndUsage writes rs's tool_usage, compaction, and
-// artifact_usage rows (B7b, B7a/#39). One RunIDByPath lookup shared across
+// asset_usage rows (B7b, B7a/#39). One RunIDByPath lookup shared across
 // all three, rather than a separate lookup per table for a row InsertRun
 // just wrote a moment earlier in this same loop iteration - found by code
 // review as a redundant-query smell, not a correctness bug, but free to fix
 // in the same pass.
-func recordOccupancyAndUsage(db *ledger.DB, path string, lookup ledger.ArtifactLookup, rs ingest.RunSummary) error {
+func recordOccupancyAndUsage(db *ledger.DB, path string, lookup ledger.AssetLookup, rs ingest.RunSummary) error {
 	runID, err := db.RunIDByPath(path)
 	if err != nil {
 		return err
@@ -207,13 +207,13 @@ func recordOccupancyAndUsage(db *ledger.DB, path string, lookup ledger.ArtifactL
 		return err
 	}
 	// A skill invoked under a name discovery has not seen, or a file outside
-	// any known artifact's path, resolves to nothing - this answers "was a
-	// known artifact used", not "what files exist". Requires discovery to
+	// any known asset's path, resolves to nothing - this answers "was a
+	// known asset used", not "what files exist". Requires discovery to
 	// have found something at least once (an empty lookup resolves every
 	// signal to nothing), the same precondition #38's staleness check
 	// already has.
 	touches := lookup.Resolve(rs.SkillTouches, rs.FileTouches)
-	return db.ReplaceArtifactUsage(runID, touches)
+	return db.ReplaceAssetUsage(runID, touches)
 }
 
 func printReport(s ledger.Summary) {

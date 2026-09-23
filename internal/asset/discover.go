@@ -1,11 +1,11 @@
-// Package artifact discovers the artifacts a user already has — skills,
-// agents, plans, hooks, and per-project memory — by scanning the standard
+// Package asset discovers the assets a user already has, skills,
+// agents, plans, hooks, and per-project memory, by scanning the standard
 // Claude Code locations and the current project. See docs/design.md, design
 // constraint 2 ("Discover, never assume") and constraint 3
 // ("Schema-tolerant"): there is no required layout or naming convention, and
 // a location that doesn't exist, or a file this package can't parse, is
 // silently skipped rather than treated as an error.
-package artifact
+package asset
 
 import (
 	"encoding/json"
@@ -15,10 +15,10 @@ import (
 	"strings"
 )
 
-// Kinds of artifact this package can discover. Scratch and Workflow (see
+// Kinds of asset this package can discover. Scratch and Workflow (see
 // docs/design.md, "The model") aren't included: scratch is explicitly a
 // read-only inbox with no fixed location to enumerate, and workflows don't
-// exist as a distinct Claude Code artifact type yet.
+// exist as a distinct Claude Code asset type yet.
 const (
 	KindSkill  = "skill"
 	KindAgent  = "agent"
@@ -38,10 +38,10 @@ const (
 	KindReference = "reference"
 )
 
-// Artifact is one discovered artifact instance. Description is best-effort —
+// Asset is one discovered asset instance. Description is best-effort,
 // empty when the source file has no frontmatter, or no frontmatter this
 // package recognizes (see frontmatter.go).
-type Artifact struct {
+type Asset struct {
 	Kind        string
 	Path        string
 	Name        string
@@ -50,7 +50,7 @@ type Artifact struct {
 
 // Locations is the set of directories and files Discover scans, resolved
 // once so callers (and tests) can see and override exactly where discovery
-// looks — Discover itself takes no arguments.
+// looks, Discover itself takes no arguments.
 type Locations struct {
 	SkillDirs     []string
 	AgentDirs     []string
@@ -62,7 +62,7 @@ type Locations struct {
 // DefaultLocations resolves the standard Claude Code locations under home,
 // plus the current project's own .claude/ directory and its per-project
 // memory directory under home. cwd is the project root to treat as "the
-// current project" — callers pass the working directory, not necessarily a
+// current project", callers pass the working directory, not necessarily a
 // git root, matching how Claude Code itself keys project state.
 func DefaultLocations(home, cwd string) Locations {
 	return Locations{
@@ -95,12 +95,12 @@ func projectSlug(cwd string) string {
 	return strings.ReplaceAll(cwd, string(filepath.Separator), "-")
 }
 
-// Discover scans every location in locs and returns every artifact found.
+// Discover scans every location in locs and returns every asset found.
 // Order is not significant. A location that doesn't exist is skipped, not an
-// error — most users will have some but not all of these (design doc
+// error, most users will have some but not all of these (design doc
 // constraint 1, useful at n=0; constraint 2, never assume a type is in use).
-func Discover(locs Locations) ([]Artifact, error) {
-	var out []Artifact
+func Discover(locs Locations) ([]Asset, error) {
+	var out []Asset
 
 	for _, d := range locs.SkillDirs {
 		found, err := scanSkillDir(d)
@@ -146,7 +146,7 @@ func Discover(locs Locations) ([]Artifact, error) {
 // index, a reference doc), so it is discovered as KindReference rather than
 // miscounted as KindSkill or silently dropped. A missing dir is not an
 // error.
-func scanSkillDir(dir string) ([]Artifact, error) {
+func scanSkillDir(dir string) ([]Asset, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -155,15 +155,15 @@ func scanSkillDir(dir string) ([]Artifact, error) {
 		return nil, err
 	}
 
-	var out []Artifact
+	var out []Asset
 	for _, e := range entries {
 		if e.IsDir() {
 			sub := filepath.Join(dir, e.Name())
 			path := filepath.Join(sub, "SKILL.md")
 			if _, err := os.Stat(path); err != nil {
-				continue // a subdirectory with no SKILL.md isn't an artifact this package recognizes
+				continue // a subdirectory with no SKILL.md isn't an asset this package recognizes
 			}
-			out = append(out, artifactFromFile(path, e.Name(), KindSkill))
+			out = append(out, assetFromFile(path, e.Name(), KindSkill))
 			continue
 		}
 		if !strings.HasSuffix(e.Name(), ".md") {
@@ -171,12 +171,12 @@ func scanSkillDir(dir string) ([]Artifact, error) {
 		}
 		path := filepath.Join(dir, e.Name())
 		name := strings.TrimSuffix(e.Name(), ".md")
-		out = append(out, artifactFromFile(path, name, KindReference))
+		out = append(out, assetFromFile(path, name, KindReference))
 	}
 	return out, nil
 }
 
-// scanMarkdownDir finds artifacts of kind in dir. Two conventions are
+// scanMarkdownDir finds assets of kind in dir. Two conventions are
 // recognized side by side for agents, plans and memory, where both are
 // genuinely equivalent and nothing here should force a choice between them
 // (design doc constraint 3): a plain "name.md" file directly in dir, or a
@@ -184,7 +184,7 @@ func scanSkillDir(dir string) ([]Artifact, error) {
 // skills; harmless to recognize here since these kinds have no equivalent
 // distinction to lose). Skills do not use this function - see scanSkillDir.
 // A missing dir is not an error.
-func scanMarkdownDir(dir, kind string) ([]Artifact, error) {
+func scanMarkdownDir(dir, kind string) ([]Asset, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -193,15 +193,15 @@ func scanMarkdownDir(dir, kind string) ([]Artifact, error) {
 		return nil, err
 	}
 
-	var out []Artifact
+	var out []Asset
 	for _, e := range entries {
 		if e.IsDir() {
 			sub := filepath.Join(dir, e.Name())
 			path := filepath.Join(sub, "SKILL.md")
 			if _, err := os.Stat(path); err != nil {
-				continue // a subdirectory with no SKILL.md isn't an artifact this package recognizes
+				continue // a subdirectory with no SKILL.md isn't an asset this package recognizes
 			}
-			out = append(out, artifactFromFile(path, e.Name(), kind))
+			out = append(out, assetFromFile(path, e.Name(), kind))
 			continue
 		}
 		if !strings.HasSuffix(e.Name(), ".md") {
@@ -209,26 +209,26 @@ func scanMarkdownDir(dir, kind string) ([]Artifact, error) {
 		}
 		path := filepath.Join(dir, e.Name())
 		name := strings.TrimSuffix(e.Name(), ".md")
-		out = append(out, artifactFromFile(path, name, kind))
+		out = append(out, assetFromFile(path, name, kind))
 	}
 	return out, nil
 }
 
-// maxDescriptionRunes bounds every artifact description Loom stores and
+// maxDescriptionRunes bounds every asset description Loom stores and
 // later re-serves through get_recommendation (design doc constraint 9,
-// "artifact-derived text is data, never instructions"). This is read off
-// disk, unsanitized, from files Loom does not control the contents of — a
+// "asset-derived text is data, never instructions"). This is read off
+// disk, unsanitized, from files Loom does not control the contents of, a
 // length cap doesn't stop an adversarial description from being adversarial,
 // but it stops one from being unboundedly large in whatever context a
 // downstream client renders it into.
 const maxDescriptionRunes = 300
 
-// artifactFromFile builds an Artifact from a Markdown file, preferring the
+// assetFromFile builds an Asset from a Markdown file, preferring the
 // frontmatter's own name over the filename-derived fallback when present. A
 // file with no frontmatter description at all (plain Markdown, no YAML
-// block — a real convention, not hypothetical) falls back to its first `#`
+// block, a real convention, not hypothetical) falls back to its first `#`
 // heading, so the selector still has something to score it against.
-func artifactFromFile(path, fallbackName, kind string) Artifact {
+func assetFromFile(path, fallbackName, kind string) Asset {
 	fm := readFrontmatter(path)
 	name := fallbackName
 	if fm.Name != "" {
@@ -238,7 +238,7 @@ func artifactFromFile(path, fallbackName, kind string) Artifact {
 	if desc == "" {
 		desc = firstHeading(path)
 	}
-	return Artifact{Kind: kind, Path: path, Name: name, Description: truncate(desc, maxDescriptionRunes)}
+	return Asset{Kind: kind, Path: path, Name: name, Description: truncate(desc, maxDescriptionRunes)}
 }
 
 // truncate returns s unchanged if it's within max runes, or its first
@@ -253,8 +253,8 @@ func truncate(s string, maxRunes int) string {
 }
 
 // hooksSettings is the subset of settings.json this package reads. Every
-// other key is ignored — schema-tolerant per design doc constraint 3, and a
-// file that isn't valid JSON, or doesn't exist, produces no artifacts rather
+// other key is ignored, schema-tolerant per design doc constraint 3, and a
+// file that isn't valid JSON, or doesn't exist, produces no assets rather
 // than an error (constraint 7, degrade never block).
 type hooksSettings struct {
 	Hooks map[string][]struct {
@@ -267,10 +267,10 @@ type hooksSettings struct {
 }
 
 // scanHooks reads the hook entries out of a settings.json file. Each
-// configured command becomes one artifact; its Path is synthetic (settings
+// configured command becomes one asset; its Path is synthetic (settings
 // files hold many hooks, not one per file) but stable across runs, which is
 // what upsert-by-path bookkeeping needs.
-func scanHooks(path string) []Artifact {
+func scanHooks(path string) []Asset {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
@@ -280,14 +280,14 @@ func scanHooks(path string) []Artifact {
 		return nil
 	}
 
-	var out []Artifact
+	var out []Asset
 	for event, matchers := range s.Hooks {
 		for mi, m := range matchers {
 			for hi, h := range m.Hooks {
 				if h.Type != "command" || h.Command == "" {
 					continue
 				}
-				out = append(out, Artifact{
+				out = append(out, Asset{
 					Kind: KindHook,
 					Path: hookPath(path, event, mi, hi),
 					Name: event,

@@ -7,58 +7,58 @@ import (
 	"github.com/teerakarna/loom/internal/ingest"
 )
 
-func TestBuildArtifactLookup(t *testing.T) {
+func TestBuildAssetLookup(t *testing.T) {
 	db := openTestDB(t)
 	now := time.Now()
-	if err := db.UpsertArtifact(ArtifactRecord{Kind: "skill", Path: "/s/a.md", Name: "skill-a"}, now); err != nil {
+	if err := db.UpsertAsset(AssetRecord{Kind: "skill", Path: "/s/a.md", Name: "skill-a"}, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertArtifact(ArtifactRecord{Kind: "plan", Path: "/p/b.md", Name: "plan-b"}, now); err != nil {
+	if err := db.UpsertAsset(AssetRecord{Kind: "plan", Path: "/p/b.md", Name: "plan-b"}, now); err != nil {
 		t.Fatal(err)
 	}
 
-	l, err := db.BuildArtifactLookup()
+	l, err := db.BuildAssetLookup()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !l.Paths["/s/a.md"] || !l.Paths["/p/b.md"] {
-		t.Errorf("Paths = %+v, want both artifacts present", l.Paths)
+		t.Errorf("Paths = %+v, want both assets present", l.Paths)
 	}
 	if l.SkillNames["skill-a"] != "/s/a.md" {
 		t.Errorf("SkillNames[skill-a] = %q, want /s/a.md", l.SkillNames["skill-a"])
 	}
 	// A plan is not a skill and must not appear in SkillNames, even keyed
-	// by its own artifact name - the two lookup spaces are for different
+	// by its own asset name - the two lookup spaces are for different
 	// signal shapes (a skill name vs. a file path) and must not cross.
 	if _, ok := l.SkillNames["plan-b"]; ok {
-		t.Error("a non-skill artifact must not appear in SkillNames")
+		t.Error("a non-skill asset must not appear in SkillNames")
 	}
 }
 
-// TestBuildArtifactLookup_NameCollisionIsDeterministic is the regression
+// TestBuildAssetLookup_NameCollisionIsDeterministic is the regression
 // test for a bug code review found: discover.go scans both home and cwd
 // skill dirs, a documented pattern where a project-level skill can share a
-// name with a global one, and artifacts.path (not name) is what UpsertArtifact
+// name with a global one, and assets.path (not name) is what UpsertAsset
 // keys on - so both persist as separate rows. Without an ORDER BY, which one
 // SkillNames[name] ends up pointing at was whatever order SQLite happened to
 // return, and could change between two calls with identical data. It must
 // not: same data in, same answer out, every time.
-func TestBuildArtifactLookup_NameCollisionIsDeterministic(t *testing.T) {
+func TestBuildAssetLookup_NameCollisionIsDeterministic(t *testing.T) {
 	db := openTestDB(t)
 	now := time.Now()
-	if err := db.UpsertArtifact(ArtifactRecord{Kind: "skill", Path: "/project/.claude/skills/deploy.md", Name: "deploy"}, now); err != nil {
+	if err := db.UpsertAsset(AssetRecord{Kind: "skill", Path: "/project/.claude/skills/deploy.md", Name: "deploy"}, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertArtifact(ArtifactRecord{Kind: "skill", Path: "/home/.claude/skills/deploy.md", Name: "deploy"}, now); err != nil {
+	if err := db.UpsertAsset(AssetRecord{Kind: "skill", Path: "/home/.claude/skills/deploy.md", Name: "deploy"}, now); err != nil {
 		t.Fatal(err)
 	}
 
-	first, err := db.BuildArtifactLookup()
+	first, err := db.BuildAssetLookup()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for range 5 {
-		again, err := db.BuildArtifactLookup()
+		again, err := db.BuildAssetLookup()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -68,18 +68,18 @@ func TestBuildArtifactLookup_NameCollisionIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestArtifactLookup_ResolveDropsUnmatchedSignals(t *testing.T) {
-	l := ArtifactLookup{
+func TestAssetLookup_ResolveDropsUnmatchedSignals(t *testing.T) {
+	l := AssetLookup{
 		Paths:      map[string]bool{"/s/known.md": true},
 		SkillNames: map[string]string{"known-skill": "/s/known.md"},
 	}
 
 	got := l.Resolve(
-		[]ingest.ArtifactTouch{
+		[]ingest.AssetTouch{
 			{ToolUseID: "t1", Signal: "known-skill"},
 			{ToolUseID: "t2", Signal: "renamed-or-deleted-skill"},
 		},
-		[]ingest.ArtifactTouch{
+		[]ingest.AssetTouch{
 			{ToolUseID: "t3", Signal: "/s/known.md"},
 			{ToolUseID: "t4", Signal: "/some/unrelated/file.go"},
 		},
@@ -87,8 +87,8 @@ func TestArtifactLookup_ResolveDropsUnmatchedSignals(t *testing.T) {
 	// t1 and t3 resolve (to the same path, via different signal kinds); t2
 	// and t4 are dropped, not guessed at.
 	want := []ResolvedTouch{
-		{ToolUseID: "t1", ArtifactPath: "/s/known.md"},
-		{ToolUseID: "t3", ArtifactPath: "/s/known.md"},
+		{ToolUseID: "t1", AssetPath: "/s/known.md"},
+		{ToolUseID: "t3", AssetPath: "/s/known.md"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("Resolve = %+v, want %+v", got, want)
@@ -100,7 +100,7 @@ func TestArtifactLookup_ResolveDropsUnmatchedSignals(t *testing.T) {
 	}
 }
 
-func TestReplaceArtifactUsage_ReplacesNotAccumulates(t *testing.T) {
+func TestReplaceAssetUsage_ReplacesNotAccumulates(t *testing.T) {
 	db := openTestDB(t)
 	if err := db.InsertRun(RunRecord{Path: "run-a.jsonl", Kind: "session"}); err != nil {
 		t.Fatal(err)
@@ -110,15 +110,15 @@ func TestReplaceArtifactUsage_ReplacesNotAccumulates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.ReplaceArtifactUsage(id, []ResolvedTouch{{ToolUseID: "t1", ArtifactPath: "/s/a.md"}}); err != nil {
+	if err := db.ReplaceAssetUsage(id, []ResolvedTouch{{ToolUseID: "t1", AssetPath: "/s/a.md"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ReplaceArtifactUsage(id, []ResolvedTouch{
-		{ToolUseID: "t2", ArtifactPath: "/s/a.md"},
-		{ToolUseID: "t3", ArtifactPath: "/s/a.md"},
-		{ToolUseID: "t4", ArtifactPath: "/s/a.md"},
-		{ToolUseID: "t5", ArtifactPath: "/s/a.md"},
-		{ToolUseID: "t6", ArtifactPath: "/s/b.md"},
+	if err := db.ReplaceAssetUsage(id, []ResolvedTouch{
+		{ToolUseID: "t2", AssetPath: "/s/a.md"},
+		{ToolUseID: "t3", AssetPath: "/s/a.md"},
+		{ToolUseID: "t4", AssetPath: "/s/a.md"},
+		{ToolUseID: "t5", AssetPath: "/s/a.md"},
+		{ToolUseID: "t6", AssetPath: "/s/b.md"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -135,22 +135,22 @@ func TestReplaceArtifactUsage_ReplacesNotAccumulates(t *testing.T) {
 	}
 }
 
-// TestReplaceArtifactUsage_DedupesAcrossResumedSessions is the regression
+// TestReplaceAssetUsage_DedupesAcrossResumedSessions is the regression
 // test for the bug code review found: a resumed session replays its prior
 // Skill/Read/Edit/Write tool_use blocks verbatim, and an earlier version of
 // this table had no per-event identity to dedupe a replay against. Same
 // shape as TestReplaceToolUsage_DedupesAcrossResumedSessions.
-func TestReplaceArtifactUsage_DedupesAcrossResumedSessions(t *testing.T) {
+func TestReplaceAssetUsage_DedupesAcrossResumedSessions(t *testing.T) {
 	db := openTestDB(t)
 	original := insertTestRun(t, db, "original-session.jsonl")
 	resumed := insertTestRun(t, db, "resumed-session.jsonl")
 
-	shared := ResolvedTouch{ToolUseID: "shared-call", ArtifactPath: "/s/a.md"}
-	if err := db.ReplaceArtifactUsage(original, []ResolvedTouch{shared}); err != nil {
+	shared := ResolvedTouch{ToolUseID: "shared-call", AssetPath: "/s/a.md"}
+	if err := db.ReplaceAssetUsage(original, []ResolvedTouch{shared}); err != nil {
 		t.Fatal(err)
 	}
-	newTouch := ResolvedTouch{ToolUseID: "new-after-resume", ArtifactPath: "/s/a.md"}
-	if err := db.ReplaceArtifactUsage(resumed, []ResolvedTouch{shared, newTouch}); err != nil {
+	newTouch := ResolvedTouch{ToolUseID: "new-after-resume", AssetPath: "/s/a.md"}
+	if err := db.ReplaceAssetUsage(resumed, []ResolvedTouch{shared, newTouch}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -174,7 +174,7 @@ func TestUsageSummary_LastUsedIsTheMostRecentRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	earlyID, _ := db.RunIDByPath("early.jsonl")
-	if err := db.ReplaceArtifactUsage(earlyID, []ResolvedTouch{{ToolUseID: "t1", ArtifactPath: "/s/a.md"}}); err != nil {
+	if err := db.ReplaceAssetUsage(earlyID, []ResolvedTouch{{ToolUseID: "t1", AssetPath: "/s/a.md"}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -182,7 +182,7 @@ func TestUsageSummary_LastUsedIsTheMostRecentRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	lateID, _ := db.RunIDByPath("late.jsonl")
-	if err := db.ReplaceArtifactUsage(lateID, []ResolvedTouch{{ToolUseID: "t2", ArtifactPath: "/s/a.md"}}); err != nil {
+	if err := db.ReplaceAssetUsage(lateID, []ResolvedTouch{{ToolUseID: "t2", AssetPath: "/s/a.md"}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -201,11 +201,11 @@ func TestUsageSummary_LastUsedIsTheMostRecentRun(t *testing.T) {
 
 // TestUsageSummary_AbsentMeansNeverUsed is the contract UsageSummary's own
 // doc comment states: a path with no usage rows does not appear at all,
-// rather than appearing with a zero-value summary. propose.retireStaleArtifacts
+// rather than appearing with a zero-value summary. propose.retireStaleAssets
 // depends on this to distinguish "never used" from "used, a long time ago".
 func TestUsageSummary_AbsentMeansNeverUsed(t *testing.T) {
 	db := openTestDB(t)
-	if err := db.UpsertArtifact(ArtifactRecord{Kind: "skill", Path: "/s/untouched.md", Name: "untouched"}, time.Now()); err != nil {
+	if err := db.UpsertAsset(AssetRecord{Kind: "skill", Path: "/s/untouched.md", Name: "untouched"}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -214,7 +214,7 @@ func TestUsageSummary_AbsentMeansNeverUsed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, ok := summary["/s/untouched.md"]; ok {
-		t.Error("an artifact with no usage rows must not appear in the summary at all")
+		t.Error("an asset with no usage rows must not appear in the summary at all")
 	}
 }
 

@@ -27,10 +27,10 @@ import (
 
 // Proposal kinds.
 const (
-	// KindRetireArtifact suggests removing an artifact that has not been seen
+	// KindRetireAsset suggests removing an asset that has not been seen
 	// on disk for a long time. Touches the user's files, so it is rendered and
 	// never applied.
-	KindRetireArtifact = "retire_artifact"
+	KindRetireAsset = "retire_asset"
 
 	// KindPinModel suggests recording a deliberate model policy for an agent
 	// type with enough measured runs behind it. Touches only Loom's own
@@ -67,17 +67,21 @@ const (
 // TouchesUserFiles reports whether applying a proposal of this kind would
 // write outside Loom's own state. Used to decide what may ever be automated;
 // the answer for anything touching a user's files is permanently no.
+//
+// Defaults to true for a kind this function does not recognize - fail safe,
+// not fail open. An unrecognized kind isn't necessarily KindPinModel's kind
+// of safe; the only way to know it isn't is to name it explicitly here, and
+// every kind that actually is safe does (KindPinModel, KindRevertPolicy).
 func TouchesUserFiles(kind string) bool {
 	switch kind {
-	case KindRetireArtifact, KindPromoteMemoryDuplicate, KindBrokenLink,
-		KindUnreachableArtifact, KindFilenameSlugDrift:
-		return true
-	default:
+	case KindPinModel, KindRevertPolicy:
 		return false
+	default:
+		return true
 	}
 }
 
-// StaleAfter is how long an artifact must be unseen before retirement is even
+// StaleAfter is how long an asset must be unseen before retirement is even
 // suggested. Deliberately generous: a skill used twice a year is not dead, and
 // a proposal to delete it would be noise with a confident face on it.
 const StaleAfter = 90 * 24 * time.Hour
@@ -115,7 +119,7 @@ func (p Proposal) Hash() string {
 func Generate(db *ledger.DB, now time.Time) ([]Proposal, error) {
 	var out []Proposal
 
-	retire, err := retireStaleArtifacts(db, now)
+	retire, err := retireStaleAssets(db, now)
 	if err != nil {
 		return nil, err
 	}
@@ -218,24 +222,24 @@ func regressionReason(pol *ledger.PolicyRow, since ledger.AgentTypeStats) (strin
 	return "", false
 }
 
-// retireStaleArtifacts proposes retiring an artifact unused for StaleAfter.
+// retireStaleAssets proposes retiring an asset unused for StaleAfter.
 //
 // "Unused" is the last time a run actually touched it - issue #39's join -
-// falling back to first_seen for an artifact discovery has found but no run
+// falling back to first_seen for an asset discovery has found but no run
 // has ever touched under usage tracking. first_seen is stable and never
 // reset by a later discovery pass, unlike last_seen.
 //
 // last_seen itself is never the clock here, on purpose: it is bumped by
-// UpsertArtifact on every discovery pass, so it resets every time `loom
+// UpsertAsset on every discovery pass, so it resets every time `loom
 // advise` runs and can never reach the threshold for anything still on
 // disk. Before #39 that meant only a file already deleted from disk could
 // ever be proposed for retirement - the exact bug issue #38 recorded, found
-// by forcing an artifact's clock back and watching one `loom advise` erase
+// by forcing an asset's clock back and watching one `loom advise` erase
 // the evidence. last_seen still answers its own question correctly (is it
-// on disk - see MarkStaleArtifacts); it was never a valid answer to this
+// on disk - see MarkStaleAssets); it was never a valid answer to this
 // one.
-func retireStaleArtifacts(db *ledger.DB, now time.Time) ([]Proposal, error) {
-	rows, err := db.ListArtifacts()
+func retireStaleAssets(db *ledger.DB, now time.Time) ([]Proposal, error) {
+	rows, err := db.ListAssets()
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +275,7 @@ func retireStaleArtifacts(db *ledger.DB, now time.Time) ([]Proposal, error) {
 		}
 
 		out = append(out, Proposal{
-			Kind:    KindRetireArtifact,
+			Kind:    KindRetireAsset,
 			Subject: a.Path,
 			Evidence: map[string]any{
 				"path": a.Path, "type": a.Kind, "name": a.Name,
@@ -285,18 +289,18 @@ func retireStaleArtifacts(db *ledger.DB, now time.Time) ([]Proposal, error) {
 	return out, nil
 }
 
-// lastUsedOrFirstSeen returns the clock retireStaleArtifacts measures
+// lastUsedOrFirstSeen returns the clock retireStaleAssets measures
 // staleness against for a, and whether any run has ever used it (issue
 // #39's join). Preferring the last-used time over first_seen is the fix for
 // issue #38.
 //
-// Agent-kind artifacts are checked against agentUsage (runs.agent_type)
-// rather than the artifact_usage join: runs.agent_type already existed for
+// Agent-kind assets are checked against agentUsage (runs.agent_type)
+// rather than the asset_usage join: runs.agent_type already existed for
 // B3a's policy attribution, so agent usage needs no new signal -
 // docs/design.md said so, and this is where that claim is actually wired
 // in. Found missing by code review: it was documented but never checked
 // here, so a custom agent invoked constantly via the Agent tool (never a
-// Skill/Read/Edit/Write call, so never an artifact_usage row) could be
+// Skill/Read/Edit/Write call, so never an asset_usage row) could be
 // proposed for retirement as "never used" while in active use.
 //
 // A usage row with real evidence (Uses > 0 / an agent_type with a run) but
@@ -305,7 +309,7 @@ func retireStaleArtifacts(db *ledger.DB, now time.Time) ([]Proposal, error) {
 // treated as used just now, not as never used: real evidence of use with
 // an unmeasurable age is safer read as "don't know how stale" than
 // "definitely stale".
-func lastUsedOrFirstSeen(a ledger.ArtifactRow, usage map[string]ledger.ArtifactUsageSummary,
+func lastUsedOrFirstSeen(a ledger.AssetRow, usage map[string]ledger.AssetUsageSummary,
 	agentUsage map[string]string, now time.Time) (time.Time, bool, error) {
 	if a.Kind == "agent" {
 		if lastUsed, ok := agentUsage[a.Name]; ok {

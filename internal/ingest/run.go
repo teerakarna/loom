@@ -93,11 +93,11 @@ type RunSummary struct {
 
 	// SkillTouches and FileTouches are issue #39's raw usage signals, one
 	// entry per tool_use block rather than pre-aggregated by name/path - the
-	// ledger layer resolves each to an artifact path and dedupes on ToolUseID
+	// ledger layer resolves each to an asset path and dedupes on ToolUseID
 	// before counting, the same reasoning as ToolUsage above. Neither counts
 	// a mention in message text; see Event.SkillInvocations.
-	SkillTouches []ArtifactTouch
-	FileTouches  []ArtifactTouch
+	SkillTouches []AssetTouch
+	FileTouches  []AssetTouch
 
 	// countedMessages tracks which message.id values have already had their
 	// usage added, so one API response written across several transcript

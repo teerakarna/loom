@@ -7,13 +7,13 @@ package ledger
 // re-ingests as a side effect and a user checking freshness with it would be
 // changing the thing they are checking.
 type LedgerStatus struct {
-	Runs          int
-	SessionRuns   int
-	AgentRuns     int
-	Artifacts     int
-	StaleArtifact int
-	Events        int
-	Policies      int
+	Runs        int
+	SessionRuns int
+	AgentRuns   int
+	Assets      int
+	StaleAsset  int
+	Events      int
+	Policies    int
 
 	// EarliestRun and LatestRun are run timestamps, not ingest timestamps.
 	// The ledger does not record when a row was written - see the note in
@@ -58,8 +58,8 @@ func (d *DB) Status() (LedgerStatus, error) {
 		query string
 		into  *int
 	}{
-		{`SELECT COUNT(*) FROM artifacts`, &s.Artifacts},
-		{`SELECT COUNT(*) FROM artifacts WHERE status = 'stale'`, &s.StaleArtifact},
+		{`SELECT COUNT(*) FROM assets`, &s.Assets},
+		{`SELECT COUNT(*) FROM assets WHERE status = 'stale'`, &s.StaleAsset},
 		{`SELECT COUNT(*) FROM events`, &s.Events},
 		{`SELECT COUNT(*) FROM policies`, &s.Policies},
 		{`SELECT COUNT(DISTINCT agent_type) FROM runs WHERE kind = 'agent' AND agent_type != ''`, &s.AgentTypes},

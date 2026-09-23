@@ -23,14 +23,44 @@ func openDB(t *testing.T) *ledger.DB {
 
 var now = time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
 
+// TestTouchesUserFilesDefaultsSafe is a regression test for a real bug
+// found by /code-review during the artifact->asset rename: TouchesUserFiles
+// used to default an unrecognized kind to false ("safe to automate"), which
+// silently mis-reported a pending proposal stored under a since-renamed kind
+// string as safe. Fail safe, not fail open: every kind that is genuinely
+// safe (touches only Loom's own state) must say so explicitly; anything else
+// defaults to true.
+func TestTouchesUserFilesDefaultsSafe(t *testing.T) {
+	for _, kind := range []string{KindRetireAsset, KindPromoteMemoryDuplicate, KindBrokenLink,
+		KindUnreachableAsset, KindFilenameSlugDrift} {
+		if !TouchesUserFiles(kind) {
+			t.Errorf("TouchesUserFiles(%q) = false, want true", kind)
+		}
+	}
+	for _, kind := range []string{KindPinModel, KindRevertPolicy} {
+		if TouchesUserFiles(kind) {
+			t.Errorf("TouchesUserFiles(%q) = true, want false", kind)
+		}
+	}
+	// The actual bug: an unrecognized kind (e.g. a pre-rename kind string
+	// like "retire_artifact" surviving in an old ledger) must never be
+	// reported as safe.
+	if !TouchesUserFiles("retire_artifact") {
+		t.Error(`TouchesUserFiles("retire_artifact") = false, want true (unrecognized kind must fail safe)`)
+	}
+	if !TouchesUserFiles("some_future_kind_nobody_has_written_yet") {
+		t.Error("TouchesUserFiles of an unknown kind = false, want true (fail safe, not fail open)")
+	}
+}
+
 func TestRetireOnlyWhenGenuinelyStale(t *testing.T) {
 	db := openDB(t)
 	// Seen yesterday: not a candidate. A skill used twice a year is not dead.
-	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "skill", Path: "/s/fresh.md", Name: "fresh"}, now.Add(-24*time.Hour)); err != nil {
+	if err := db.UpsertAsset(ledger.AssetRecord{Kind: "skill", Path: "/s/fresh.md", Name: "fresh"}, now.Add(-24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	// Unseen well past the threshold.
-	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "skill", Path: "/s/old.md", Name: "old"}, now.Add(-StaleAfter-48*time.Hour)); err != nil {
+	if err := db.UpsertAsset(ledger.AssetRecord{Kind: "skill", Path: "/s/old.md", Name: "old"}, now.Add(-StaleAfter-48*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -41,7 +71,7 @@ func TestRetireOnlyWhenGenuinelyStale(t *testing.T) {
 	if len(ps) != 1 {
 		t.Fatalf("got %d proposals, want 1: %+v", len(ps), ps)
 	}
-	if ps[0].Kind != KindRetireArtifact || ps[0].Subject != "/s/old.md" {
+	if ps[0].Kind != KindRetireAsset || ps[0].Subject != "/s/old.md" {
 		t.Errorf("got %+v", ps[0])
 	}
 	if !TouchesUserFiles(ps[0].Kind) {
@@ -50,35 +80,35 @@ func TestRetireOnlyWhenGenuinelyStale(t *testing.T) {
 }
 
 // TestRetireFiresForSomethingStillOnDiskButUnused is the regression test
-// for issue #38: UpsertArtifact bumps last_seen on every discovery pass, so
+// for issue #38: UpsertAsset bumps last_seen on every discovery pass, so
 // before #39's usage join existed, only a file already deleted from disk
 // could ever reach the staleness threshold - repeated discovery (`loom
 // advise` running before every recommendation) reset the clock on anything
 // still present, forever. This reproduces exactly that: discovery runs
-// three times, weeks apart, on an artifact nothing ever uses, and the
-// artifact stays present (status "active") throughout.
+// three times, weeks apart, on an asset nothing ever uses, and the
+// asset stays present (status "active") throughout.
 func TestRetireFiresForSomethingStillOnDiskButUnused(t *testing.T) {
 	db := openDB(t)
 	firstSeen := now.Add(-StaleAfter - 48*time.Hour)
-	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "skill", Path: "/s/ignored.md", Name: "ignored"}, firstSeen); err != nil {
+	if err := db.UpsertAsset(ledger.AssetRecord{Kind: "skill", Path: "/s/ignored.md", Name: "ignored"}, firstSeen); err != nil {
 		t.Fatal(err)
 	}
 	// Two more discovery passes, most recently just before `now` - old
 	// last_seen-based logic would compute an age of hours, not days, and
 	// never propose this.
-	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "skill", Path: "/s/ignored.md", Name: "ignored"}, firstSeen.Add(30*24*time.Hour)); err != nil {
+	if err := db.UpsertAsset(ledger.AssetRecord{Kind: "skill", Path: "/s/ignored.md", Name: "ignored"}, firstSeen.Add(30*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "skill", Path: "/s/ignored.md", Name: "ignored"}, now.Add(-1*time.Hour)); err != nil {
+	if err := db.UpsertAsset(ledger.AssetRecord{Kind: "skill", Path: "/s/ignored.md", Name: "ignored"}, now.Add(-1*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
-	rows, err := db.ListArtifacts()
+	rows, err := db.ListAssets()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rows[0].Status != "active" {
-		t.Fatalf("artifact status = %q, want active (still on disk is the whole point of this test)", rows[0].Status)
+		t.Fatalf("asset status = %q, want active (still on disk is the whole point of this test)", rows[0].Status)
 	}
 
 	ps, err := Generate(db, now)
@@ -93,13 +123,13 @@ func TestRetireFiresForSomethingStillOnDiskButUnused(t *testing.T) {
 	}
 }
 
-// TestRetireNotProposedWhenRecentlyUsed is the flip side: an artifact whose
+// TestRetireNotProposedWhenRecentlyUsed is the flip side: an asset whose
 // first_seen is old enough to be stale on its own, but that a run genuinely
 // touched recently, must not be proposed. Usage is the signal that matters,
 // not how long ago discovery first found it.
 func TestRetireNotProposedWhenRecentlyUsed(t *testing.T) {
 	db := openDB(t)
-	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "skill", Path: "/s/used.md", Name: "used"},
+	if err := db.UpsertAsset(ledger.AssetRecord{Kind: "skill", Path: "/s/used.md", Name: "used"},
 		now.Add(-StaleAfter-48*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +140,7 @@ func TestRetireNotProposedWhenRecentlyUsed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ReplaceArtifactUsage(runID, []ledger.ResolvedTouch{{ToolUseID: "t1", ArtifactPath: "/s/used.md"}}); err != nil {
+	if err := db.ReplaceAssetUsage(runID, []ledger.ResolvedTouch{{ToolUseID: "t1", AssetPath: "/s/used.md"}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -119,20 +149,20 @@ func TestRetireNotProposedWhenRecentlyUsed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(ps) != 0 {
-		t.Errorf("got %+v, want no proposals - this artifact was used an hour ago", ps)
+		t.Errorf("got %+v, want no proposals - this asset was used an hour ago", ps)
 	}
 }
 
 // TestRetireNotProposedForActivelyInvokedAgent is the regression test for a
 // bug code review found: docs/design.md claims agent usage needs no new
 // signal because runs.agent_type already exists (B3a), but
-// retireStaleArtifacts never actually checked it - only the artifact_usage
+// retireStaleAssets never actually checked it - only the asset_usage
 // join (Skill/Read/Edit/Write signals, which an Agent tool_use is none of).
-// A custom agent artifact with a stale first_seen but real, recent runs
+// A custom agent asset with a stale first_seen but real, recent runs
 // under its agent_type must not be proposed for retirement.
 func TestRetireNotProposedForActivelyInvokedAgent(t *testing.T) {
 	db := openDB(t)
-	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "agent", Path: "/agents/reviewer.md", Name: "reviewer"},
+	if err := db.UpsertAsset(ledger.AssetRecord{Kind: "agent", Path: "/agents/reviewer.md", Name: "reviewer"},
 		now.Add(-StaleAfter-48*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -151,12 +181,12 @@ func TestRetireNotProposedForActivelyInvokedAgent(t *testing.T) {
 	}
 }
 
-// TestRetireProposedForAgentNeverInvoked is the flip side: an agent artifact
+// TestRetireProposedForAgentNeverInvoked is the flip side: an agent asset
 // discovered on disk but with no runs recorded under its agent_type falls
-// back to first_seen, same as any other never-used artifact.
+// back to first_seen, same as any other never-used asset.
 func TestRetireProposedForAgentNeverInvoked(t *testing.T) {
 	db := openDB(t)
-	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "agent", Path: "/agents/unused.md", Name: "unused"},
+	if err := db.UpsertAsset(ledger.AssetRecord{Kind: "agent", Path: "/agents/unused.md", Name: "unused"},
 		now.Add(-StaleAfter-48*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +310,7 @@ func TestPinModelSkipsWhenAPolicyAlreadyExists(t *testing.T) {
 // and must end when the facts change.
 func TestDismissalHoldsUntilEvidenceChanges(t *testing.T) {
 	db := openDB(t)
-	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "skill", Path: "/s/old.md", Name: "old"}, now.Add(-StaleAfter-48*time.Hour)); err != nil {
+	if err := db.UpsertAsset(ledger.AssetRecord{Kind: "skill", Path: "/s/old.md", Name: "old"}, now.Add(-StaleAfter-48*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -319,7 +349,7 @@ func TestDismissalHoldsUntilEvidenceChanges(t *testing.T) {
 func TestPendingCapBoundsTheQueue(t *testing.T) {
 	db := openDB(t)
 	for i := range ledger.MaxPendingProposals + 5 {
-		if err := db.UpsertArtifact(ledger.ArtifactRecord{
+		if err := db.UpsertAsset(ledger.AssetRecord{
 			Kind: "skill", Path: fmt.Sprintf("/s/old-%d.md", i), Name: fmt.Sprintf("old%d", i),
 		}, now.Add(-StaleAfter-48*time.Hour)); err != nil {
 			t.Fatal(err)
@@ -356,7 +386,7 @@ func TestHashIsStableAndEvidenceSensitive(t *testing.T) {
 // user's files, and refusing is not an error the caller can configure away.
 func TestApplyRefusesAnythingTouchingUserFiles(t *testing.T) {
 	db := openDB(t)
-	if err := db.UpsertArtifact(ledger.ArtifactRecord{Kind: "skill", Path: "/s/old.md", Name: "old"},
+	if err := db.UpsertAsset(ledger.AssetRecord{Kind: "skill", Path: "/s/old.md", Name: "old"},
 		now.Add(-StaleAfter-48*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -370,10 +400,10 @@ func TestApplyRefusesAnythingTouchingUserFiles(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a refusal for a proposal that touches user files")
 	}
-	// And the artifact is untouched: the refusal is not a partial apply.
-	arts, _ := db.ListArtifacts()
+	// And the asset is untouched: the refusal is not a partial apply.
+	arts, _ := db.ListAssets()
 	if len(arts) != 1 {
-		t.Errorf("artifact list changed despite the refusal: %+v", arts)
+		t.Errorf("asset list changed despite the refusal: %+v", arts)
 	}
 }
 

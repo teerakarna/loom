@@ -1,4 +1,4 @@
-# Loom - an artifact lifecycle and routing engine for Claude Code
+# Loom - an asset lifecycle and routing engine for Claude Code
 
 Status: design agreed 2026-09-11.
 Licence: Apache-2.0. Repo: personal GitHub, private until v0.1.0, then public.
@@ -11,8 +11,8 @@ not JSON fields, and does not reconcile with a naive sum of the agent's own tran
 `message.model` can be the literal string `"<synthetic>"` (a locally-injected status/error line,
 always zero usage) - both handled, tested, documented.
 
-**B2 done (2026-09-12):** artifact discovery (skills, agents, plans, hooks, per-project memory -
-`internal/artifact`), selector (`internal/selector`), MCP server over stdio exposing
+**B2 done (2026-09-12):** asset discovery (skills, agents, plans, hooks, per-project memory -
+`internal/asset`), selector (`internal/selector`), MCP server over stdio exposing
 `query_ledger`/`get_recommendation`/`list_proposals`/`record_outcome` (`internal/mcp`), and
 `loom advise`/`loom serve` CLI commands. Two real findings running `loom advise` against this
 machine's actual skills: several real skills have no YAML frontmatter at all (just a `#` heading) -
@@ -79,7 +79,7 @@ B5 (advisor proposals for promotion and retirement) not started. Ledger-backed c
 it breaks constraint 7 by making sessions depend on Loom being installed, and it invents a mechanism
 rather than optimising an existing one. Full reasoning under "Coordination between lanes: rejected".
 
-Loom never reads or writes any external coordination state. Artifact discovery scans skills, agents,
+Loom never reads or writes any external coordination state. Asset discovery scans skills, agents,
 plans and per-project memory only, so a file-based exchange convention elsewhere in `~/.claude/` is
 neither ingested nor interfered with, and its content never reaches the ledger (constraint 6).
 
@@ -92,7 +92,7 @@ both an IP-hygiene position and a hard requirement for publishing at all.
 
 ## Problem
 
-Claude Code accumulates durable artifacts: scratch drafts, memory, skills, plans, hooks, agents,
+Claude Code accumulates durable assets: scratch drafts, memory, skills, plans, hooks, agents,
 workflows, plugins. Nothing knows which of them are used, which have gone stale, what each one
 costs, or which combination fits the task at hand. The predictable result is skills nobody invokes,
 plans nobody finishes, hooks that fire every session for no reason, and model selection by guesswork.
@@ -125,7 +125,7 @@ installed, and it is why hooks are an optional extra rather than the foundation.
 ## What Loom does
 
 Builds a local ledger of what you actually do. Reports where cost and rework go. Recommends which
-combination of features to reach for on a given task. Proposes artifact promotions and retirements as
+combination of features to reach for on a given task. Proposes asset promotions and retirements as
 reviewable diffs.
 
 It measures and recommends. The human applies. That split is deliberate and permanent for anything
@@ -140,9 +140,9 @@ to stop the design collapsing into one person's habits.
 
 1. **Useful at n=0.** A new user with no history benefits immediately. Ship defaults reasoned from
    first principles; personalise as evidence accrues. Never require a corpus to be useful.
-2. **Discover, never assume.** Find artifacts by scanning the standard Claude Code locations and the
+2. **Discover, never assume.** Find assets by scanning the standard Claude Code locations and the
    current project. No required layout, no required naming convention, no assumption that any given
-   artifact type is even in use.
+   asset type is even in use.
 3. **Schema-tolerant.** Read whatever frontmatter exists, treat missing fields as unknown, never
    rewrite a user's file to fit a preferred schema. Several skill frontmatter conventions exist in
    the wild; that is fine and not Loom's business to unify.
@@ -159,7 +159,7 @@ to stop the design collapsing into one person's habits.
    directory, and proposal files. Nothing else. Settings files are read-only, always. A tool in this
    space once shipped a version that deleted users' hand-written hook entries; that class of failure
    gets designed out, not carefully avoided.
-9. **Artifact-derived text is data, never instructions.** A skill/agent/plan's name, description, or
+9. **Asset-derived text is data, never instructions.** A skill/agent/plan's name, description, or
    heading is read off disk and re-served verbatim through `get_recommendation` into whatever session
    called it - that is untrusted content re-entering another agent's context, the same shape of
    problem as Candor's "all ingested telemetry is untrusted" rule. Loom cannot force a downstream
@@ -174,7 +174,7 @@ to stop the design collapsing into one person's habits.
    was missing is exactly the window the thing ran unattended.
 
    This bites hardest for a tool whose entire purpose is reducing accumulated material. A mechanism
-   that answers "too many artifacts to keep track of" by producing more artifacts has made the
+   that answers "too many assets to keep track of" by producing more assets has made the
    problem worse while appearing to help. So anything Loom generates states its retention rule up
    front: how many, for how long, overwritten or appended.
 
@@ -202,7 +202,7 @@ to stop the design collapsing into one person's habits.
 
    Constraint 6 keeps message content out. It does not keep *identifiers* out, and on any corpus
    that matters those identify real work: full transcript paths encode project directory names, and
-   discovered artifacts carry their names and descriptions. Keeping the ledger on the machine that
+   discovered assets carry their names and descriptions. Keeping the ledger on the machine that
    produced it is what makes Loom safe to point at a sensitive corpus at all.
 
    Corollary for anything published - docs, examples, issues, screenshots, write-ups: it comes only
@@ -222,7 +222,7 @@ to stop the design collapsing into one person's habits.
 
 ## The model
 
-Eight artifact types on two axes. The axes are what make the promotion rules principled rather than
+Eight asset types on two axes. The axes are what make the promotion rules principled rather than
 a matter of taste.
 
 **Axis 1, decision authority at trigger time.** Who decides, and how binding it is:
@@ -384,7 +384,7 @@ category shift from optimising what exists to adding something new.
 convention in someone's own home directory is inert to everyone else. Coordination tables shipped
 in Loom push that opinion onto every user of the tool.
 
-**Files are the more enduring choice here.** Every durable Claude Code artifact is a file: skills,
+**Files are the more enduring choice here.** Every durable Claude Code asset is a file: skills,
 memory, plans, CLAUDE.md, transcripts. A markdown/JSONL convention runs with the grain of the
 platform, is greppable, debuggable without a CLI, and survives Loom being uninstalled or rewritten.
 A table in one tool's private database does none of that.
@@ -423,7 +423,7 @@ polling: real-time reaction at near-zero idle cost.
 
 **Ledger.** SQLite, WAL mode. Six tables:
 
-- `artifacts` - one row per known artifact instance, with type, path, status
+- `assets` - one row per known asset instance, with type, path, status
 - `events` - append-only; this is the ledger
 - `runs` - one row per session or agent execution, with weighted cost and outcome
 - `policies` - the model/effort/tools decision table
@@ -464,7 +464,7 @@ want them get five, none LLM-backed, each with a stated latency budget:
 
 **Note on pre-compact (2026-09-12):** this hook is a pointer-writer, not a gatekeeper, and that's a
 permanent design decision, not a placeholder to revisit. It pulls from the ledger - most expensive
-runs this session, denied/corrected tool calls, artifacts touched - and writes that as the resume
+runs this session, denied/corrected tool calls, assets touched - and writes that as the resume
 pointer; `session start` reads it back as the briefing. It never decides what Claude Code's own
 compaction keeps or drops. Same reasoning as "It measures and recommends. The human applies." above:
 a hook that prunes or rewrites context has the same blast-radius shape as a hook that denies or
@@ -490,7 +490,7 @@ the `policies` table, so the policy is data and the files are a reviewable diff.
 in their own directory and never overwrite hand-written ones.
 
 **One skill**, the Advisor, which reads proposals and walks the user through accepting or rejecting
-them. A diff-and-decide pattern applied to artifacts.
+them. A diff-and-decide pattern applied to assets.
 
 ### 3. Distribution
 
@@ -523,7 +523,7 @@ Measure, propose, apply, re-measure. One human gate, at apply.
 - Per `{agent type, model, effort}`: median tokens, duration, tool-call count.
 - Rework proxies: tool denials, user corrections following a result, repeated near-identical tool
   calls, plan churn.
-- Artifact use counts and staleness.
+- Asset use counts and staleness.
 
 **Cold start.** With no history the selector uses shipped defaults reasoned from first principles
 (cheaper model for well-scoped retrieval and mechanical execution, stronger model for planning and
@@ -849,7 +849,7 @@ folded in below.
 #### The active-steward role, refused for the fifth time
 
 An aligned spec proposed an `execute_context_action` tool: retire a rule, filter a hook, compact a
-plan, consolidate artifacts. Each of those writes to a human-authored file.
+plan, consolidate assets. Each of those writes to a human-authored file.
 
 **DECIDED 2026-09-22 by the owner: not at all, at this stage.** Not as a loom tool, and not as a
 separate tool alongside it either. Constraint 8 stands unchanged, and B7c is settled before it
@@ -872,7 +872,7 @@ consuming Loom's ledger over MCP, never a write path bolted in. Bolting it on re
 constraint 8, and constraint 8 is why this design has held up under scrutiny.
 
 The same decision disposes of `context-mode`'s mechanism, which Loom inherited motivation from and
-not implementation. Storing raw artifacts out of band and handing the model a reference is a durable
+not implementation. Storing raw assets out of band and handing the model a reference is a durable
 secondary copy of whatever was in the session. It would delete the planted-secret test that backs
 constraint 6, which is the whole safety argument on any machine that has seen confidential work. It
 also overlaps the host's own compaction rather than complementing it. Measured here: native
@@ -919,9 +919,9 @@ zero tokens in every field. A 100% false positive rate. The host already writes 
 Measured across the lane: 11 compactions, ~6.5M tokens dropped after deduping, **31.4 minutes of
 wall clock spent compacting**. That last figure is not a token cost and nothing reports it anywhere.
 
-**Occupancy does not depend on the artifact-to-run join (#39).** The reassessment left this open and
+**Occupancy does not depend on the asset-to-run join (#39).** The reassessment left this open and
 suspected it. Confirmed: `tool_use` blocks carry the tool name directly, so tool-output accounting
-and compaction pressure need only a tool name and a byte count. The join is per-artifact; occupancy
+and compaction pressure need only a tool name and a byte count. The join is per-asset; occupancy
 is per-session and time-ordered. They are independent, which means **B7b can go before B7a** for
 faster signal, though B7a still gates every claim that uses the word "unused".
 
@@ -929,23 +929,23 @@ faster signal, though B7a still gates every claim that uses the word "unused".
 
 Nothing else is worth building on an advisor whose central claim it cannot support. Three of five
 open issues undercut it: #39 means "unused" cannot be answered, #41 means every promotion rule is
-still prose, #38 means retirement can never fire for an artifact that exists on disk.
+still prose, #38 means retirement can never fire for an asset that exists on disk.
 
 - **#42**, skill discovery: require `<name>/SKILL.md`. Report a flat `.md` in a skills directory as a
   distinct finding, "present but never loadable", rather than counting it as a skill. Worth doing for
   its own sake and not only Loom's: six personal skills on another machine turned out to be dead this
   way, and the same measurement here found eight of nine.
-- **#39**, artifact-to-run join: record which discovered artifacts a run touched. Prerequisite for
+- **#39**, asset-to-run join: record which discovered assets a run touched. Prerequisite for
   every staleness or disuse claim.
 - **#38**, retirement condition.
 
-**Measured before designing, not assumed.** String-matching an artifact's name or path against
+**Measured before designing, not assumed.** String-matching an asset's name or path against
 transcript content was tried by hand first and rejected on the same evidence the handover's worked
 example warned about: every session's system prompt lists every discovered skill's name and
-description whether it fires or not, and a `tool_result` can echo an artifact's name back as plain
+description whether it fires or not, and a `tool_result` can echo an asset's name back as plain
 text from something unrelated (confirmed here: a `Read` of one file quoted a skill's name in
 passing, produced by this very machine). Both would have reproduced the near-identical count for
-every artifact the handover already flagged as a dead end.
+every asset the handover already flagged as a dead end.
 
 **#42 shipped as scoped.** `scanSkillDir` replaces `scanMarkdownDir` for skills only - agents, plans
 and memory keep the flat-file convention, which is correct for them. A flat `.md` in a skills
@@ -960,16 +960,16 @@ field, never from message text: a `Skill` invocation's `skill` name, and a `Read
 call's `file_path`. Agent usage needed no new signal at all - `runs.agent_type` already existed for
 B3a's policy attribution, so it answers "was this agent invoked" by itself. Hook usage has no
 reliable transcript signal and is out of scope, the same conclusion B7b reached for hook output
-volume. A new `artifact_usage(run_id, artifact_path, uses)` table holds the result, resolved against
-the artifacts table at write time - a skill name or file path matching nothing currently discovered
+volume. A new `asset_usage(run_id, asset_path, uses)` table holds the result, resolved against
+the assets table at write time - a skill name or file path matching nothing currently discovered
 is dropped, not guessed at.
 
 **#38 turned out smaller than its own issue text once #39 existed.** No new column: retirement's
-staleness clock is `last_used` where `artifact_usage` has an entry for the path, falling back to
+staleness clock is `last_used` where `asset_usage` has an entry for the path, falling back to
 `first_seen` - stable, never reset by a later discovery pass - when it does not. `last_seen` is
-untouched and keeps answering its own question (`MarkStaleArtifacts`, is it on disk). The regression
+untouched and keeps answering its own question (`MarkStaleAssets`, is it on disk). The regression
 test reproduces the original bug report exactly: discovery runs three times over weeks on an
-artifact nothing ever uses, staying on disk (`status = 'active'`) throughout, and the proposal now
+asset nothing ever uses, staying on disk (`status = 'active'`) throughout, and the proposal now
 fires - which it could never do before, for anything still present.
 
 #### B7b. Occupancy metrics, and `loom context` - BUILT 2026-09-22
@@ -1031,7 +1031,7 @@ they claim to.
 
 **A real correctness bug survived that "consistent with the hand-measured figures" check, and
 `/code-review high` is what found it, not the tests or the dogfooding above.** `tool_usage` and
-`artifact_usage` were both written as one row per `(run_id, tool_name)` / `(run_id, artifact_path)`,
+`asset_usage` were both written as one row per `(run_id, tool_name)` / `(run_id, asset_path)`,
 aggregated at ingest time - with no per-event identity, unlike `compactions`, which had
 `boundary_uuid` from the start specifically to dedupe a resumed session's replayed history. Ordinary
 `tool_use`/`tool_result` lines turn out to replay the same way compact_boundary records do -
@@ -1041,7 +1041,7 @@ The Read/compaction figures quoted just above are themselves overstated by howev
 machine's corpus went through a resume, which was not separately measured.
 
 **Fixed by giving both tables the same identity `compactions` already had.** Each `tool_use` block
-carries its own globally unique `id`; `tool_usage`/`artifact_usage` now store one row per id
+carries its own globally unique `id`; `tool_usage`/`asset_usage` now store one row per id
 (`tool_use_id` as the primary key, `ON CONFLICT DO NOTHING` on insert), aggregated at query time
 instead of at write time. A ledger built before this fix has the old, un-deduped shape; `migrate`
 drops and rebuilds both tables the next time `loom` opens it; rebuilt at the next `loom report`,
@@ -1049,13 +1049,13 @@ which is the only reasonable trigger to backfill it, and see issue #49 for the g
 under this exact situation.
 
 The same review pass, verified against the code before acting on any of it, found three more real
-issues in the same two features: `retireStaleArtifacts` never actually checked `runs.agent_type` for
-agent-kind artifacts, contradicting this section's own claim two paragraphs up that agent usage
+issues in the same two features: `retireStaleAssets` never actually checked `runs.agent_type` for
+agent-kind assets, contradicting this section's own claim two paragraphs up that agent usage
 needs no new signal - a custom agent invoked constantly via the `Agent` tool could be proposed for
 retirement as "never used" purely because that tool isn't Skill/Read/Edit/Write. `loom context`
 printed nothing about compaction at all when a lane had compactions but no tool-output rows, because
-its early return covered both sections at once. `BuildArtifactLookup` had no `ORDER BY`, so two
-artifacts sharing a name (a project-level skill overriding a global one - `discover.go` scans both
+its early return covered both sections at once. `BuildAssetLookup` had no `ORDER BY`, so two
+assets sharing a name (a project-level skill overriding a global one - `discover.go` scans both
 dirs by design) resolved to whichever row SQLite felt like returning that call. All three fixed
 alongside the dedup fix, each with its own regression test reproducing the original failure shape.
 
@@ -1072,7 +1072,7 @@ files, 17 exact duplicates, 5 files appearing in three stores each. Hashing only
 recurrence inference, no content retained.
 
 The same pass covers three further structural checks that need no judgement: broken `[[links]]` (3 of
-6 here), artifacts absent from the index that loads them and therefore unreachable (2 here), and
+6 here), assets absent from the index that loads them and therefore unreachable (2 here), and
 filename-to-slug convention drift, which is what breaks the links (4 here).
 
 Add path-scoped rules to discovery in the same change, since the spec names them and Loom does not
@@ -1083,7 +1083,7 @@ Constraint 10 applies and is satisfied in the same PR, not deferred: state the g
 dedupe key and the retention rule before merging.
 
 **Built as scoped, with one piece deferred rather than guessed at.** The four structural checks
-shipped: `internal/artifact.DiscoverAllMemory` walks every project's memory store
+shipped: `internal/asset.DiscoverAllMemory` walks every project's memory store
 (`~/.claude/projects/*/memory`) cross-project - the one place in Loom that needs a wider view than
 "home plus the current project", since duplicate detection and index-reachability only mean anything
 across stores. Constraint 6 holds throughout: files are hashed and scanned for `[[links]]`, never
@@ -1095,7 +1095,7 @@ evidence-hash re-raise rule already governed B5's three kinds and now governs th
 **Path-scoped rules: discovery not built, and said so rather than guessed.** "The spec names them
 and Loom does not model them" was the extent of the direction, with no measured numbers behind it
 anywhere in this document, unlike every other B7c check. The natural reading - CLAUDE.md files as a
-new artifact kind - runs into a real gap: Loom's other discovery is scoped to "home plus the current
+new asset kind - runs into a real gap: Loom's other discovery is scoped to "home plus the current
 project" precisely because those are Claude Code's own standard locations (constraint 2), but a
 CLAUDE.md hierarchy lives under a user's own workspace tree, which has no standard root Claude Code
 defines. Guessing at one (this machine's own `~/projects/{work,personal,public}` convention, say)
@@ -1104,7 +1104,7 @@ Deferred rather than built on a guess - revisit if a concrete shape turns up, th
 semantic staleness already got below.
 
 **Run against this machine's own corpus, all four checks firing for real:** 5 duplicate groups
-spanning 3 stores each, 5 broken links, 3 unreachable artifacts, 27 filename/slug drift cases (17
+spanning 3 stores each, 5 broken links, 3 unreachable assets, 27 filename/slug drift cases (17
 substantive - e.g. `feedback_working_preferences` renamed to `working-preferences` at some point
 without the file following - 10 a systematic underscore-vs-hyphen convention difference, both real
 drift by the same definition, not distinguished further since the design doc's own rule draws no
@@ -1144,7 +1144,7 @@ project has done that.** Three more real, verified bugs, all fixed in the same P
 - **The subdirectory memory convention (`topic/SKILL.md`) was invisible to every B7c check.**
   `DiscoverAllMemory` unconditionally skipped directory entries, while `scanMarkdownDir` - used for
   this exact kind in the single-project `Discover()` path - already treats a subdirectory containing
-  its own `SKILL.md` as an equally valid memory artifact. A `[[link]]` to such an artifact would have
+  its own `SKILL.md` as an equally valid memory asset. A `[[link]]` to such an asset would have
   been reported `broken_link` even though the target genuinely existed. Fixed by mirroring
   `scanMarkdownDir`'s two-shape handling.
 
@@ -1157,7 +1157,7 @@ a real but vanishingly narrow race, self-correcting on the next run, not worth t
 single-read refactor for what it would prevent.
 
 **Not in B7c: semantic staleness.** Tested here and rejected on measurement. Extracting the claims an
-artifact makes and checking whether they still resolve produced 44 candidates and 6 flags, all 6 false
+asset makes and checking whether they still resolve produced 44 candidates and 6 flags, all 6 false
 positives: a slash command read as a path, two documentation examples, and two work-machine paths
 correctly absent on a personal machine. Separating an assertion from an illustration needs to read for
 intent, which needs a model, which is the cost this is meant to reduce. Recorded so it is not retried
@@ -1180,7 +1180,7 @@ Small, and all of it is drift between what the code does and what it says:
 - `cmd/loom/main.go`'s usage string and `internal/mcp/doc.go` both say four MCP tools and omit
   `dismiss_proposal`. There are five. `doc.go` also still describes B2 as the current scope.
 - The never-write rule is constraint **8**. Four places cite it as constraint 9, which is
-  "artifact-derived text is data". Residue from the renumbering that produced the append-never-insert
+  "asset-derived text is data". Residue from the renumbering that produced the append-never-insert
   rule.
 - Line 444 still describes a Unix domain socket fast path. `serve.go` is stdio-only and says so.
 - 19 em or en dashes remain in this file. The hyphen rule was made a rule elsewhere and this repo has
@@ -1221,6 +1221,50 @@ the CLI commands and by `internal/ledger`/`internal/propose`'s own tests - nothi
 `NewServer` also dropped its `home` parameter, now unused since `list_proposals` (the one handler
 that read it) is gone. Contract version bumped `v0.2.0` -> `v0.3.0` and `plugin.json` to match, per
 `internal/mcp/plugin_test.go`'s own rule that the two must move together.
+
+#### The "artifact" noun rename - BUILT 2026-09-23
+
+Loom's artifact (a skill, plan, agent, hook or memory file) collided with the aligned spec's own
+artifact (a versioned render block) - the other open item left for the owner rather than decided
+during B7. Resolved to **rename, not keep**: shown the actual size of the change (roughly 440
+occurrences across 35 Go files, the discovery package, a DB table needing a migration, MCP field
+names, and every doc) plus a collision check against loom's own existing vocabulary, the owner chose
+**`asset`** over the alternatives checked and ruled out - `resource` collides with MCP's own
+first-class "Resources" concept (a real collision with something loom itself could plausibly expose
+one day, arguably worse than the one being fixed), `definition` collides with `loom policy render`'s
+already-named "agent definitions", and `fixture` collides with `testdata/`'s established meaning.
+
+Mechanical, done in one pass: `internal/artifact` -> `internal/asset`, `Artifact`/`ArtifactRecord`/
+`ArtifactRow`/`ArtifactUsageSummary`/`ArtifactLookup`/`ArtifactTouch` and friends -> `Asset...`,
+`KindRetireArtifact`/`KindUnreachableArtifact` and their stored kind strings (`retire_artifact` ->
+`retire_asset`, `unreachable_artifact` -> `unreachable_asset`) -> `Asset`, the `artifacts`/
+`artifact_usage` DB tables and `artifact_path` column -> `assets`/`asset_usage`/`asset_path`, and
+every doc. A new `migrateAssetRename` drops the old-named tables on a pre-rename ledger - both are
+pure derived caches, rebuilt in full by the next `loom report`/`loom advise`, so nothing is lost;
+verified against this machine's own real `~/.loom/loom.db`, backed up first.
+
+**A real bug found by `/code-review high` before merge, not after.** The rename alone left a
+pending proposal stored under an old kind string (`retire_artifact`, `unreachable_artifact`)
+mis-reported: `propose.TouchesUserFiles` only recognized the new kind strings and defaulted anything
+else to `false` - "safe to automate" - which is exactly backwards for a proposal that in fact
+touches the user's files. Fixed two ways. `migrateAssetRename` now also deletes any `proposals` row
+still carrying an old kind string, since `Generate` never emits one again and the row is permanently
+dead. And `TouchesUserFiles` itself flipped its default from fail-open to **fail safe**: it now names
+the two kinds that are genuinely safe (`KindPinModel`, `KindRevertPolicy`) and treats everything
+else, recognized or not, as touching the user's files - so a kind this function has never heard of,
+whenever that happens next, is never silently assumed safe again.
+
+One exception kept as `artifact`, deliberately: `docs/design.md`'s own note that the `coordination`
+table "stays in the schema as an empty, unused artifact of the original design" uses the word in its
+ordinary English sense (a leftover), not Loom's concept - renaming it would have been wrong, not
+thorough. `SECURITY.md`'s mention of "a fetched artifact" (a downloaded release binary) is the same
+kind of exception. This document's own historical, dated build entries above (B1 through B7) were
+renamed along with everything else, on the view that a pure terminology change is not the same kind
+of edit as rewriting a historical *decision* - nothing about what was built or why changes, only its
+label, so leaving half the document using the old name for "historical accuracy" would have made it
+permanently self-contradictory against the code for no real benefit. This is different in kind from
+how the MCP server shape section above treats its own history, where the actual tool inventory
+genuinely differed at different points in time and preserving that is the accurate record.
 
 #### Open, and deliberately not decided here
 
@@ -1267,7 +1311,7 @@ B7d last so surfacing earns its place on measurement the way B5's did.
 - **Resumed sessions do not double-count.** Ingest two transcripts where the second resumes the
   first and carries the same compaction boundary; assert the event is counted once. Same shape as the
   2.12x over-count, so it gets its own fixture. Not compaction-only: `tool_usage` and
-  `artifact_usage` need the identical test, on the identical shape of evidence (a `tool_use` id
+  `asset_usage` need the identical test, on the identical shape of evidence (a `tool_use` id
   shared between two runs) - missing here is exactly what let the double-count into both tables
   in the first place, caught only once by code review, not by this list.
 - **Bytes stay bytes.** Assert no stored column holds a token estimate. The conversion belongs at the
