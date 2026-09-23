@@ -1001,6 +1001,35 @@ accidental way to withdraw every other lane's still-valid proposals as a side ef
 session's own view. Verified for real: ran `--lane` against this machine's own dotfiles lane, confirmed
 the pending count in the ledger stayed at 20 (nothing withdrawn), only the printed list narrowed.
 
+#### MCP surface widened back - BUILT 2026-09-23
+
+Issue #62, the last of the AMC trial's four findings and the one that revisits an earlier decision
+directly. "MCP server shape, narrowed further" (above) cut `query_ledger`, `list_proposals` and
+`dismiss_proposal` to CLI-only on reasoning it labelled explicitly as unmeasured - a standing
+system-prompt cost, weighed against a substitute a session could always reach via its own shell tool -
+and said plainly it would reverse "if a later trial says otherwise." The first real trial did: a
+session connected to a real, 205-run ledger could see nothing about cost, occupancy, or proposals -
+only `get_recommendation`'s keyword match reached it, and everything the ledger actually knows was
+reachable only from a CLI that session had no reason to invoke unprompted. The concern the original
+B7 handover raised before any of B7 was built - loom's tools carrying real schema weight against a
+skill's - was answered then by narrowing; this trial answered the opposite question, what narrowing
+itself costs once the one tool left can't say anything about cost, and settled it the other way.
+
+Restored: `get_cost_summary` and `get_context_occupancy` (the two halves the old combined
+`query_ledger` reported, now split, matching what the narrowing decision itself proposed as the
+priority order if this ever reversed), and `list_proposals`. All three read-only in the sense that
+matters here - none of them ever applies or dismisses anything, `TouchesUserFiles` still gates every
+proposal exactly as before. `dismiss_proposal` and `record_outcome` stay cut: both write, and that
+half of the original reasoning was never the unmeasured half - it rests on B5's own settled rule that
+a decision changing state belongs at the terminal, restated in "MCP server shape, narrowed further"
+above, and this trial gave no reason to revisit it. `NewServer` regains its `home` parameter,
+constructor-injected as before (never resolved per-request - the exact hermeticity bug fixed once
+already), and `home` is why `list_proposals` alone among the three needs it: `GenerateMemoryFindings`
+is the one piece of proposal generation that touches the filesystem.
+
+Verified for real over the wire, not just by the in-memory-transport test suite: called `loom serve`
+directly and confirmed `tools/list` returns all four tools.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

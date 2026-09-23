@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "loom",
   "displayName": "Loom",
-  "description": "Local asset lifecycle and cost/routing engine for Claude Code. Registers Loom's MCP server so a session can ask what to use before it starts.",
-  "version": "0.3.0",
+  "description": "Local asset lifecycle and cost/routing engine for Claude Code. Registers Loom's MCP server so a session can ask what to use before it starts, and check its own cost and open proposals.",
+  "version": "0.4.0",
   "author": {
     "name": "Bertie",
     "url": "https://github.com/teerakarna"
