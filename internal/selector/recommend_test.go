@@ -77,6 +77,33 @@ func TestScoreNeverExceedsOne(t *testing.T) {
 	}
 }
 
+// TestScoreDoesNotFormCompoundAcrossFieldBoundary is the regression test for
+// a bug code review found by reproduction: an earlier version joined
+// a.Name+" "+a.Description into one string before compounding, so the last
+// word of Name and the first word of Description could form a compound
+// neither field actually contains. Name ends in "device", Description
+// starts with "farm" - unrelated fields, no real "Device Farm" phrase
+// anywhere in this asset - so a query for "Device Farm" must not treat this
+// as a genuine compound match.
+func TestScoreDoesNotFormCompoundAcrossFieldBoundary(t *testing.T) {
+	assets := []ledger.AssetRow{
+		{Kind: "memory", Name: "mobile testing device", Path: "/mem/a.md",
+			Description: "farm health checks and unrelated invoice reconciliation steps for the finance team"},
+	}
+	rec := Recommend(TaskDescriptor{Text: "investigate the Device Farm outage today"}, assets, nil)
+	if len(rec.Matches) == 0 {
+		t.Fatal("got no matches - the real unigram overlap (device, farm) should still surface something")
+	}
+	// The true overlap is exactly "device" and "farm" as separate words,
+	// not the boundary-artifact compound "devicefarm" too - measured at
+	// 0.4 before this fix, 0.6 with the spurious boundary compound
+	// counted as a third overlapping token.
+	if rec.Matches[0].Score > 0.5 {
+		t.Errorf("Score = %v, want ~0.4 (device+farm only) - a boundary compound between "+
+			"unrelated Name/Description fields must not count as a real match", rec.Matches[0].Score)
+	}
+}
+
 // TestRecommendFallsBackToWeakMatchesRatherThanNone is the regression test
 // for issue #64's second finding: a query with some genuine but too-thin
 // overlap to clear minScore returned nothing at all, even though the store
@@ -177,6 +204,27 @@ func TestColdStartModelSinglePlanningWordAloneIsNotEnough(t *testing.T) {
 	model, effort, _ := coldStartModel("decide what to have for lunch today")
 	if model == "opus" || effort == "high" {
 		t.Errorf("got model=%s effort=%s, want sonnet/medium - one planning word alone is too weak a signal", model, effort)
+	}
+}
+
+// TestColdStartModelTieRationaleIsHonest is the regression test for a bug
+// code review found by reproduction: a genuine tie between planning and
+// retrieval hits (both sides clear their own bar) went cheap, correctly,
+// but with a rationale claiming "matches retrieval/mechanical keywords" -
+// which was false, since it matched exactly as many planning keywords.
+// "review the design plan, then find and update the typo" matches
+// planning={review, design, plan} and retrieval={find, update, typo}, 3
+// each.
+func TestColdStartModelTieRationaleIsHonest(t *testing.T) {
+	model, effort, rationale := coldStartModel("review the design plan, then find and update the typo")
+	if model != "haiku" || effort != "low" {
+		t.Errorf("got model=%s effort=%s, want haiku/low - a tie still defaults cheap", model, effort)
+	}
+	if strings.Contains(rationale, "retrieval/mechanical keywords") {
+		t.Errorf("Rationale = %q, want it to describe the tie honestly, not claim retrieval dominance it doesn't have", rationale)
+	}
+	if !strings.Contains(rationale, "equally") {
+		t.Errorf("Rationale = %q, want it to say the signal was tied", rationale)
 	}
 }
 

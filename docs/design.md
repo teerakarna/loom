@@ -1081,17 +1081,43 @@ compound separately, and overlap can exceed the query's own token count. Reprodu
 farm"` against a candidate whose own description also contains "Device Farm" scored `1.5`. A caller
 treating that as a confidence fraction - the CLI's `[%.2f]`, the MCP JSON `score` field - would see a
 nonsensical result. Fixed by clamping `score`'s return value to `1`, the minimal fix that restores the
-documented invariant without complicating the matching semantics further. The same pass found
-`tokenizeWithCompounds` lowercasing and regex-tokenizing its input twice (once inside its own call to
+documented invariant without complicating the matching semantics further. The same pass found the
+compound tokenizer lowercasing and regex-tokenizing its input twice (once inside its own call to
 `tokenize`, once again to build compounds) for no reason - not a correctness bug, but real waste on
-every candidate scored on every `Recommend` call; fixed by splitting the words once and deriving both
-the unigram set and the compounds from that single pass.
+every candidate scored on every `Recommend` call.
+
+**A second review pass, on the fix above, found three more.** The efficiency fix just described only
+fixed the double-scan for candidates; the query itself (`desc.Text`) was still scanned twice, once
+building the plain unigram set, once building the compound set - the exact pattern the previous fix's
+own commit message said it had fixed. Restructured into `tokenizeWords` (one lowercase+regex pass,
+shared), `unigramSet` and `compoundSet` (both built from that one word list), so `Recommend` now scans
+the query once. Second: the compound tokenizer was still called on `a.Name+" "+a.Description` joined
+into one string, so the last word of `Name` and the first word of `Description` could form a compound
+neither field actually contains - confirmed by reproduction, an asset named "mobile testing device"
+with a description starting "farm health checks..." (two unrelated fields) spuriously matched a
+"Device Farm" query at `0.6` instead of the true `0.4` from the real, separate "device"/"farm"
+overlap. New `compoundsAcrossFields` builds each field's compounds independently and only merges the
+resulting sets, never treating a field boundary as two adjacent words in one phrase. Third: `score`'s
+clamp fixed the documented range but not determinism among ties it creates - several candidates
+clamped to the same `1.0` sorted in whatever order `sort.Slice`'s unstable algorithm happened to land
+them, which is not guaranteed consistent across runs on identical input. Switched to `sort.SliceStable`
+and the loop that splits `matches` out of the now-sorted `all` changed from a second full scan into a
+second slice (an unnecessary second allocation, since a descending-sorted list's qualifying prefix is
+always contiguous) to finding that cutoff directly.
+
+The same second pass also found `coldStartModel`'s tie case - both `planningHits` and `retrievalHits`
+nonzero and equal - fell into the retrieval-dominant branch and returned its rationale text
+unchanged, which is false for a tie: a text matching three planning words and three retrieval words
+got told it "matches retrieval/mechanical keywords" with no mention that it matched exactly as many
+planning ones. The model/effort answer (`haiku`/`low`) was already the intended one - a genuine tie
+is conflicting evidence, not no evidence, and defaults cheap the same reasoning as everywhere else in
+this section - only the rationale was dishonest about why. Split into its own case with its own
+accurate wording.
 
 Every issue in this section verified for real, not just by unit test: `loom advise --agent-type
 Explore` against a scratch ledger with a hand-set policy printed that policy's model, not a cold-start
-guess; the `devicefarm` compound match and the weak-signal-does-not-escalate fix both confirmed
-against the issue's own real query text; the score-clamp fix confirmed against the exact reproduction
-that found it.
+guess; the `devicefarm` compound match, the weak-signal-does-not-escalate fix, the score-clamp fix,
+and the tie-rationale fix all confirmed against real or reproduced query text.
 
 ### B7 scope, agreed 2026-09-22
 
