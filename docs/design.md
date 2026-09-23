@@ -1030,6 +1030,95 @@ is the one piece of proposal generation that touches the filesystem.
 Verified for real over the wire, not just by the in-memory-transport test suite: called `loom serve`
 directly and confirmed `tools/list` returns all four tools.
 
+#### advise ignored its own evidence, and escalated on ambiguity - BUILT 2026-09-23
+
+Issues #63 and #64, both from the AMC trial, both about the same command: `loom advise` was giving
+worse advice than the ledger's own evidence supported, in two independent ways.
+
+**#63: the evidence existed and nothing consulted it.** `loom policy` could show four agent types with
+evidence-backed rows on a 205-run ledger, every one of them landing on `sonnet`, while `loom advise` on
+the same ledger still printed "no history yet to personalize from" - the self-tuning loop's own output
+was invisible to the one command a live session actually calls. New optional `--agent-type <type>` on
+`loom advise` and `agent_type` on `get_recommendation`: when given, `selector.Recommend` takes a third
+parameter, `*ledger.PolicyRow`, resolved by the caller (never by `selector` itself, which stays
+database-free by the same design as the `[]ledger.AssetRow` it already takes) and, when non-nil, drives
+the answer directly - real, measured evidence over a keyword guess, whether the policy was measured or
+hand-set, since a decision already made for an agent type is not second-guessed here any more than
+`revertRegressedPolicies` second-guesses one with a number. Empty `--agent-type`, or an agent type with
+no policy yet, falls through to the unchanged cold-start heuristic.
+
+The same issue's second half: the keyword heuristic escalated to `opus` on a single incidental word.
+The example that found it - "investigate why the iOS Device Farm @full leg fails and post the evidence
+on the Jira ticket", a debugging task - matched "why" (a planning keyword) and got `opus`/`high`. On
+real measured data on the machine that found this, `opus` costs roughly 272x `sonnet`'s per-run cost,
+and the two ways to misjudge are not symmetric: guessing too cheap costs a retry, guessing too
+expensive costs the difference outright, whether or not it turns out to have been warranted. Fixed two
+ways: `"why"` removed from `planningWords` (too common in ordinary debugging phrasing to be a reliable
+planning signal on its own), and a new `minPlanningHits = 2` - escalating to the expensive tier now
+needs at least two distinct planning-keyword hits, not just a one-word margin over retrieval. Ambiguity
+now defaults to the cheap direction, stated in the rationale text itself, not just the code.
+
+**#64: retrieval returned nothing on a lexical miss, including for the exact right answer.** The same
+query above scored zero against `devicefarm-public-devices-fail-device-gate` and three other real
+memory files with "devicefarm" in the name - a genuine, specific match, missed only because "Device
+Farm" (the query's own spacing) and "devicefarm" (the asset's own naming, no separator) are different
+token strings under plain word-splitting. New `tokenizeWithCompounds`: every pair of adjacent words,
+concatenated with no separator, added as an extra token - "device" + "farm" → "devicefarm" - used for
+matching only, on both the query and candidate sides, never for `score`'s denominator (which stays
+unigram-only), so a compound match can only add overlap, never inflate the query length it's divided
+by and erase its own benefit. `Recommend` also never returns empty when there was something, even weak,
+to show: every candidate scoring above zero is tracked, and if nothing clears `minScore`, the top
+scorers are returned anyway with a new `BelowThreshold` flag, surfaced in the CLI, MCP output, and a
+live-tool test - a caller can discard a weak guess, but cannot discover an asset it was never told
+about.
+
+**A real bug found by `/code-review high` before merge, confirmed by reproduction, not just argued.**
+`SkillMatch.Score`'s own doc comment promises a 0 to 1 range, and the compound-match fix above broke
+it: `queryMatchTokens` (the numerator side) can have more members than `queryTokens` (the denominator)
+- every compound is an extra token on top of the unigrams already counted - so a candidate whose own
+description independently repeats the same phrase the query uses matches both the unigrams and their
+compound separately, and overlap can exceed the query's own token count. Reproduced directly: `"device
+farm"` against a candidate whose own description also contains "Device Farm" scored `1.5`. A caller
+treating that as a confidence fraction - the CLI's `[%.2f]`, the MCP JSON `score` field - would see a
+nonsensical result. Fixed by clamping `score`'s return value to `1`, the minimal fix that restores the
+documented invariant without complicating the matching semantics further. The same pass found the
+compound tokenizer lowercasing and regex-tokenizing its input twice (once inside its own call to
+`tokenize`, once again to build compounds) for no reason - not a correctness bug, but real waste on
+every candidate scored on every `Recommend` call.
+
+**A second review pass, on the fix above, found three more.** The efficiency fix just described only
+fixed the double-scan for candidates; the query itself (`desc.Text`) was still scanned twice, once
+building the plain unigram set, once building the compound set - the exact pattern the previous fix's
+own commit message said it had fixed. Restructured into `tokenizeWords` (one lowercase+regex pass,
+shared), `unigramSet` and `compoundSet` (both built from that one word list), so `Recommend` now scans
+the query once. Second: the compound tokenizer was still called on `a.Name+" "+a.Description` joined
+into one string, so the last word of `Name` and the first word of `Description` could form a compound
+neither field actually contains - confirmed by reproduction, an asset named "mobile testing device"
+with a description starting "farm health checks..." (two unrelated fields) spuriously matched a
+"Device Farm" query at `0.6` instead of the true `0.4` from the real, separate "device"/"farm"
+overlap. New `compoundsAcrossFields` builds each field's compounds independently and only merges the
+resulting sets, never treating a field boundary as two adjacent words in one phrase. Third: `score`'s
+clamp fixed the documented range but not determinism among ties it creates - several candidates
+clamped to the same `1.0` sorted in whatever order `sort.Slice`'s unstable algorithm happened to land
+them, which is not guaranteed consistent across runs on identical input. Switched to `sort.SliceStable`
+and the loop that splits `matches` out of the now-sorted `all` changed from a second full scan into a
+second slice (an unnecessary second allocation, since a descending-sorted list's qualifying prefix is
+always contiguous) to finding that cutoff directly.
+
+The same second pass also found `coldStartModel`'s tie case - both `planningHits` and `retrievalHits`
+nonzero and equal - fell into the retrieval-dominant branch and returned its rationale text
+unchanged, which is false for a tie: a text matching three planning words and three retrieval words
+got told it "matches retrieval/mechanical keywords" with no mention that it matched exactly as many
+planning ones. The model/effort answer (`haiku`/`low`) was already the intended one - a genuine tie
+is conflicting evidence, not no evidence, and defaults cheap the same reasoning as everywhere else in
+this section - only the rationale was dishonest about why. Split into its own case with its own
+accurate wording.
+
+Every issue in this section verified for real, not just by unit test: `loom advise --agent-type
+Explore` against a scratch ledger with a hand-set policy printed that policy's model, not a cold-start
+guess; the `devicefarm` compound match, the weak-signal-does-not-escalate fix, the score-clamp fix,
+and the tie-rationale fix all confirmed against real or reproduced query text.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

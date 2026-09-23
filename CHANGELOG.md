@@ -65,6 +65,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `loom advise --agent-type <type>` and `get_recommendation`'s new optional `agent_type` (#63, found
+  on the AMC trial - `loom policy` showed four evidence-backed agent-type policies, `loom advise` on
+  the same ledger still said "no history yet to personalize from"). When given and a policy exists,
+  `selector.Recommend` uses that real, measured (or hand-set) policy directly instead of a cold-start
+  keyword guess - `selector` stays database-free, the caller resolves and passes in the `*ledger.PolicyRow`.
+
+### Changed
+
+- `loom advise`'s cold-start heuristic no longer escalates to `opus` on a single incidental keyword
+  (#63) - the query that found this, a debugging task, matched "why" and got `opus`/`high` although
+  `opus` costs roughly 272x `sonnet`'s per-run cost on the corpus measured. `"why"` removed from
+  `planningWords` (too common in ordinary debugging phrasing), and escalating now needs at least two
+  distinct planning-keyword hits (`minPlanningHits`), not a one-word margin. Ambiguity now defaults
+  cheap, not expensive.
+
+- `loom advise`/`get_recommendation` no longer return nothing on a lexical near-miss (#64) - a real
+  memory file named `devicefarm-public-devices-fail-device-gate` scored zero against a query
+  containing "Device Farm" because "device"+"farm" (the query's spacing) and "devicefarm" (the
+  asset's own naming) were different token strings. New compound tokenizer adds adjacent-word
+  concatenations as bonus match tokens, on both sides, without inflating the score's denominator.
+  `Recommend` also never returns fully empty when something, even weak, scored above zero - the best
+  candidates surface with a new `BelowThreshold` flag instead of silence.
+
+  Reviewed before merge, over two passes, four real bugs found and fixed. First pass: the
+  compound-match fix broke `SkillMatch.Score`'s documented 0-1 range (a candidate whose own
+  description independently repeats the query's phrase matched both the unigrams and their compound,
+  reproduced directly at `1.5`) - fixed by clamping to `1`. Second pass, on the fix for the first: the
+  query side was still scanned twice building two token sets from the same text - restructured into
+  one shared word-splitting pass (`tokenizeWords`) that both the unigram and compound sets build
+  from; the compound tokenizer was still joining `Name`+`Description` into one string before
+  compounding, so the boundary between two unrelated fields could form a compound neither field
+  actually contains (reproduced: an asset scored `0.6` against a query it should have scored `0.4`
+  against, from a spurious "devicefarm" formed across a field boundary) - fixed with a new
+  `compoundsAcrossFields` that merges each field's own compounds instead of concatenating first; and
+  the score clamp's ties sorted in whatever order an unstable sort happened to land them - switched to
+  `sort.SliceStable`. The same second pass also found `coldStartModel`'s tie case (equal
+  planning/retrieval hits) correctly defaulted cheap but with a rationale claiming pure retrieval
+  dominance it didn't have - split into its own case with honest wording.
+
 - `loom propose --lane <lane>` (#68, found on the AMC trial - 14 of 20 pending proposals on that
   machine belonged to a different lane than the session running the command, printing another
   project's memory-store paths uninvited). Narrows the four B7c memory-finding kinds to one store;
