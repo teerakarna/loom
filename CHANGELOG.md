@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- MCP server narrowed to one tool, `get_recommendation`. `query_ledger`, `list_proposals`,
+  `dismiss_proposal` and `record_outcome` are CLI-only now (`loom report`/`status`/`context`,
+  `loom propose`, `loom propose dismiss`, and the new `loom record-outcome`) - each already had a
+  CLI equivalent, and a session that needs one can run it via its own shell tool, so only the tool
+  with no such substitute (recommendation needs to fire mid-task, on the hot path) earns a place on
+  a surface whose tool descriptions sit in every installed session's system prompt whether called or
+  not. `NewServer` dropped its now-unused `home` parameter; contract version `v0.2.0` -> `v0.3.0`,
+  `plugin.json` bumped to match.
+
 ### Added
 
 - Promotion rules as read-only proposals (B7c, #41): four structural checks over every project's
@@ -78,6 +89,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is not a saving.
 
 ### Fixed
+
+- `get_recommendation` serialised an empty `matches` list as JSON `null` rather than `[]`, found by
+  calling the live MCP tool for real rather than trusting the test suite - the existing test built
+  its expectation by unmarshaling the response back into a Go slice, and `nil` and `[]T{}` unmarshal
+  identically, so `len(out.Matches) == 0` passed either way. Fixed by initialising `Matches` to a
+  non-nil empty slice; test now also asserts `!= nil`.
 
 - Three bugs in B7c's memory checks, found by running `/code-review high` against the PR before
   merging rather than after - the first time this project has done that. `DiscoverAllMemory`
@@ -232,7 +249,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as separate jobs alongside build/vet/test. Fixes 19 errcheck findings (unchecked `Close()` errors)
   surfaced by turning lint on for the first time.
 - Dependabot config for `gomod` and `github-actions` dependency updates, weekly. Also enabled
-  GitHub's Dependabot vulnerability alerts on the repo (a settings toggle, free on private repos —
+  GitHub's Dependabot vulnerability alerts on the repo (a settings toggle, free on private repos,
   confirmed by testing, doesn't require going public).
 
 - Prompt-injection hardening for the artifact-recommendation path: `get_recommendation` and

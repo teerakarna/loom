@@ -448,8 +448,9 @@ subprocess per its own MCP server config, one process per session.
 ### 2. Integration - MCP first
 
 **An MCP server over stdio is the primary surface.** It works in any MCP client, needs no edits to
-anyone's settings file, and installs in one line. Tools exposed: query the ledger, get a
-recommendation for the task at hand, list and explain proposals, record an outcome.
+anyone's settings file, and installs in one line. As specified here it exposed four tools: query the
+ledger, get a recommendation for the task at hand, list and explain proposals, record an outcome.
+Narrowed to `get_recommendation` alone - see "MCP server shape, narrowed further", B7's open items.
 
 **Hooks are optional enhancements**, documented but never required, because on some setups the
 settings file is owned by another process and hook registration is a permanent manual step. Users who
@@ -632,10 +633,12 @@ What the convenience was actually worth is not retyping a model name off a propo
 own policy table, it records the policy's source as `evidence` with its sample size, and
 `loom policy unset` reverts it. "The human applies" stays literal rather than becoming a setting.
 
-Apply is deliberately **CLI-only**. `list_proposals` and `dismiss_proposal` are exposed over MCP
-because listing is read-only and dismissing only hides a suggestion, but applying changes policy,
-and an assistant can call an MCP tool without the human asking. The terminal is where a decision
-that changes state belongs.
+Apply is deliberately **CLI-only**, for the reason below: applying changes policy, and an assistant
+can call an MCP tool without the human asking, so the terminal is where a decision that changes
+state belongs. At the time this was written, `list_proposals` and `dismiss_proposal` were also
+exposed over MCP, since listing is read-only and dismissing only hides a suggestion. Both later moved
+to CLI-only too, for a different reason - see "MCP server shape, narrowed further" under B7's open
+items.
 
 Status: pull shipped (B5a), MCP surface shipped (B5b), nudge cut, auto-apply rejected and replaced
 by `loom propose apply` (B5d). **B5 complete as scoped.**
@@ -1184,15 +1187,39 @@ Small, and all of it is drift between what the code does and what it says:
 - 19 em or en dashes remain in this file. The hyphen rule was made a rule elsewhere and this repo has
   not had the sweep. Mechanical, and worth doing in the same pass rather than drifting further.
 
+#### MCP server shape, narrowed further - BUILT 2026-09-23
+
+B7d kept `list_proposals` and the `query_ledger` occupancy dimension on the MCP surface alongside
+`get_recommendation`, on the reasoning that pull beats a scheduler. Revisited once more before the
+first real trial (installing on a second machine, AMC, to see how it actually changes a session's
+behaviour): the MCP surface now carries **`get_recommendation` only**.
+
+Two reasons, neither about correctness:
+
+- Every one of `query_ledger`, `list_proposals`, `dismiss_proposal` and `record_outcome` already has
+  a CLI equivalent (`loom report`/`status`/`context`, `loom propose`, `loom propose dismiss`, the new
+  `loom record-outcome`), and a live session can run any CLI command through its own shell tool. MCP
+  earns its place only for the one tool with no such substitute: `get_recommendation` needs to fire
+  mid-task, on the hot path, with no human in the loop to type a command.
+- A tool's name and description sit in every session's system prompt the plugin is installed into,
+  whether that session ever calls the tool or not. Four tools' worth of description text was a
+  standing cost paid on every session for surface that a CLI command already covers.
+
+`internal/mcp/server.go`'s `NewServer` dropped to one registration; the now-dead wrapper types
+(`LedgerReport`, `ProposalsOutput`, `Proposal`, `DismissInput`/`Output`, `OutcomeInput`/`Output`) and
+their handlers were deleted rather than left unused, since the underlying logic they wrapped
+(`db.Report`/`Occupancy`, `propose.Generate`/`Store`, `db.DismissProposal`) is exercised directly by
+the CLI commands and by `internal/ledger`/`internal/propose`'s own tests - nothing lost coverage.
+`NewServer` also dropped its `home` parameter, now unused since `list_proposals` (the one handler
+that read it) is gone. Contract version bumped `v0.2.0` -> `v0.3.0` and `plugin.json` to match, per
+`internal/mcp/plugin_test.go`'s own rule that the two must move together.
+
 #### Open, and deliberately not decided here
 
 - **Provenance of the dogfooding figures already committed to this doc.** If any were measured on a
   corpus including employer sessions, that needs adjudicating before B6d rather than after. Aggregate
   derived metrics are a far weaker exposure than content and the figures are unattributable on their
   face, so this is probably fine. It should be a decision with a date on it, not an assumption.
-- **The "artifact" noun collision.** Loom's artifact is a skill, plan, agent, hook or memory. The
-  spec's is a versioned render block. If the spec's vocabulary should win, rename once, deliberately,
-  before B7c writes it into proposal kinds.
 
 #### Order
 

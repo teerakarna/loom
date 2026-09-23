@@ -27,6 +27,8 @@ func main() {
 		err = runPropose(os.Args[2:])
 	case "policy":
 		err = runPolicy(os.Args[2:])
+	case "record-outcome":
+		err = runRecordOutcome(os.Args[2:])
 	case "serve":
 		err = runServe(os.Args[2:])
 	default:
@@ -64,8 +66,14 @@ Usage:
   loom policy unset <agent-type>
   loom policy render        Write agent definitions for pinned models into
                              ~/.loom/generated/agents/ (never installed for you).
-  loom serve                Run the MCP server on stdio (query_ledger, get_recommendation,
-                             list_proposals, dismiss_proposal, record_outcome).
+  loom record-outcome --outcome <accepted|corrected|rejected> [--detail <text>] <task text>
+                             Record how a task turned out, for future selector tuning.
+                             Write-only.
+  loom serve                Run the MCP server on stdio, exposing get_recommendation only.
+                             query_ledger, list_proposals, dismiss_proposal and
+                             record_outcome are CLI-only (report/status/context, propose,
+                             propose dismiss, record-outcome) - see docs/design.md,
+                             "MCP server shape".
 
 See docs/design.md for the full design.`)
 }

@@ -87,8 +87,8 @@ loom advise "task text"   # recommend which skills/agents/plans fit, plus a mode
 **Act on evidence** `loom propose` `loom propose apply` `loom propose dismiss`
 **Integrate** `loom serve`
 
-`loom serve` runs the MCP server on stdio, exposing five tools: `query_ledger`,
-`get_recommendation`, `list_proposals`, `dismiss_proposal`, `record_outcome`.
+`loom serve` runs the MCP server on stdio, exposing one tool: `get_recommendation`.
+Everything else above is CLI-only - a session that needs it runs the command directly.
 
 ## Supported
 
