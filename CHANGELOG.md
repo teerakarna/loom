@@ -9,14 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- MCP server narrowed to one tool, `get_recommendation`. `query_ledger`, `list_proposals`,
-  `dismiss_proposal` and `record_outcome` are CLI-only now (`loom report`/`status`/`context`,
-  `loom propose`, `loom propose dismiss`, and the new `loom record-outcome`) - each already had a
-  CLI equivalent, and a session that needs one can run it via its own shell tool, so only the tool
-  with no such substitute (recommendation needs to fire mid-task, on the hot path) earns a place on
-  a surface whose tool descriptions sit in every installed session's system prompt whether called or
-  not. `NewServer` dropped its now-unused `home` parameter; contract version `v0.2.0` -> `v0.3.0`,
-  `plugin.json` bumped to match.
+- MCP server narrowed to one tool, `get_recommendation`. `record_outcome` moves for the same reason
+  B5 already made `loom propose apply` CLI-only: it writes, and an assistant can call an MCP tool
+  without the human asking, so the terminal is where a decision that changes state belongs - B7d
+  exposing it over MCP was inconsistent with that rule. `query_ledger` and `list_proposals` move on
+  reasoning rather than a measurement: both already have a CLI equivalent a session can reach via its
+  own shell tool (`loom report`/`status`/`context`, `loom propose`), and a tool's description sits in
+  every installed session's system prompt whether called or not - unmeasured, and reversible if a
+  later trial says otherwise, unlike the `record_outcome` move. New `loom record-outcome` command
+  replaces `record_outcome`. `NewServer` dropped its now-unused `home` parameter; contract version
+  `v0.2.0` -> `v0.3.0`, `plugin.json` bumped to match.
 
 ### Added
 

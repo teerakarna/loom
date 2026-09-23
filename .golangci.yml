@@ -28,6 +28,14 @@ linters:
         text: "G304:"
       - linters: [gosec]
         text: "G703:"
+      # G602 (slice index out of range): cmd/loom/outcome.go's flag parser
+      # reads args[i+1] only after checking i+1 < len(args) on the line
+      # directly above - gosec's data-flow analysis doesn't correlate the
+      # bound check to the later index even when the guard is unmistakable in
+      # a manual read. Confirmed by hand; restructuring the check (index by
+      # i+1 directly, increment after) made no difference to the finding.
+      - linters: [gosec]
+        text: "G602:"
       # gosec's file/dir-permission and hardcoded-credential rules (G101,
       # G301, G306) fire on test fixtures - temp files under t.TempDir() with
       # no real access-control need, and the planted-secret constant

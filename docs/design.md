@@ -448,9 +448,8 @@ subprocess per its own MCP server config, one process per session.
 ### 2. Integration - MCP first
 
 **An MCP server over stdio is the primary surface.** It works in any MCP client, needs no edits to
-anyone's settings file, and installs in one line. As specified here it exposed four tools: query the
-ledger, get a recommendation for the task at hand, list and explain proposals, record an outcome.
-Narrowed to `get_recommendation` alone - see "MCP server shape, narrowed further", B7's open items.
+anyone's settings file, and installs in one line. As specified here it exposed four tools; narrowed
+to `get_recommendation` alone - see "MCP server shape, narrowed further", B7's open items.
 
 **Hooks are optional enhancements**, documented but never required, because on some setups the
 settings file is owned by another process and hook registration is a permanent manual step. Users who
@@ -1194,16 +1193,25 @@ B7d kept `list_proposals` and the `query_ledger` occupancy dimension on the MCP 
 first real trial (installing on a second machine, AMC, to see how it actually changes a session's
 behaviour): the MCP surface now carries **`get_recommendation` only**.
 
-Two reasons, neither about correctness:
+`record_outcome` is the one with an actual correctness reason to move, and it is the same reason
+B5 already established for `loom propose apply`: it is a write, and "Apply is deliberately CLI-only
+... an assistant can call an MCP tool without the human asking. The terminal is where a decision
+that changes state belongs" (see B5 above) applies to it word for word - B7d exposing it over MCP
+was inconsistent with B5's own rule and should not have happened.
 
-- Every one of `query_ledger`, `list_proposals`, `dismiss_proposal` and `record_outcome` already has
-  a CLI equivalent (`loom report`/`status`/`context`, `loom propose`, `loom propose dismiss`, the new
-  `loom record-outcome`), and a live session can run any CLI command through its own shell tool. MCP
-  earns its place only for the one tool with no such substitute: `get_recommendation` needs to fire
-  mid-task, on the hot path, with no human in the loop to type a command.
-- A tool's name and description sit in every session's system prompt the plugin is installed into,
-  whether that session ever calls the tool or not. Four tools' worth of description text was a
-  standing cost paid on every session for surface that a CLI command already covers.
+The other two moves (`query_ledger`, `list_proposals`) rest on reasoning, not a measurement, and are
+labelled as such rather than stated as settled fact:
+
+- Every one of the four already has a CLI equivalent (`loom report`/`status`/`context`,
+  `loom propose`, `loom propose dismiss`, the new `loom record-outcome`), and a live session can run
+  any CLI command through its own shell tool. MCP earns its place only for the tool with no such
+  substitute: `get_recommendation` needs to fire mid-task, on the hot path, with no human in the
+  loop to type a command.
+- The assumption, not yet measured: a tool's name and description sit in every session's system
+  prompt the plugin is installed into, whether that session ever calls the tool or not, so three
+  tools' worth of description text the CLI already covers is a standing cost with nothing measured
+  to justify it. If a later trial shows pulling `query_ledger`/`list_proposals` via MCP is worth
+  more than that cost, this reverses - unlike the `record_outcome` move above, which does not.
 
 `internal/mcp/server.go`'s `NewServer` dropped to one registration; the now-dead wrapper types
 (`LedgerReport`, `ProposalsOutput`, `Proposal`, `DismissInput`/`Output`, `OutcomeInput`/`Output`) and

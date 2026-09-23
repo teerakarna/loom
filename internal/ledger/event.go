@@ -6,10 +6,10 @@ import (
 )
 
 // InsertEvent appends one row to the events table. events is append-only by
-// convention (see the schema comment in ledger.go) — there is no update or
+// convention (see the schema comment in ledger.go), there is no update or
 // delete method, deliberately. sessionID may be empty when the event isn't
-// tied to a particular session (e.g. an outcome recorded via the MCP server
-// outside any Claude Code session).
+// tied to a particular session (e.g. an outcome recorded via `loom
+// record-outcome`, outside any Claude Code session).
 func (d *DB) InsertEvent(ts time.Time, sessionID, kind string, payload any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -21,7 +21,7 @@ func (d *DB) InsertEvent(ts time.Time, sessionID, kind string, payload any) erro
 }
 
 // EventRow is one row of the events table as read back. Payload is left as
-// raw JSON — callers that know a specific event kind's shape can unmarshal
+// raw JSON, callers that know a specific event kind's shape can unmarshal
 // it themselves; the ledger package has no opinion on payload schemas.
 type EventRow struct {
 	ID        int64
