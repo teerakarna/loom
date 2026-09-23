@@ -1,11 +1,11 @@
-// Package ledger is the SQLite-backed (WAL mode) local store: artifacts,
+// Package ledger is the SQLite-backed (WAL mode) local store: assets,
 // events, runs, policies, proposals, and coordination. No content or
 // full-text index - derived metrics and identifiers only (design doc,
 // "Privacy by construction"). See docs/design.md, "Ledger".
 //
 // B1 only writes to runs; the other five tables are created now
 // (schema-complete from the start) but populated starting in later phases -
-// artifacts and events from B2 onward (see artifact.go and event.go).
+// assets and events from B2 onward (see asset.go and event.go).
 package ledger
 
 import (
@@ -29,7 +29,7 @@ type DB struct {
 const proposalsSchema = `CREATE TABLE IF NOT EXISTS proposals (
 	id            INTEGER PRIMARY KEY AUTOINCREMENT,
 	kind          TEXT NOT NULL,
-	subject       TEXT NOT NULL DEFAULT '', -- what it is about: an artifact path, an agent type
+	subject       TEXT NOT NULL DEFAULT '', -- what it is about: an asset path, an agent type
 	evidence      TEXT NOT NULL, -- JSON
 	evidence_hash TEXT NOT NULL DEFAULT '',
 	sample_size   INTEGER NOT NULL,
@@ -58,7 +58,7 @@ const policiesSchema = `CREATE TABLE IF NOT EXISTS policies (
 );`
 
 const schema = `
-CREATE TABLE IF NOT EXISTS artifacts (
+CREATE TABLE IF NOT EXISTS assets (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
 	type        TEXT NOT NULL,
 	path        TEXT NOT NULL UNIQUE,
@@ -153,23 +153,23 @@ CREATE TABLE IF NOT EXISTS compactions (
 	                        -- not grounds for failing the whole insert
 );
 
--- artifact_usage is B7a (#39): the join that lets "unused" be a question
+-- asset_usage is B7a (#39): the join that lets "unused" be a question
 -- the ledger can answer. Two structured, ground-truth signals only - a
--- Skill tool_use's skill name, resolved to the artifact it names, and a
+-- Skill tool_use's skill name, resolved to the asset it names, and a
 -- Read/Edit/Write tool_use's file_path, matched by exact equality - both
--- resolved against the artifacts table at write time (see usage.go).
+-- resolved against the assets table at write time (see usage.go).
 -- Never a message-text mention: a skill's name and description appear in
 -- every session's system prompt whether invoked or not, and an earlier
--- attempt at string-matching gave every artifact a near-identical count.
+-- attempt at string-matching gave every asset a near-identical count.
 --
 -- One row per tool_use block, keyed on its own id - same reasoning and
 -- same fix as tool_usage above: a resumed session replays these blocks
--- verbatim, and an aggregated (run_id, artifact_path) row had nothing to
+-- verbatim, and an aggregated (run_id, asset_path) row had nothing to
 -- dedupe a replay against.
-CREATE TABLE IF NOT EXISTS artifact_usage (
+CREATE TABLE IF NOT EXISTS asset_usage (
 	tool_use_id   TEXT PRIMARY KEY,
 	run_id        INTEGER NOT NULL REFERENCES runs(id),
-	artifact_path TEXT NOT NULL REFERENCES artifacts(path)
+	asset_path TEXT NOT NULL REFERENCES assets(path)
 );
 
 CREATE TABLE IF NOT EXISTS coordination (
@@ -212,7 +212,7 @@ func Open(path string) (*DB, error) {
 // EXISTS (above) only ever applies to a table that doesn't exist yet, so a
 // column added later needs its own ALTER TABLE here - guarded by checking
 // the table's actual columns first, since SQLite has no ADD COLUMN IF NOT
-// EXISTS. artifacts.name/description were added after B1 shipped the table
+// EXISTS. assets.name/description were added after B1 shipped the table
 // schema-complete but column-incomplete (docs/design.md, "B1 only writes to
 // runs and events" - the table existed before the selector needed these).
 func migrate(db *sql.DB) error {
@@ -220,9 +220,9 @@ func migrate(db *sql.DB) error {
 		table   string
 		columns map[string]string
 	}{
-		{"artifacts", map[string]string{
-			"name":        `ALTER TABLE artifacts ADD COLUMN name TEXT NOT NULL DEFAULT ''`,
-			"description": `ALTER TABLE artifacts ADD COLUMN description TEXT NOT NULL DEFAULT ''`,
+		{"assets", map[string]string{
+			"name":        `ALTER TABLE assets ADD COLUMN name TEXT NOT NULL DEFAULT ''`,
+			"description": `ALTER TABLE assets ADD COLUMN description TEXT NOT NULL DEFAULT ''`,
 		}},
 		{"runs", map[string]string{
 			"agent_type": `ALTER TABLE runs ADD COLUMN agent_type TEXT NOT NULL DEFAULT ''`,
@@ -251,17 +251,56 @@ func migrate(db *sql.DB) error {
 	if err := migratePoliciesUnique(db); err != nil {
 		return err
 	}
-	return migrateOccupancyDedup(db)
+	if err := migrateOccupancyDedup(db); err != nil {
+		return err
+	}
+	return migrateAssetRename(db)
 }
 
-// migrateOccupancyDedup drops tool_usage/artifact_usage if either predates
+// migrateAssetRename drops the tables and columns that predate the
+// "artifact" -> "asset" rename (docs/design.md, "The 'artifact' noun
+// rename"): the old `artifacts` and `artifact_usage` tables, if a
+// pre-rename ledger still has them. Both are pure derived caches, rebuilt in
+// full by the next `loom report`/`loom advise` - a plain drop leaves nothing
+// behind to reconcile, and CREATE TABLE IF NOT EXISTS above already builds
+// `assets`/`asset_usage` fresh once the old names are gone. Without this,
+// the app would still work (it never looks up a table by its old name), but
+// the dead `artifacts`/`artifact_usage` tables would sit in the SQLite file
+// forever as orphaned cruft.
+func migrateAssetRename(db *sql.DB) error {
+	for _, table := range []string{"artifacts", "artifact_usage"} {
+		if err := dropTableIfExists(db, table); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// dropTableIfExists drops table unconditionally if it exists at all -
+// unlike dropIfMissingColumn, which only drops a table whose current shape
+// is missing an expected column. Used where the table's old name is itself
+// what identifies it as pre-migration, so there is no column to check.
+func dropTableIfExists(db *sql.DB, table string) error {
+	var name string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`DROP TABLE ` + table)
+	return err
+}
+
+// migrateOccupancyDedup drops tool_usage/asset_usage if either predates
 // the per-tool_use_id dedup fix (found by code review, B7b/B7a): both
 // tables are pure derived caches, entirely rebuilt from transcripts by the
 // next `loom report`/`loom advise`, so a clean drop is correct and simpler
 // than a data-preserving rebuild - the old rows are exactly the
 // double-counted values this fix exists to stop trusting.
 func migrateOccupancyDedup(db *sql.DB) error {
-	for _, table := range []string{"tool_usage", "artifact_usage"} {
+	for _, table := range []string{"tool_usage", "asset_usage"} {
 		if err := dropIfMissingColumn(db, table, "tool_use_id"); err != nil {
 			return err
 		}

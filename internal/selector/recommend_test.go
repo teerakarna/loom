@@ -7,14 +7,14 @@ import (
 )
 
 func TestRecommendMatchesRelevantSkill(t *testing.T) {
-	artifacts := []ledger.ArtifactRow{
+	assets := []ledger.AssetRow{
 		{Kind: "skill", Name: "github-unsigned-commit-merge-block", Path: "/skills/a.md",
 			Description: "Diagnose a stuck PR blocked by an unsigned commit under required signatures branch protection"},
 		{Kind: "skill", Name: "records-management", Path: "/skills/b.md",
 			Description: "Manage Google Drive records and confirm writes before applying them"},
 	}
 
-	rec := Recommend(TaskDescriptor{Text: "PR merge is stuck, all checks green, blocked by unsigned commit"}, artifacts)
+	rec := Recommend(TaskDescriptor{Text: "PR merge is stuck, all checks green, blocked by unsigned commit"}, assets)
 
 	if len(rec.Matches) != 1 {
 		t.Fatalf("got %d matches, want 1: %+v", len(rec.Matches), rec.Matches)
@@ -25,23 +25,23 @@ func TestRecommendMatchesRelevantSkill(t *testing.T) {
 }
 
 func TestRecommendNoMatchBelowThreshold(t *testing.T) {
-	artifacts := []ledger.ArtifactRow{
+	assets := []ledger.AssetRow{
 		{Kind: "skill", Name: "records-management", Path: "/skills/b.md", Description: "manage drive files"},
 	}
-	rec := Recommend(TaskDescriptor{Text: "refactor the payment gateway retry logic"}, artifacts)
+	rec := Recommend(TaskDescriptor{Text: "refactor the payment gateway retry logic"}, assets)
 	if len(rec.Matches) != 0 {
 		t.Errorf("got %d matches, want 0: %+v", len(rec.Matches), rec.Matches)
 	}
 }
 
 func TestRecommendCapsAtMaxMatches(t *testing.T) {
-	var artifacts []ledger.ArtifactRow
+	var assets []ledger.AssetRow
 	for i := 0; i < 10; i++ {
-		artifacts = append(artifacts, ledger.ArtifactRow{
+		assets = append(assets, ledger.AssetRow{
 			Kind: "skill", Name: "deploy-helper", Path: "/skills/x.md", Description: "deploy the service to production",
 		})
 	}
-	rec := Recommend(TaskDescriptor{Text: "deploy the service to production"}, artifacts)
+	rec := Recommend(TaskDescriptor{Text: "deploy the service to production"}, assets)
 	if len(rec.Matches) != maxMatches {
 		t.Errorf("got %d matches, want %d (capped)", len(rec.Matches), maxMatches)
 	}
@@ -69,8 +69,8 @@ func TestColdStartModelDefault(t *testing.T) {
 }
 
 func TestRecommendEmptyDescriptorNoMatches(t *testing.T) {
-	artifacts := []ledger.ArtifactRow{{Kind: "skill", Name: "x", Description: "y"}}
-	rec := Recommend(TaskDescriptor{Text: ""}, artifacts)
+	assets := []ledger.AssetRow{{Kind: "skill", Name: "x", Description: "y"}}
+	rec := Recommend(TaskDescriptor{Text: ""}, assets)
 	if len(rec.Matches) != 0 {
 		t.Errorf("got %d matches for empty descriptor, want 0", len(rec.Matches))
 	}

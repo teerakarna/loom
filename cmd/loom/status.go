@@ -77,7 +77,7 @@ func runStatus(args []string) error {
 	if st.UnattributedLanes > 0 {
 		fmt.Printf("               %d run(s) sit outside the projects root, so no lane\n", st.UnattributedLanes)
 	}
-	fmt.Printf("  artifacts    %d (%d stale)\n", st.Artifacts, st.StaleArtifact)
+	fmt.Printf("  assets       %d (%d stale)\n", st.Assets, st.StaleAsset)
 	fmt.Printf("  events       %d\n", st.Events)
 	fmt.Printf("  policies     %d deliberate\n", st.Policies)
 	if st.EarliestRun != "" {

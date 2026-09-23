@@ -23,7 +23,7 @@ const (
 const MaxPendingProposals = 20
 
 // ProposalRow is one proposal as stored. Subject is what it is about (an
-// artifact path, an agent type); EvidenceHash is what makes a dismissal stick
+// asset path, an agent type); EvidenceHash is what makes a dismissal stick
 // until the underlying facts actually change.
 type ProposalRow struct {
 	ID           int64

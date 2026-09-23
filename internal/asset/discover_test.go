@@ -1,4 +1,4 @@
-package artifact
+package asset
 
 import (
 	"os"
@@ -17,15 +17,15 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-func findByPath(t *testing.T, got []Artifact, path string) Artifact {
+func findByPath(t *testing.T, got []Asset, path string) Asset {
 	t.Helper()
 	for _, a := range got {
 		if a.Path == path {
 			return a
 		}
 	}
-	t.Fatalf("no artifact with path %s in %+v", path, got)
-	return Artifact{}
+	t.Fatalf("no asset with path %s in %+v", path, got)
+	return Asset{}
 }
 
 // TestDiscoverSkillFlatFileIsAReferenceNotASkill is the regression test for
@@ -44,7 +44,7 @@ func TestDiscoverSkillFlatFileIsAReferenceNotASkill(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("got %d artifacts, want 1: %+v", len(got), got)
+		t.Fatalf("got %d assets, want 1: %+v", len(got), got)
 	}
 	a := got[0]
 	if a.Kind != KindReference || a.Name != "example-skill" || a.Description != "does the thing" {
@@ -68,7 +68,7 @@ func TestDiscoverSkillDirMixOfBothShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 3 {
-		t.Fatalf("got %d artifacts, want 3: %+v", len(got), got)
+		t.Fatalf("got %d assets, want 3: %+v", len(got), got)
 	}
 	var skills, refs int
 	for _, a := range got {
@@ -99,7 +99,7 @@ func TestDiscoverSkillDirectoryConvention(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("got %d artifacts, want 1: %+v", len(got), got)
+		t.Fatalf("got %d assets, want 1: %+v", len(got), got)
 	}
 	if got[0].Name != "my-skill" || got[0].Description != "dir-based" {
 		t.Errorf("got %+v", got[0])
@@ -116,7 +116,7 @@ func TestDiscoverSkillNoFrontmatterFallsBackToHeading(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("got %d artifacts, want 1: %+v", len(got), got)
+		t.Fatalf("got %d assets, want 1: %+v", len(got), got)
 	}
 	if got[0].Name != "plain" {
 		t.Errorf("Name = %q, want filename-derived fallback", got[0].Name)
@@ -136,7 +136,7 @@ func TestDiscoverTruncatesLongDescription(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("got %d artifacts, want 1", len(got))
+		t.Fatalf("got %d assets, want 1", len(got))
 	}
 	d := []rune(got[0].Description)
 	if len(d) != maxDescriptionRunes {
@@ -161,7 +161,7 @@ func TestDiscoverMissingDirIsNotError(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 0 {
-		t.Errorf("got %d artifacts, want 0", len(got))
+		t.Errorf("got %d assets, want 0", len(got))
 	}
 }
 
@@ -178,7 +178,7 @@ func TestDiscoverPlansAndAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("got %d artifacts, want 2: %+v", len(got), got)
+		t.Fatalf("got %d assets, want 2: %+v", len(got), got)
 	}
 	plan := findByPath(t, got, filepath.Join(home, ".claude", "plans", "some-plan.md"))
 	if plan.Kind != KindPlan || plan.Name != "some-plan" {
@@ -209,7 +209,7 @@ func TestDiscoverHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("got %d artifacts, want 2: %+v", len(got), got)
+		t.Fatalf("got %d assets, want 2: %+v", len(got), got)
 	}
 	for _, a := range got {
 		if a.Kind != KindHook {
@@ -226,7 +226,7 @@ func TestDiscoverHooksMissingOrInvalidSettingsIsNotError(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 0 {
-		t.Errorf("got %d artifacts for missing settings.json, want 0", len(got))
+		t.Errorf("got %d assets for missing settings.json, want 0", len(got))
 	}
 
 	invalid := filepath.Join(home, ".claude", "settings-invalid.json")
@@ -236,7 +236,7 @@ func TestDiscoverHooksMissingOrInvalidSettingsIsNotError(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 0 {
-		t.Errorf("got %d artifacts for invalid settings.json, want 0", len(got))
+		t.Errorf("got %d assets for invalid settings.json, want 0", len(got))
 	}
 }
 

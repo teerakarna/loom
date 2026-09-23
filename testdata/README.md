@@ -15,7 +15,7 @@ omission.
 |---|---|
 | `synthetic-session.jsonl` | A session transcript: assistant lines with usage, a tool denial, user feedback, a task-notification |
 | `synthetic-occupancy.jsonl` | B7b: `tool_use`/`tool_result` pairs (string and list content), an orphaned `tool_result` with no matching `tool_use` in this file, and a `compact_boundary` record |
-| `synthetic-artifact-usage.jsonl` | B7a (#39): a `Skill` tool_use, `Read`/`Edit` tool_use blocks on the same file_path, and decoys - a skill name and a file path appearing only in plain message/tool_result text (a `Bash` command and its result), which must never count as usage |
+| `synthetic-asset-usage.jsonl` | B7a (#39): a `Skill` tool_use, `Read`/`Edit` tool_use blocks on the same file_path, and decoys - a skill name and a file path appearing only in plain message/tool_result text (a `Bash` command and its result), which must never count as usage |
 | `multiline-response.jsonl` | One API response written across several lines, each repeating the same `usage` - the shape behind the 2.12x over-count bug |
 | `subagents/agent-synthagent0001.jsonl` | A subagent transcript |
 | `subagents/agent-synthmeta01.jsonl` | A subagent transcript carrying an `effort` field |

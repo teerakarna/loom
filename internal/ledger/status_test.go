@@ -8,7 +8,7 @@ func TestStatusOnEmptyLedger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Runs != 0 || s.Artifacts != 0 || s.Policies != 0 {
+	if s.Runs != 0 || s.Assets != 0 || s.Policies != 0 {
 		t.Errorf("expected an empty status, got %+v", s)
 	}
 	// Empty strings, not a crash or a bogus date, on a ledger with no runs.

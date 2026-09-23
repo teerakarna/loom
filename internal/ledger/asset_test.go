@@ -5,17 +5,17 @@ import (
 	"time"
 )
 
-func TestUpsertArtifactInsertsThenUpdates(t *testing.T) {
+func TestUpsertAssetInsertsThenUpdates(t *testing.T) {
 	db := openTestDB(t)
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	t1 := t0.Add(24 * time.Hour)
 
-	rec := ArtifactRecord{Kind: "skill", Path: "/skills/a.md", Name: "a", Description: "does a"}
-	if err := db.UpsertArtifact(rec, t0); err != nil {
+	rec := AssetRecord{Kind: "skill", Path: "/skills/a.md", Name: "a", Description: "does a"}
+	if err := db.UpsertAsset(rec, t0); err != nil {
 		t.Fatal(err)
 	}
 
-	rows, err := db.ListArtifacts()
+	rows, err := db.ListAssets()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,13 +26,13 @@ func TestUpsertArtifactInsertsThenUpdates(t *testing.T) {
 		t.Errorf("first insert: FirstSeen=%s LastSeen=%s, want equal", rows[0].FirstSeen, rows[0].LastSeen)
 	}
 
-	// Re-discovering the same artifact later should bump last_seen but never
+	// Re-discovering the same asset later should bump last_seen but never
 	// first_seen, and refresh a changed description.
 	rec.Description = "does a, updated"
-	if err := db.UpsertArtifact(rec, t1); err != nil {
+	if err := db.UpsertAsset(rec, t1); err != nil {
 		t.Fatal(err)
 	}
-	rows, err = db.ListArtifacts()
+	rows, err = db.ListAssets()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,52 +47,52 @@ func TestUpsertArtifactInsertsThenUpdates(t *testing.T) {
 	}
 }
 
-func TestMarkStaleArtifacts(t *testing.T) {
+func TestMarkStaleAssets(t *testing.T) {
 	db := openTestDB(t)
 	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	recent := old.Add(48 * time.Hour)
 	cutoff := old.Add(24 * time.Hour)
 
-	if err := db.UpsertArtifact(ArtifactRecord{Kind: "skill", Path: "/skills/old.md"}, old); err != nil {
+	if err := db.UpsertAsset(AssetRecord{Kind: "skill", Path: "/skills/old.md"}, old); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertArtifact(ArtifactRecord{Kind: "skill", Path: "/skills/new.md"}, recent); err != nil {
+	if err := db.UpsertAsset(AssetRecord{Kind: "skill", Path: "/skills/new.md"}, recent); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.MarkStaleArtifacts(cutoff); err != nil {
+	if err := db.MarkStaleAssets(cutoff); err != nil {
 		t.Fatal(err)
 	}
 
-	rows, err := db.ListArtifacts()
+	rows, err := db.ListAssets()
 	if err != nil {
 		t.Fatal(err)
 	}
-	byPath := map[string]ArtifactRow{}
+	byPath := map[string]AssetRow{}
 	for _, r := range rows {
 		byPath[r.Path] = r
 	}
 	if byPath["/skills/old.md"].Status != "stale" {
-		t.Errorf("old artifact status = %q, want stale", byPath["/skills/old.md"].Status)
+		t.Errorf("old asset status = %q, want stale", byPath["/skills/old.md"].Status)
 	}
 	if byPath["/skills/new.md"].Status != "active" {
-		t.Errorf("recent artifact status = %q, want active", byPath["/skills/new.md"].Status)
+		t.Errorf("recent asset status = %q, want active", byPath["/skills/new.md"].Status)
 	}
 }
 
-func TestUpsertArtifactReactivatesStale(t *testing.T) {
+func TestUpsertAssetReactivatesStale(t *testing.T) {
 	db := openTestDB(t)
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	rec := ArtifactRecord{Kind: "skill", Path: "/skills/a.md"}
-	if err := db.UpsertArtifact(rec, t0); err != nil {
+	rec := AssetRecord{Kind: "skill", Path: "/skills/a.md"}
+	if err := db.UpsertAsset(rec, t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.MarkStaleArtifacts(t0.Add(time.Hour)); err != nil {
+	if err := db.MarkStaleAssets(t0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertArtifact(rec, t0.Add(2*time.Hour)); err != nil {
+	if err := db.UpsertAsset(rec, t0.Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := db.ListArtifacts()
+	rows, err := db.ListAssets()
 	if err != nil {
 		t.Fatal(err)
 	}

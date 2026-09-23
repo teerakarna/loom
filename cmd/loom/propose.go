@@ -113,7 +113,7 @@ func runPropose(args []string) error {
 // requires rewriting rows.
 func summaryFor(p ledger.ProposalRow, ev map[string]any) string {
 	switch p.Kind {
-	case propose.KindRetireArtifact:
+	case propose.KindRetireAsset:
 		return fmt.Sprintf("retire %v %q, unused for %v days",
 			ev["type"], ev["name"], ev["days_unused"])
 	case propose.KindPinModel:
@@ -127,7 +127,7 @@ func summaryFor(p ledger.ProposalRow, ev map[string]any) string {
 	case propose.KindBrokenLink:
 		return fmt.Sprintf("%v links to [[%v]], which does not exist in its store",
 			ev["filename"], ev["target_slug"])
-	case propose.KindUnreachableArtifact:
+	case propose.KindUnreachableAsset:
 		return fmt.Sprintf("%v exists but is not linked from its store's MEMORY.md", ev["filename"])
 	case propose.KindFilenameSlugDrift:
 		return fmt.Sprintf("%v's filename no longer matches its own name: %v", ev["filename"], ev["slug"])

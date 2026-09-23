@@ -43,7 +43,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `loom - artifact lifecycle and cost/routing engine for Claude Code
+	fmt.Fprintln(os.Stderr, `loom - asset lifecycle and cost/routing engine for Claude Code
 
 Usage:
   loom report [path] [--lane <lane>]

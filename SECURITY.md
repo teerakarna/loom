@@ -28,7 +28,7 @@ The areas of real security interest, most serious first:
 - **The ledger file itself.** Constraint 6 keeps content out; it does not keep *identifiers* out,
   and transcript paths encode project directory names. The ledger is therefore machine-local by
   rule (constraint 12) and must never be synced, committed or backed up to a shared location.
-- **Artifact-derived text re-served over MCP.** A skill, agent or plan's name and description are
+- **Asset-derived text re-served over MCP.** A skill, agent or plan's name and description are
   read verbatim off disk and returned through `get_recommendation` into whatever session asked,
   which is untrusted content entering another agent's context (constraint 9). It is length-capped,
   every affected field says in its own schema that it is data rather than an instruction, and an

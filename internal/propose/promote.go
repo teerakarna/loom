@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/teerakarna/loom/internal/artifact"
+	"github.com/teerakarna/loom/internal/asset"
 )
 
 // Proposal kinds for B7c (#41): promotion rules as read-only proposals.
@@ -23,10 +23,10 @@ const (
 	// same store.
 	KindBrokenLink = "broken_link"
 
-	// KindUnreachableArtifact suggests a memory file that exists on disk
+	// KindUnreachableAsset suggests a memory file that exists on disk
 	// but is not linked from its store's own MEMORY.md index - reachable
 	// on disk, unreachable through the mechanism meant to surface it.
-	KindUnreachableArtifact = "unreachable_artifact"
+	KindUnreachableAsset = "unreachable_asset"
 
 	// KindFilenameSlugDrift suggests a memory file whose filename no
 	// longer matches its own frontmatter name - the mismatch [[links]]
@@ -58,7 +58,7 @@ const minDuplicateStores = 3
 // content is retained: evidence carries paths, slugs and a content hash,
 // never file bodies.
 func GenerateMemoryFindings(home string) ([]Proposal, error) {
-	files, err := artifact.DiscoverAllMemory(home)
+	files, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func GenerateMemoryFindings(home string) ([]Proposal, error) {
 	out = append(out, detectMemoryDuplicates(files)...)
 	out = append(out, detectBrokenLinks(files)...)
 	out = append(out, detectFilenameSlugDrift(files)...)
-	out = append(out, detectUnreachableArtifacts(home, files)...)
+	out = append(out, detectUnreachableAssets(home, files)...)
 	return out, nil
 }
 
@@ -83,8 +83,8 @@ func GenerateMemoryFindings(home string) ([]Proposal, error) {
 // subjects in the order Store sees them, so an unsorted order meant two
 // back-to-back runs against identical, unchanged disk state could persist
 // a different subset of duplicate findings each time.
-func detectMemoryDuplicates(files []artifact.MemoryFile) []Proposal {
-	byHash := map[string][]artifact.MemoryFile{}
+func detectMemoryDuplicates(files []asset.MemoryFile) []Proposal {
+	byHash := map[string][]asset.MemoryFile{}
 	for _, f := range files {
 		byHash[f.ContentHash] = append(byHash[f.ContentHash], f)
 	}
@@ -126,7 +126,7 @@ func detectMemoryDuplicates(files []artifact.MemoryFile) []Proposal {
 // DiscoverAllMemory produced them, which is disk order (os.ReadDir sorts by
 // name), so no separate sort is needed here the way detectMemoryDuplicates
 // needs one.
-func detectBrokenLinks(files []artifact.MemoryFile) []Proposal {
+func detectBrokenLinks(files []asset.MemoryFile) []Proposal {
 	knownSlugs := map[string]map[string]bool{}
 	for _, f := range files {
 		if f.Slug == "" {
@@ -166,7 +166,7 @@ func detectBrokenLinks(files []artifact.MemoryFile) []Proposal {
 // [[links]] to it break, since links resolve against the name, and any
 // human guessing at the link target from the filename will guess wrong.
 // Disk order, same reasoning as detectBrokenLinks.
-func detectFilenameSlugDrift(files []artifact.MemoryFile) []Proposal {
+func detectFilenameSlugDrift(files []asset.MemoryFile) []Proposal {
 	var out []Proposal
 	for _, f := range files {
 		if f.Slug == "" || f.Slug == f.Filename {
@@ -186,27 +186,27 @@ func detectFilenameSlugDrift(files []artifact.MemoryFile) []Proposal {
 	return out
 }
 
-// detectUnreachableArtifacts checks every file against its own store's
+// detectUnreachableAssets checks every file against its own store's
 // MEMORY.md index. A store with no index at all means every file in it is
 // unreachable by that mechanism, which is the finding, not a reason to
 // skip the store. Disk order, same reasoning as detectBrokenLinks; the
 // per-store index cache preserves that order (a Go map keyed by store, but
 // files are visited in the order DiscoverAllMemory produced them, not by
 // ranging over the cache).
-func detectUnreachableArtifacts(home string, files []artifact.MemoryFile) []Proposal {
+func detectUnreachableAssets(home string, files []asset.MemoryFile) []Proposal {
 	indexes := map[string]map[string]bool{}
 	var out []Proposal
 	for _, f := range files {
 		idx, ok := indexes[f.Store]
 		if !ok {
-			idx = artifact.MemoryIndex(home, f.Store)
+			idx = asset.MemoryIndex(home, f.Store)
 			indexes[f.Store] = idx
 		}
 		if idx[f.Filename] {
 			continue
 		}
 		out = append(out, Proposal{
-			Kind: KindUnreachableArtifact, Subject: f.Store + "/" + f.Filename,
+			Kind: KindUnreachableAsset, Subject: f.Store + "/" + f.Filename,
 			Evidence: map[string]any{
 				"store": f.Store, "filename": f.Filename,
 			},
@@ -221,7 +221,7 @@ func detectUnreachableArtifacts(home string, files []artifact.MemoryFile) []Prop
 
 // distinctStores returns the set of stores group spans, as a slice (not a
 // map) since callers need a stable, sortable list for evidence.
-func distinctStores(group []artifact.MemoryFile) []string {
+func distinctStores(group []asset.MemoryFile) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, f := range group {

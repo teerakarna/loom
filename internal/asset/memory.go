@@ -1,4 +1,4 @@
-package artifact
+package asset
 
 import (
 	"bufio"
@@ -45,12 +45,12 @@ type MemoryFile struct {
 var linkRe = regexp.MustCompile(`\[\[([a-zA-Z0-9_-]+)\]\]`)
 
 // memoryIndexName is the hand-written index file each store's own
-// discovery already tolerates as an ordinary memory artifact (a pre-existing
+// discovery already tolerates as an ordinary memory asset (a pre-existing
 // quirk, not changed here - see scanMarkdownDir). DiscoverAllMemory excludes
 // it from the file set the structural checks run against: it is the index,
 // not a fact being indexed, and its own links point at every other file by
 // design, which would make it a false hit on both the broken-link and the
-// unreachable-artifact checks.
+// unreachable-asset checks.
 const memoryIndexName = "MEMORY.md"
 
 // DiscoverAllMemory walks every project's memory store under
@@ -68,7 +68,7 @@ const memoryIndexName = "MEMORY.md"
 // own two shapes for this exact kind (KindMemory) in the single-project
 // Discover path: a plain "name.md" file directly in the store, or a
 // subdirectory containing its own SKILL.md. Also found by code review -
-// without this, a memory artifact using the subdirectory convention was
+// without this, a memory asset using the subdirectory convention was
 // invisible to every B7c check, including a false broken_link report
 // against a [[link]] whose target genuinely existed.
 func DiscoverAllMemory(home string) ([]MemoryFile, error) {
@@ -95,7 +95,7 @@ func DiscoverAllMemory(home string) ([]MemoryFile, error) {
 			if e.IsDir() {
 				path := filepath.Join(memDir, e.Name(), "SKILL.md")
 				if _, err := os.Stat(path); err != nil {
-					continue // a subdirectory with no SKILL.md isn't a memory artifact
+					continue // a subdirectory with no SKILL.md isn't a memory asset
 				}
 				if mf, ok := readMemoryFile(path, s.Name(), e.Name()); ok {
 					out = append(out, mf)
@@ -141,7 +141,7 @@ func readMemoryFile(path, store, filename string) (MemoryFile, bool) {
 
 // MemoryIndex reads one store's MEMORY.md and returns the set of filenames
 // it links to (the target of a markdown link, extension stripped) - what
-// the unreachable-artifact check treats as "reachable". A missing,
+// the unreachable-asset check treats as "reachable". A missing,
 // unreadable, or truncated-mid-read MEMORY.md all mean the same thing here:
 // an empty, not-nil index. Every file in that store is unreachable by it
 // either way, which is itself the finding, not a reason to fail this

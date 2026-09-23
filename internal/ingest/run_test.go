@@ -38,8 +38,8 @@ func TestIngestFileSession(t *testing.T) {
 	}
 
 	// Three task-notifications in the fixture: one completed agent (usage
-	// recorded), one failed agent (no usage — must NOT appear in the map),
-	// one completed background command (no usage — must NOT appear either).
+	// recorded), one failed agent (no usage, must NOT appear in the map),
+	// one completed background command (no usage, must NOT appear either).
 	if len(rs.AgentReconciliations) != 1 {
 		t.Fatalf("AgentReconciliations = %+v, want exactly 1 entry", rs.AgentReconciliations)
 	}
@@ -68,7 +68,7 @@ func TestIngestFileAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if rs.Kind != "agent" {
-		t.Errorf("Kind = %q, want %q (path-based detection needs a /subagents/ segment — see kindForPath)", rs.Kind, "agent")
+		t.Errorf("Kind = %q, want %q (path-based detection needs a /subagents/ segment, see kindForPath)", rs.Kind, "agent")
 	}
 
 	// (50,25,5,0) + (30,10,5,0).
@@ -81,7 +81,7 @@ func TestIngestFileAgent(t *testing.T) {
 func TestSyntheticModelNeverWinsAttribution(t *testing.T) {
 	// Regression test: found by running against real history. A real model
 	// does genuine (costly) work, then the run ends with a locally-injected
-	// "<synthetic>" status line (e.g. a rate-limit notice) — that must not
+	// "<synthetic>" status line (e.g. a rate-limit notice), that must not
 	// overwrite the run's model attribution, or its real cost gets mislabeled
 	// under a model that did no work and cost nothing.
 	rs := RunSummary{}
@@ -204,15 +204,15 @@ func TestIngestFile_ToolUsageByBytes(t *testing.T) {
 	}
 }
 
-// TestIngestFile_ArtifactUsageOnlyFromStructuredInput is B7a, issue #39: a
+// TestIngestFile_AssetUsageOnlyFromStructuredInput is B7a, issue #39: a
 // Skill tool_use's "skill" input and a Read/Edit/Write tool_use's
 // "file_path" input are the only two signals counted, and the fixture
 // deliberately repeats both the skill name and the file path as plain text
 // in a Bash command and its tool_result - the exact shape that inflated an
-// earlier attempt to a near-identical count for every artifact. Neither
+// earlier attempt to a near-identical count for every asset. Neither
 // decoy may move these counts.
-func TestIngestFile_ArtifactUsageOnlyFromStructuredInput(t *testing.T) {
-	rs, err := IngestFile("../../testdata/synthetic-artifact-usage.jsonl")
+func TestIngestFile_AssetUsageOnlyFromStructuredInput(t *testing.T) {
+	rs, err := IngestFile("../../testdata/synthetic-asset-usage.jsonl")
 	if err != nil {
 		t.Fatal(err)
 	}

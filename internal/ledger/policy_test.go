@@ -192,7 +192,7 @@ func TestMigrateProposalsUniqueFromOldSchema(t *testing.T) {
 			created_at   TEXT NOT NULL
 		);
 		INSERT INTO proposals (kind, evidence, sample_size, status, created_at)
-			VALUES ('retire_artifact', '{}', 0, 'pending', '2026-01-01T00:00:00Z');`); err != nil {
+			VALUES ('retire_asset', '{}', 0, 'pending', '2026-01-01T00:00:00Z');`); err != nil {
 		t.Fatal(err)
 	}
 	if err := raw.Close(); err != nil {
@@ -207,7 +207,7 @@ func TestMigrateProposalsUniqueFromOldSchema(t *testing.T) {
 
 	// The operation that would have failed now works.
 	ok, err := db.UpsertProposal(ProposalRow{
-		Kind: "retire_artifact", Subject: "/s/x.md", Evidence: "{}", EvidenceHash: "h1",
+		Kind: "retire_asset", Subject: "/s/x.md", Evidence: "{}", EvidenceHash: "h1",
 	}, time.Now())
 	if err != nil || !ok {
 		t.Fatalf("UpsertProposal after migration = (%v, %v), want (true, nil)", ok, err)

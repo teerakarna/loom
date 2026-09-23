@@ -5,12 +5,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/teerakarna/loom/internal/artifact"
+	"github.com/teerakarna/loom/internal/asset"
 )
 
-// writeMemoryFile mirrors internal/artifact's own unexported writeFile
+// writeMemoryFile mirrors internal/asset's own unexported writeFile
 // helper - kept local since it's a one-liner and propose has no reason to
-// depend on artifact's test-only code.
+// depend on asset's test-only code.
 func writeMemoryFile(t *testing.T, home, store, filename, content string) {
 	t.Helper()
 	path := filepath.Join(home, ".claude", "projects", store, "memory", filename)
@@ -28,7 +28,7 @@ func TestDetectMemoryDuplicates_ThreeStoresOnly(t *testing.T) {
 	writeMemoryFile(t, home, "store-a", "fact.md", "---\nname: shared\n---\nSame everywhere.")
 	writeMemoryFile(t, home, "store-b", "fact.md", "---\nname: shared\n---\nSame everywhere.")
 
-	files, err := artifact.DiscoverAllMemory(home)
+	files, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestDetectMemoryDuplicates_ThreeStoresOnly(t *testing.T) {
 
 	// A third store with the identical content crosses the threshold.
 	writeMemoryFile(t, home, "store-c", "fact.md", "---\nname: shared\n---\nSame everywhere.")
-	files, err = artifact.DiscoverAllMemory(home)
+	files, err = asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestDetectBrokenLinks_ResolvesWithinStoreOnly(t *testing.T) {
 	// itself loads in.
 	writeMemoryFile(t, home, "store-b", "c.md", "---\nname: c\n---\nSee [[b]].")
 
-	files, err := artifact.DiscoverAllMemory(home)
+	files, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestDetectFilenameSlugDrift(t *testing.T) {
 	writeMemoryFile(t, home, "store-a", "matches.md", "---\nname: matches\n---\nNot drifted.")
 	writeMemoryFile(t, home, "store-a", "no_frontmatter.md", "# No frontmatter at all\n")
 
-	files, err := artifact.DiscoverAllMemory(home)
+	files, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,31 +86,31 @@ func TestDetectFilenameSlugDrift(t *testing.T) {
 	}
 }
 
-func TestDetectUnreachableArtifacts(t *testing.T) {
+func TestDetectUnreachableAssets(t *testing.T) {
 	home := t.TempDir()
 	writeMemoryFile(t, home, "store-a", "linked.md", "---\nname: linked\n---\nIn the index.")
 	writeMemoryFile(t, home, "store-a", "orphan.md", "---\nname: orphan\n---\nNot in the index.")
 	writeMemoryFile(t, home, "store-a", "MEMORY.md", "- [Linked](linked.md)")
 
-	files, err := artifact.DiscoverAllMemory(home)
+	files, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := detectUnreachableArtifacts(home, files)
+	got := detectUnreachableAssets(home, files)
 	if len(got) != 1 || got[0].Evidence["filename"] != "orphan" {
 		t.Fatalf("got %+v, want exactly one unreachable finding for orphan", got)
 	}
 }
 
-func TestDetectUnreachableArtifacts_NoIndexMeansEveryFileUnreachable(t *testing.T) {
+func TestDetectUnreachableAssets_NoIndexMeansEveryFileUnreachable(t *testing.T) {
 	home := t.TempDir()
 	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nNo MEMORY.md in this store at all.")
 
-	files, err := artifact.DiscoverAllMemory(home)
+	files, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := detectUnreachableArtifacts(home, files)
+	got := detectUnreachableAssets(home, files)
 	if len(got) != 1 {
 		t.Fatalf("got %+v, want the file unreachable - a missing index reaches nothing", got)
 	}
@@ -118,7 +118,7 @@ func TestDetectUnreachableArtifacts_NoIndexMeansEveryFileUnreachable(t *testing.
 
 func TestGenerateMemoryFindings_TouchesUserFiles(t *testing.T) {
 	for _, kind := range []string{
-		KindPromoteMemoryDuplicate, KindBrokenLink, KindUnreachableArtifact, KindFilenameSlugDrift,
+		KindPromoteMemoryDuplicate, KindBrokenLink, KindUnreachableAsset, KindFilenameSlugDrift,
 	} {
 		if !TouchesUserFiles(kind) {
 			t.Errorf("TouchesUserFiles(%q) = false, want true - all four B7c kinds touch the user's own memory files", kind)
@@ -154,7 +154,7 @@ func TestDetectMemoryDuplicates_DeterministicOrder(t *testing.T) {
 		}
 	}
 
-	files, err := artifact.DiscoverAllMemory(home)
+	files, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -59,7 +59,7 @@ type ToolResult struct {
 	Bytes     int64
 }
 
-// ArtifactTouch is one tool_use block that issue #39 counts as an artifact
+// AssetTouch is one tool_use block that issue #39 counts as an asset
 // usage signal: a Skill invocation, or a Read/Edit/Write call. ToolUseID is
 // the block's own id - the identity a resumed session's replayed history
 // gets deduped on at the ledger layer, the same pattern CompactionEvent's
@@ -67,9 +67,9 @@ type ToolResult struct {
 // are replayed verbatim on resume just like compact_boundary records are -
 // found by code review, not by the tests this was first built and shipped
 // with). Signal is a skill name (from Skill) or a file path (from
-// Read/Edit/Write); resolving it to the artifact it names happens at the
+// Read/Edit/Write); resolving it to the asset it names happens at the
 // ledger layer, which is what knows what is currently discovered.
-type ArtifactTouch struct {
+type AssetTouch struct {
 	ToolUseID string
 	Signal    string
 }
@@ -137,18 +137,18 @@ type Event struct {
 	// signals, both read from a tool_use block's own input field on an
 	// assistant line - never from message text. A skill's name and
 	// description appear in every session's system prompt whether invoked
-	// or not, and a tool_result can echo an artifact's name back as plain
+	// or not, and a tool_result can echo an asset's name back as plain
 	// content (confirmed on a real corpus: a Read of an unrelated file
 	// quoted a skill's name in passing). Counting either would reproduce
-	// the near-identical-count-for-every-artifact bug an earlier attempt
+	// the near-identical-count-for-every-asset bug an earlier attempt
 	// already hit. See docs/design.md, B7a.
 	//
 	// SkillInvocations holds a Skill tool_use's "skill" input verbatim -
-	// resolving it to the artifact it names happens at the ledger layer,
+	// resolving it to the asset it names happens at the ledger layer,
 	// which is what knows what is currently discovered; ingest does not.
-	SkillInvocations []ArtifactTouch
+	SkillInvocations []AssetTouch
 	// FileTouches holds a Read/Edit/Write tool_use's "file_path" input.
-	// Already a path, so it can be matched against a discovered artifact's
+	// Already a path, so it can be matched against a discovered asset's
 	// Path by exact equality with no resolution step.
-	FileTouches []ArtifactTouch
+	FileTouches []AssetTouch
 }
