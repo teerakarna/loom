@@ -123,6 +123,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `loom propose`'s promotion-rule detectors could starve each other out of the pending-proposal cap
+  (#65, found on the AMC trial's real corpus) - `detectBrokenLinks` ran first, found 15 broken links,
+  filled all 20 slots, and `detectFilenameSlugDrift`/`detectUnreachableAssets` never stored a single
+  proposal even when they held the actual fix (6 of those 15 broken links were files that exist, under
+  a name that only fails on a filename/frontmatter separator drift). `Store` now interleaves every
+  proposal by kind, round-robin, before filling the cap, so no kind can exhaust it before every other
+  kind with real findings gets a fair share; `GenerateMemoryFindings` also reordered so root-cause
+  kinds run before the symptom kind. `[[MEMORY]]` could also never resolve, since the store's own index
+  is deliberately excluded from the file set the checks run against - new `asset.MemoryIndexSlug`
+  special-cases it. A related finding (a link to a real skill, not a memory, gets a broken-link
+  rationale that isn't quite true) deferred - needs cross-project skill discovery, which doesn't exist.
+
 - A file whose size never changed since before a new ingest feature shipped never gained that
   feature's data (#49) - `NeedsIngest` only ever asked "has this file's size changed", so B7b/B7a's
   `tool_usage`/`compactions`/`asset_usage` tables silently never backfilled onto anything already

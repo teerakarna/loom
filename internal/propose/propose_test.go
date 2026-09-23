@@ -370,6 +370,65 @@ func TestPendingCapBoundsTheQueue(t *testing.T) {
 	}
 }
 
+// TestInterleaveByKindRoundRobins confirms the reordering itself: kinds
+// take turns rather than running one to exhaustion before the next starts.
+func TestInterleaveByKindRoundRobins(t *testing.T) {
+	var ps []Proposal
+	for i := 0; i < 3; i++ {
+		ps = append(ps, Proposal{Kind: "a", Subject: fmt.Sprintf("a%d", i)})
+	}
+	ps = append(ps, Proposal{Kind: "b", Subject: "b0"})
+	ps = append(ps, Proposal{Kind: "c", Subject: "c0"}, Proposal{Kind: "c", Subject: "c1"})
+
+	got := interleaveByKind(ps)
+	if len(got) != len(ps) {
+		t.Fatalf("got %d proposals, want %d - interleaving must not drop or duplicate any", len(got), len(ps))
+	}
+	wantOrder := []string{"a0", "b0", "c0", "a1", "c1", "a2"}
+	var gotOrder []string
+	for _, p := range got {
+		gotOrder = append(gotOrder, p.Subject)
+	}
+	if fmt.Sprint(gotOrder) != fmt.Sprint(wantOrder) {
+		t.Errorf("order = %v, want round-robin %v", gotOrder, wantOrder)
+	}
+}
+
+// TestStoreDoesNotLetOneKindStarveAnother is the regression test for issue
+// #65: detectBrokenLinks running first and finding the most (15, against
+// this machine's real corpus) filled the entire MaxPendingProposals cap
+// before detectFilenameSlugDrift or detectUnreachableAssets - whose advice
+// was often the actual fix, not just the symptom - ever got a single slot
+// stored.
+func TestStoreDoesNotLetOneKindStarveAnother(t *testing.T) {
+	db := openDB(t)
+	var ps []Proposal
+	// A kind noisy enough to fill the cap on its own, generated first -
+	// the exact shape that starved everything after it before this fix.
+	for i := 0; i < ledger.MaxPendingProposals; i++ {
+		ps = append(ps, Proposal{Kind: KindBrokenLink, Subject: fmt.Sprintf("broken-%d", i), Evidence: map[string]any{}})
+	}
+	ps = append(ps, Proposal{Kind: KindFilenameSlugDrift, Subject: "drift-0", Evidence: map[string]any{}})
+	ps = append(ps, Proposal{Kind: KindUnreachableAsset, Subject: "unreachable-0", Evidence: map[string]any{}})
+
+	if _, err := Store(db, ps, now); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, _ := db.ListProposals(true)
+	if len(pending) != ledger.MaxPendingProposals {
+		t.Fatalf("got %d pending, want the cap of %d full", len(pending), ledger.MaxPendingProposals)
+	}
+	kinds := map[string]int{}
+	for _, p := range pending {
+		kinds[p.Kind]++
+	}
+	if kinds[KindFilenameSlugDrift] == 0 || kinds[KindUnreachableAsset] == 0 {
+		t.Errorf("kind counts = %+v, want both filename_slug_drift and unreachable_asset represented, "+
+			"not starved out entirely by broken_link filling the cap first", kinds)
+	}
+}
+
 func TestHashIsStableAndEvidenceSensitive(t *testing.T) {
 	a := Proposal{Kind: "k", Subject: "s", Evidence: map[string]any{"x": 1, "y": "two"}}
 	b := Proposal{Kind: "k", Subject: "s", Evidence: map[string]any{"y": "two", "x": 1}}

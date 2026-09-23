@@ -63,11 +63,15 @@ func GenerateMemoryFindings(home string) ([]Proposal, error) {
 		return nil, err
 	}
 
+	// Root-cause kinds before the symptom kind: a filename/slug drift is
+	// often *why* a link elsewhere is broken, and the cheaper fix. Order
+	// matters once the pending cap (interleaveByKind, propose.go) has to
+	// break a tie at the margin - see issue #65.
 	var out []Proposal
 	out = append(out, detectMemoryDuplicates(files)...)
-	out = append(out, detectBrokenLinks(files)...)
 	out = append(out, detectFilenameSlugDrift(files)...)
 	out = append(out, detectUnreachableAssets(home, files)...)
+	out = append(out, detectBrokenLinks(files)...)
 	return out, nil
 }
 
@@ -141,7 +145,13 @@ func detectBrokenLinks(files []asset.MemoryFile) []Proposal {
 	var out []Proposal
 	for _, f := range files {
 		for _, link := range f.Links {
-			if knownSlugs[f.Store][link] {
+			// The store's own index is deliberately excluded from the file
+			// set DiscoverAllMemory returns (it is the index, not a fact
+			// being indexed - see memoryIndexName), so it never gets a Slug
+			// to register here. Without this, a real, legitimate reference
+			// to it - "[[MEMORY]] for the full index" - reads as broken
+			// forever, with no correct resolution possible (issue #65).
+			if link == asset.MemoryIndexSlug || knownSlugs[f.Store][link] {
 				continue
 			}
 			subject := f.Store + "/" + f.Filename + " -> " + link

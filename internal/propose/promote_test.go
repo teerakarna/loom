@@ -70,6 +70,38 @@ func TestDetectBrokenLinks_ResolvesWithinStoreOnly(t *testing.T) {
 	}
 }
 
+// TestDetectBrokenLinks_MemoryIndexNeverReadsAsBroken is the regression
+// test for issue #65's second finding: DiscoverAllMemory deliberately
+// excludes MEMORY.md from the file set (it is the index, not a fact being
+// indexed), so a real reference to it, "[[MEMORY]] for the full index",
+// could never resolve - not because the index is actually missing, but
+// because nothing ever registered a slug for a file that was never in the
+// set being checked.
+func TestDetectBrokenLinks_MemoryIndexNeverReadsAsBroken(t *testing.T) {
+	home := t.TempDir()
+	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[MEMORY]] for the full index.")
+
+	files, err := asset.DiscoverAllMemory(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := detectBrokenLinks(files); len(got) != 0 {
+		t.Errorf("got %+v, want no broken-link proposal for [[MEMORY]] - it has no correct resolution to suggest", got)
+	}
+
+	// A link to anything else not on disk is still reported - the special
+	// case is narrow, not a general "anything unresolvable is fine".
+	writeMemoryFile(t, home, "store-a", "b.md", "---\nname: b\n---\nSee [[nonexistent]].")
+	files, err = asset.DiscoverAllMemory(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := detectBrokenLinks(files)
+	if len(got) != 1 || got[0].Evidence["target_slug"] != "nonexistent" {
+		t.Errorf("got %+v, want exactly one broken link, to nonexistent", got)
+	}
+}
+
 func TestDetectFilenameSlugDrift(t *testing.T) {
 	home := t.TempDir()
 	writeMemoryFile(t, home, "store-a", "old_name.md", "---\nname: new-name\n---\nDrifted.")

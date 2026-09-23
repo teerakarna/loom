@@ -477,12 +477,23 @@ func asFloat(v any) float64 {
 // Store writes generated proposals to the ledger, applying the dedupe rule.
 // Reports how many were newly raised or re-raised.
 //
+// Interleaves by kind first (issue #65): ps arrives concatenated kind by
+// kind, and MaxPendingProposals is a single global cap enforced in
+// insertion order - so without this, whichever kind happens to be
+// generated first, and finds the most, fills the entire cap before any
+// other kind gets a single slot. A noisy detector starving a quieter one
+// that has the cheaper fix is worse than an arbitrary ordering; round-robin
+// gives every kind with any findings a fair share of whatever room the cap
+// allows.
+//
 // Withdraws stale pending proposals first (issue #40): anything ps does not
 // contain has evidence the ledger no longer supports, and a proposal that
 // stopped applying is not the same event as one a human dismissed. Doing
 // this before the upsert loop below, not after, is what lets a proposal
 // freed by a withdrawal fill the same pass's MaxPendingProposals slot.
 func Store(db *ledger.DB, ps []Proposal, now time.Time) (int, error) {
+	ps = interleaveByKind(ps)
+
 	generated := make(map[ledger.ProposalIdentity]bool, len(ps))
 	for _, p := range ps {
 		generated[ledger.ProposalIdentity{Kind: p.Kind, Subject: p.Subject}] = true
@@ -510,4 +521,37 @@ func Store(db *ledger.DB, ps []Proposal, now time.Time) (int, error) {
 		}
 	}
 	return written, nil
+}
+
+// interleaveByKind reorders ps so proposals of different kinds round-robin
+// instead of running kind by kind, preserving each kind's own relative
+// order within its turn. Kinds are visited in the order they first appear
+// in ps, which is deterministic - Generate and GenerateMemoryFindings
+// always append in the same fixed sequence - so a rerun over unchanged
+// input produces the same order.
+//
+// Round-robin, not a per-kind quota: a quota needs a number to pick, and
+// any fixed number is wrong for some future kind's actual volume. Visiting
+// kinds in turn gives every kind with any findings equal standing for as
+// many rounds as the cap allows, without loom having to guess how many
+// slots any one kind deserves.
+func interleaveByKind(ps []Proposal) []Proposal {
+	byKind := map[string][]Proposal{}
+	var kinds []string
+	for _, p := range ps {
+		if _, ok := byKind[p.Kind]; !ok {
+			kinds = append(kinds, p.Kind)
+		}
+		byKind[p.Kind] = append(byKind[p.Kind], p)
+	}
+
+	out := make([]Proposal, 0, len(ps))
+	for i := 0; len(out) < len(ps); i++ {
+		for _, k := range kinds {
+			if i < len(byKind[k]) {
+				out = append(out, byKind[k][i])
+			}
+		}
+	}
+	return out
 }

@@ -53,6 +53,16 @@ var linkRe = regexp.MustCompile(`\[\[([a-zA-Z0-9_-]+)\]\]`)
 // unreachable-asset checks.
 const memoryIndexName = "MEMORY.md"
 
+// MemoryIndexSlug is the conventional [[link]] target for a store's own
+// index (issue #65: "[[MEMORY]] can never resolve" - a real link in a real
+// store, `feedback_maintain_skills`). Because DiscoverAllMemory deliberately
+// excludes memoryIndexName from the file set, MEMORY.md never gets a Slug
+// to register - not because it lacks frontmatter (expected, by design), but
+// because it isn't in the set being checked at all. A caller building a
+// broken-link check needs this to special-case the one legitimate target
+// that will otherwise always read as missing.
+const MemoryIndexSlug = "MEMORY"
+
 // DiscoverAllMemory walks every project's memory store under
 // <home>/.claude/projects/*/memory and returns every memory file found
 // except the index itself, hashed and parsed for B7c's structural checks.
