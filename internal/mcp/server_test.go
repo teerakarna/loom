@@ -173,6 +173,13 @@ func TestGetRecommendationExcludesStaleArtifacts(t *testing.T) {
 	if len(out.Matches) != 0 {
 		t.Errorf("got %+v, want no matches - the only candidate is stale", out)
 	}
+	// Found by calling this tool for real, outside the test suite: Matches
+	// serialised as JSON null rather than [], which unmarshals back to a nil
+	// slice here too - len() alone can't tell the two apart, which is why
+	// this needs its own check rather than folding into the assertion above.
+	if out.Matches == nil {
+		t.Error("Matches is nil, want a non-nil empty slice - it must serialise as [] not null")
+	}
 }
 
 func TestListProposalsEmpty(t *testing.T) {

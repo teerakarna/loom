@@ -194,7 +194,12 @@ func getRecommendationHandler(db *ledger.DB) gomcp.ToolHandlerFor[Recommendation
 		active := activeOnly(artifacts)
 
 		rec := selector.Recommend(selector.TaskDescriptor{Text: in.Text}, active)
-		out := RecommendationOutput{Model: rec.Model, Effort: rec.Effort, Rationale: rec.Rationale}
+		// Matches initialised, not nil: an empty result must serialise as []
+		// rather than null, the same reason ProposalsOutput.Proposals does -
+		// a client iterating the result should not have to special-case "no
+		// matches". Found by calling this tool for real, not by a test: the
+		// in-memory-transport tests never inspect the raw JSON shape.
+		out := RecommendationOutput{Model: rec.Model, Effort: rec.Effort, Rationale: rec.Rationale, Matches: []SkillMatch{}}
 		for _, m := range rec.Matches {
 			out.Matches = append(out.Matches, SkillMatch{
 				Kind: m.Kind, Name: m.Name, Path: m.Path, Description: m.Description, Score: m.Score,
