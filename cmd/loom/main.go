@@ -58,8 +58,12 @@ Usage:
                              Report on context occupancy: what filled the window (tool
                              output, by tool and bucket) and what compaction cost.
                              Read-only, never ingests - run "loom report" first.
-  loom propose              List proposals loom's evidence supports, with what each
+  loom propose [--lane <lane>]
+                             List proposals loom's evidence supports, with what each
                              rests on. Add "apply <id>" or "dismiss <id>" to act on one.
+                             --lane narrows the memory-finding kinds to one project's
+                             own store; pin_model/revert_policy/retire_asset always
+                             show, since the policy they write is not lane-scoped.
   loom policy               Show the effective model/effort per agent type, with the
                              source and sample size behind each decision.
   loom policy set <agent-type> <model> <effort>

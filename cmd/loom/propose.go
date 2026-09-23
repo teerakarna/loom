@@ -8,9 +8,60 @@ import (
 	"time"
 
 	"github.com/teerakarna/loom/internal/asset"
+	"github.com/teerakarna/loom/internal/ingest"
 	"github.com/teerakarna/loom/internal/ledger"
 	"github.com/teerakarna/loom/internal/propose"
 )
+
+// laneScopedKinds are the four B7c memory-finding kinds - unambiguously
+// per-store, so per-lane, via each proposal's own Evidence["store"]
+// (issue #68). Every other kind's evidence is not store-shaped at all.
+var laneScopedKinds = map[string]bool{
+	propose.KindPromoteMemoryDuplicate: true,
+	propose.KindBrokenLink:             true,
+	propose.KindUnreachableAsset:       true,
+	propose.KindFilenameSlugDrift:      true,
+}
+
+// filterPendingByLane keeps every proposal whose kind isn't lane-scoped
+// (pin_model, revert_policy, retire_asset - shown regardless), plus any
+// lane-scoped proposal that touches lane.
+//
+// Two evidence shapes, not one: three of the four kinds carry a singular
+// "store" (the one store the finding is about), but
+// KindPromoteMemoryDuplicate's evidence is "stores", a list - the finding
+// is inherently about every store the duplicate spans, found by code
+// review, before this shipped. Checking "store" alone silently dropped
+// every duplicate-kind proposal from every --lane view, regardless of
+// lane, contradicting laneScopedKinds' own comment that all four are
+// unambiguously per-store.
+func filterPendingByLane(pending []ledger.ProposalRow, lane string) []ledger.ProposalRow {
+	out := make([]ledger.ProposalRow, 0, len(pending))
+	for _, p := range pending {
+		if !laneScopedKinds[p.Kind] {
+			out = append(out, p)
+			continue
+		}
+		var ev struct {
+			Store  string   `json:"store"`
+			Stores []string `json:"stores"`
+		}
+		if err := json.Unmarshal([]byte(p.Evidence), &ev); err != nil {
+			continue
+		}
+		if ev.Store == lane {
+			out = append(out, p)
+			continue
+		}
+		for _, s := range ev.Stores {
+			if s == lane {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	return out
+}
 
 func runPropose(args []string) error {
 	ledgerPath, err := defaultLedgerPath()
@@ -53,8 +104,22 @@ func runPropose(args []string) error {
 		fmt.Printf("Dismissed #%d. It will not come back unless the evidence behind it changes.\n", id)
 		return nil
 	}
-	if len(args) > 0 {
-		return fmt.Errorf("unknown subcommand %q (want: apply, dismiss, or nothing to list)", args[0])
+	// `loom propose --lane <lane>` narrows the four memory-finding kinds
+	// (store-scoped by construction) to one project's own store.
+	// pin_model/revert_policy/retire_asset are shown regardless: the policy
+	// they write is machine-global, so filtering them by lane would imply a
+	// per-lane policy that does not exist (issue #68).
+	var lane string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--lane" {
+			if i+1 >= len(args) {
+				return fmt.Errorf("--lane needs a value (see `loom status` for the lanes in your ledger)")
+			}
+			lane = args[i+1]
+			i++
+			continue
+		}
+		return fmt.Errorf("unknown argument %q (want: apply, dismiss, --lane <lane>, or nothing to list)", args[i])
 	}
 
 	now := time.Now()
@@ -71,6 +136,11 @@ func runPropose(args []string) error {
 		return err
 	}
 	generated = append(generated, memoryFindings...)
+	// Store always sees the full, unfiltered set, lane or no lane: Store
+	// withdraws any pending proposal the generated set it's given does not
+	// contain (issue #40), so passing it a lane-filtered subset would
+	// wrongly withdraw every other lane's still-valid proposals as a side
+	// effect of narrowing this one invocation's own display.
 	if _, err := propose.Store(db, generated, now); err != nil {
 		return err
 	}
@@ -79,12 +149,35 @@ func runPropose(args []string) error {
 	if err != nil {
 		return err
 	}
+	totalPending := len(pending)
+	if lane != "" {
+		pending = filterPendingByLane(pending, lane)
+	}
 	if len(pending) == 0 {
+		if lane != "" && totalPending > 0 {
+			// Found by code review, before this shipped: the generic
+			// "nothing in the ledger" message below is false here - there
+			// are totalPending proposals, just none for this lane. Left
+			// unqualified, a reader would reasonably conclude loom found no
+			// evidence at all rather than that the lane filter excluded
+			// everything.
+			fmt.Printf("No proposals for lane %s.\n", ingest.LaneDisplay(lane))
+			fmt.Println()
+			fmt.Printf("%d proposal(s) exist for other lanes, or aren't lane-scoped. Drop --lane to see them.\n", totalPending)
+			return nil
+		}
 		fmt.Println("No proposals.")
 		fmt.Println()
 		fmt.Println("Nothing in the ledger currently supports one. A proposal with no evidence behind")
 		fmt.Println("it is a guess with extra ceremony, so loom would rather say nothing.")
 		return nil
+	}
+
+	if lane != "" {
+		fmt.Printf("Lane:            %s\n", ingest.LaneDisplay(lane))
+		fmt.Println("(memory-finding kinds only - pin_model/revert_policy/retire_asset are shown")
+		fmt.Println(" regardless, since the policy they write is not lane-scoped)")
+		fmt.Println()
 	}
 
 	fmt.Printf("%d proposal(s):\n\n", len(pending))
