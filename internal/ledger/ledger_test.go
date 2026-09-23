@@ -3,6 +3,7 @@ package ledger
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -227,5 +228,105 @@ func TestMigrateAssetRenameDropsOldTablesAndProposals(t *testing.T) {
 	}
 	if len(rows) != 0 {
 		t.Errorf("got %d proposal(s) after migration, want 0 - the retire_artifact row must be purged, not carried forward under a kind TouchesUserFiles no longer recognizes", len(rows))
+	}
+}
+
+// TestUpsertProposalRevivesAWithdrawnRowWithIdenticalEvidence is the
+// regression test for a bug code review found empirically, before this
+// shipped: once withdrawn, a proposal whose evidence is static content
+// (the B7c memory-finding kinds - no daily-changing number in it) could
+// never return to pending even if the exact same true finding reappeared,
+// because UpsertProposal's "evidence unchanged, leave alone" fast path did
+// not distinguish withdrawn from dismissed. Unlike a dismissal, withdrawal
+// is the generator's own opinion, not a human's decision, so it must not be
+// sticky the same way.
+func TestUpsertProposalRevivesAWithdrawnRowWithIdenticalEvidence(t *testing.T) {
+	db := openTestDB(t)
+	row := ProposalRow{Kind: "broken_link", Subject: "store/file.md", Evidence: "{}", EvidenceHash: "h1", SampleSize: 1}
+
+	if ok, err := db.UpsertProposal(row, time.Now()); err != nil || !ok {
+		t.Fatalf("initial insert = (%v, %v), want (true, nil)", ok, err)
+	}
+	pending, _ := db.ListProposals(true)
+	id := pending[0].ID
+
+	if err := db.WithdrawStalePending(map[ProposalIdentity]bool{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetProposal(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != ProposalWithdrawn {
+		t.Fatalf("setup: Status = %q, want withdrawn", got.Status)
+	}
+
+	// The exact same finding, byte-identical evidence and hash, comes back.
+	if ok, err := db.UpsertProposal(row, time.Now()); err != nil || !ok {
+		t.Fatalf("revival upsert = (%v, %v), want (true, nil) - a withdrawn row must not be a no-op", ok, err)
+	}
+	got, err = db.GetProposal(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != ProposalPending {
+		t.Errorf("Status after revival = %q, want pending - a withdrawal is the generator's opinion, "+
+			"not a human's, so it must not be sticky the way a dismissal is", got.Status)
+	}
+
+	// The other direction still holds: a dismissal with unchanged evidence
+	// stays dismissed, not revived by the same mechanism.
+	other := ProposalRow{Kind: "broken_link", Subject: "store/other.md", Evidence: "{}", EvidenceHash: "h2", SampleSize: 1}
+	if _, err := db.UpsertProposal(other, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ = db.ListProposals(true)
+	var otherID int64
+	for _, p := range pending {
+		if p.Subject == "store/other.md" {
+			otherID = p.ID
+		}
+	}
+	if err := db.DismissProposal(otherID); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := db.UpsertProposal(other, time.Now()); err != nil || ok {
+		t.Errorf("re-upserting a dismissed proposal with unchanged evidence = (%v, %v), want (false, nil)", ok, err)
+	}
+	got, err = db.GetProposal(otherID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != ProposalDismissed {
+		t.Errorf("Status = %q, want dismissed to survive unchanged evidence", got.Status)
+	}
+}
+
+// TestUpsertProposalRevivalRespectsThePendingCap confirms a revived
+// proposal is not a free pass around MaxPendingProposals: reviving a
+// withdrawn row starts occupying a pending slot it was not counted against
+// a moment ago, so it has to clear the same cap a brand new proposal would.
+func TestUpsertProposalRevivalRespectsThePendingCap(t *testing.T) {
+	db := openTestDB(t)
+	withdrawnRow := ProposalRow{Kind: "broken_link", Subject: "store/withdrawn.md", Evidence: "{}", EvidenceHash: "h1", SampleSize: 1}
+	if _, err := db.UpsertProposal(withdrawnRow, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.WithdrawStalePending(map[ProposalIdentity]bool{}); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := range MaxPendingProposals {
+		row := ProposalRow{Kind: "broken_link", Subject: fmt.Sprintf("store/fill-%d.md", i), Evidence: "{}", EvidenceHash: "h", SampleSize: 1}
+		if ok, err := db.UpsertProposal(row, time.Now()); err != nil || !ok {
+			t.Fatalf("filling the cap: upsert %d = (%v, %v), want (true, nil)", i, ok, err)
+		}
+	}
+	if n, _ := db.CountPendingProposals(); n != MaxPendingProposals {
+		t.Fatalf("setup: %d pending, want the cap of %d full", n, MaxPendingProposals)
+	}
+
+	if ok, err := db.UpsertProposal(withdrawnRow, time.Now()); err != nil || ok {
+		t.Errorf("reviving into a full queue = (%v, %v), want (false, nil) - revival must respect the cap", ok, err)
 	}
 }

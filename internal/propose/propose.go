@@ -404,6 +404,10 @@ func Apply(db *ledger.DB, id int64, now time.Time) (string, error) {
 	if p.Status == ledger.ProposalApplied {
 		return "", fmt.Errorf("#%d has already been applied", id)
 	}
+	if p.Status == ledger.ProposalWithdrawn {
+		return "", fmt.Errorf("#%d was withdrawn - the evidence it rested on no longer holds, so "+
+			"applying it would act on a fact that is no longer true", id)
+	}
 	if TouchesUserFiles(p.Kind) {
 		return "", fmt.Errorf("#%d touches your files, so loom will not apply it. "+
 			"It is a suggestion to review and act on yourself", id)
@@ -472,7 +476,21 @@ func asFloat(v any) float64 {
 
 // Store writes generated proposals to the ledger, applying the dedupe rule.
 // Reports how many were newly raised or re-raised.
+//
+// Withdraws stale pending proposals first (issue #40): anything ps does not
+// contain has evidence the ledger no longer supports, and a proposal that
+// stopped applying is not the same event as one a human dismissed. Doing
+// this before the upsert loop below, not after, is what lets a proposal
+// freed by a withdrawal fill the same pass's MaxPendingProposals slot.
 func Store(db *ledger.DB, ps []Proposal, now time.Time) (int, error) {
+	generated := make(map[ledger.ProposalIdentity]bool, len(ps))
+	for _, p := range ps {
+		generated[ledger.ProposalIdentity{Kind: p.Kind, Subject: p.Subject}] = true
+	}
+	if err := db.WithdrawStalePending(generated); err != nil {
+		return 0, err
+	}
+
 	written := 0
 	for _, p := range ps {
 		ev, err := json.Marshal(p.Evidence)

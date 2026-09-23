@@ -857,6 +857,52 @@ rather than a fresh call. README and `plugin/README.md` now lead with a private-
 does not work, and say plainly that this is deliberate, not a stale README - it goes back to a
 one-liner once B6d actually fires.
 
+#### A pending proposal never withdraws itself - BUILT 2026-09-23
+
+Issue #40, found while confirming #38: `UpsertProposal`'s dedupe rule is careful about two cases
+(evidence unchanged, leave alone; evidence changed, re-raise) and silent about a third - evidence
+gone entirely. A proposal whose facts stopped holding just sat there, pending, quoting numbers that
+were no longer true, until a human dismissed something that was never wrong so much as stale. That
+is the alert-fatigue failure mode this project criticises other tools for, arriving through the back
+door of its own advisor.
+
+New `ProposalWithdrawn` status, distinct from dismissed for the reason the issue gave: "the situation
+changed" and "a human rejected it" are different events, and collapsing them into one status loses
+the thing the ledger is for. `ledger.WithdrawStalePending` marks pending rows withdrawn when the
+current generated set does not contain them; `propose.Store` calls it before its own upsert loop, not
+after - `MaxPendingProposals` counts `status = pending`, so withdrawing stale rows first is what lets
+a genuinely new proposal use the slot a withdrawn one just gave up, in the same `loom propose` run
+rather than the next one. `Apply` now also refuses a withdrawn proposal outright, for the same reason
+it already refused an applied one: acting on it would mean acting on evidence that no longer holds.
+
+Dismissed and applied rows are untouched by the new mechanism - confirmed by a test that dismisses
+one proposal, withdraws another, and checks each kept its own status rather than one leaking into the
+other.
+
+**Three real bugs found by `/code-review high` before merge, empirically verified, not just
+theorised.** The most severe one undid the whole point of this section: `UpsertProposal`'s original
+"evidence unchanged, leave alone" fast path did not distinguish withdrawn from dismissed, so a
+proposal whose evidence is static content rather than a daily-drifting number - the four B7c
+memory-finding kinds, `broken_link`/`unreachable_asset`/`filename_slug_drift`/
+`promote_memory_duplicate` - could never return to pending once withdrawn even once, contradicting
+this section's own stated point that a withdrawal, unlike a dismissal, is not meant to be sticky.
+Fixed by treating a withdrawn row as equivalent to "no row" for the purposes of that fast path: it
+revives on unchanged evidence rather than staying stuck, and - the second bug this surfaced - the
+revival now also clears the same `MaxPendingProposals` cap a brand new proposal would, since without
+that check a burst of revivals could silently exceed it. Third: the dedupe key `WithdrawStalePending`
+took was a `"kind|subject"` string concatenation, and `subject` is a raw filesystem path that can
+legally contain `|` on POSIX - replaced with `ledger.ProposalIdentity`, a struct key, collision-proof
+by construction rather than by the absence of an unlucky filename. `WithdrawStalePending` also moved
+its per-row updates into one transaction, matching `ReplaceAssetUsage`'s existing pattern, rather than
+N unbatched round-trips with no rollback on a partial failure.
+
+A fourth, lower-severity finding was filed rather than fixed here: loom #59, a transient unreadable
+memory store (B7c's own deliberate degrade-not-block tolerance) can now cause a one-pass "flicker"
+where withdrawal wrongly retracts real proposals for that store, before this section's own revival fix
+brings them back once the store is readable again. Narrower and self-healing after the fix above, and
+a real fix needs `internal/asset` and `internal/ledger`'s withdrawal step to share a concept ("which
+stores were actually scanned this pass") neither currently has - a design decision, not a bolt-on.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a
