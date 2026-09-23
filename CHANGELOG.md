@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wording to preserve, unlike the MCP-narrowing entry above, which records an actual behaviour
   change over time rather than a pure rename.
 
+  Reviewed before merge, and a real bug survived until it was: `TouchesUserFiles` defaulted an
+  unrecognized proposal kind to `false` ("safe to automate"), which would have silently mis-reported
+  a proposal stored under an old kind string as safe rather than as touching the user's files. Fixed
+  by having `migrateAssetRename` also delete any `proposals` row still carrying an old kind string
+  (dead the moment `Generate` stopped emitting it), and by flipping `TouchesUserFiles`'s default from
+  fail-open to fail-safe: it now names the two kinds that are genuinely safe and treats everything
+  else as touching the user's files.
+
 - MCP server narrowed to one tool, `get_recommendation`. `record_outcome` moves for the same reason
   B5 already made `loom propose apply` CLI-only: it writes, and an assistant can call an MCP tool
   without the human asking, so the terminal is where a decision that changes state belongs - B7d

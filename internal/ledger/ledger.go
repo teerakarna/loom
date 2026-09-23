@@ -273,7 +273,15 @@ func migrateAssetRename(db *sql.DB) error {
 			return err
 		}
 	}
-	return nil
+	// A pending proposal stored under an old kind string (retire_artifact,
+	// unreachable_artifact) is not just cosmetic: propose.TouchesUserFiles no
+	// longer recognizes it, so it would fall through to its default answer
+	// (false, "safe to automate") for a proposal that in fact touches the
+	// user's files - the opposite of correct, found by code review before
+	// this shipped. Generate never emits the old kind strings again, so these
+	// rows are permanently dead: delete rather than reconcile.
+	_, err := db.Exec(`DELETE FROM proposals WHERE kind IN ('retire_artifact', 'unreachable_artifact')`)
+	return err
 }
 
 // dropTableIfExists drops table unconditionally if it exists at all -

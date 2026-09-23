@@ -1243,6 +1243,17 @@ every doc. A new `migrateAssetRename` drops the old-named tables on a pre-rename
 pure derived caches, rebuilt in full by the next `loom report`/`loom advise`, so nothing is lost;
 verified against this machine's own real `~/.loom/loom.db`, backed up first.
 
+**A real bug found by `/code-review high` before merge, not after.** The rename alone left a
+pending proposal stored under an old kind string (`retire_artifact`, `unreachable_artifact`)
+mis-reported: `propose.TouchesUserFiles` only recognized the new kind strings and defaulted anything
+else to `false` - "safe to automate" - which is exactly backwards for a proposal that in fact
+touches the user's files. Fixed two ways. `migrateAssetRename` now also deletes any `proposals` row
+still carrying an old kind string, since `Generate` never emits one again and the row is permanently
+dead. And `TouchesUserFiles` itself flipped its default from fail-open to **fail safe**: it now names
+the two kinds that are genuinely safe (`KindPinModel`, `KindRevertPolicy`) and treats everything
+else, recognized or not, as touching the user's files - so a kind this function has never heard of,
+whenever that happens next, is never silently assumed safe again.
+
 One exception kept as `artifact`, deliberately: `docs/design.md`'s own note that the `coordination`
 table "stays in the schema as an empty, unused artifact of the original design" uses the word in its
 ordinary English sense (a leftover), not Loom's concept - renaming it would have been wrong, not

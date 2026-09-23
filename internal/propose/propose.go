@@ -67,13 +67,17 @@ const (
 // TouchesUserFiles reports whether applying a proposal of this kind would
 // write outside Loom's own state. Used to decide what may ever be automated;
 // the answer for anything touching a user's files is permanently no.
+//
+// Defaults to true for a kind this function does not recognize - fail safe,
+// not fail open. An unrecognized kind isn't necessarily KindPinModel's kind
+// of safe; the only way to know it isn't is to name it explicitly here, and
+// every kind that actually is safe does (KindPinModel, KindRevertPolicy).
 func TouchesUserFiles(kind string) bool {
 	switch kind {
-	case KindRetireAsset, KindPromoteMemoryDuplicate, KindBrokenLink,
-		KindUnreachableAsset, KindFilenameSlugDrift:
-		return true
-	default:
+	case KindPinModel, KindRevertPolicy:
 		return false
+	default:
+		return true
 	}
 }
 

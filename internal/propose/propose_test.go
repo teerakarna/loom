@@ -23,6 +23,36 @@ func openDB(t *testing.T) *ledger.DB {
 
 var now = time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
 
+// TestTouchesUserFilesDefaultsSafe is a regression test for a real bug
+// found by /code-review during the artifact->asset rename: TouchesUserFiles
+// used to default an unrecognized kind to false ("safe to automate"), which
+// silently mis-reported a pending proposal stored under a since-renamed kind
+// string as safe. Fail safe, not fail open: every kind that is genuinely
+// safe (touches only Loom's own state) must say so explicitly; anything else
+// defaults to true.
+func TestTouchesUserFilesDefaultsSafe(t *testing.T) {
+	for _, kind := range []string{KindRetireAsset, KindPromoteMemoryDuplicate, KindBrokenLink,
+		KindUnreachableAsset, KindFilenameSlugDrift} {
+		if !TouchesUserFiles(kind) {
+			t.Errorf("TouchesUserFiles(%q) = false, want true", kind)
+		}
+	}
+	for _, kind := range []string{KindPinModel, KindRevertPolicy} {
+		if TouchesUserFiles(kind) {
+			t.Errorf("TouchesUserFiles(%q) = true, want false", kind)
+		}
+	}
+	// The actual bug: an unrecognized kind (e.g. a pre-rename kind string
+	// like "retire_artifact" surviving in an old ledger) must never be
+	// reported as safe.
+	if !TouchesUserFiles("retire_artifact") {
+		t.Error(`TouchesUserFiles("retire_artifact") = false, want true (unrecognized kind must fail safe)`)
+	}
+	if !TouchesUserFiles("some_future_kind_nobody_has_written_yet") {
+		t.Error("TouchesUserFiles of an unknown kind = false, want true (fail safe, not fail open)")
+	}
+}
+
 func TestRetireOnlyWhenGenuinelyStale(t *testing.T) {
 	db := openDB(t)
 	// Seen yesterday: not a candidate. A skill used twice a year is not dead.
