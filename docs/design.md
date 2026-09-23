@@ -879,6 +879,30 @@ Dismissed and applied rows are untouched by the new mechanism - confirmed by a t
 one proposal, withdraws another, and checks each kept its own status rather than one leaking into the
 other.
 
+**Three real bugs found by `/code-review high` before merge, empirically verified, not just
+theorised.** The most severe one undid the whole point of this section: `UpsertProposal`'s original
+"evidence unchanged, leave alone" fast path did not distinguish withdrawn from dismissed, so a
+proposal whose evidence is static content rather than a daily-drifting number - the four B7c
+memory-finding kinds, `broken_link`/`unreachable_asset`/`filename_slug_drift`/
+`promote_memory_duplicate` - could never return to pending once withdrawn even once, contradicting
+this section's own stated point that a withdrawal, unlike a dismissal, is not meant to be sticky.
+Fixed by treating a withdrawn row as equivalent to "no row" for the purposes of that fast path: it
+revives on unchanged evidence rather than staying stuck, and - the second bug this surfaced - the
+revival now also clears the same `MaxPendingProposals` cap a brand new proposal would, since without
+that check a burst of revivals could silently exceed it. Third: the dedupe key `WithdrawStalePending`
+took was a `"kind|subject"` string concatenation, and `subject` is a raw filesystem path that can
+legally contain `|` on POSIX - replaced with `ledger.ProposalIdentity`, a struct key, collision-proof
+by construction rather than by the absence of an unlucky filename. `WithdrawStalePending` also moved
+its per-row updates into one transaction, matching `ReplaceAssetUsage`'s existing pattern, rather than
+N unbatched round-trips with no rollback on a partial failure.
+
+A fourth, lower-severity finding was filed rather than fixed here: loom #59, a transient unreadable
+memory store (B7c's own deliberate degrade-not-block tolerance) can now cause a one-pass "flicker"
+where withdrawal wrongly retracts real proposals for that store, before this section's own revival fix
+brings them back once the store is readable again. Narrower and self-healing after the fix above, and
+a real fix needs `internal/asset` and `internal/ledger`'s withdrawal step to share a concept ("which
+stores were actually scanned this pass") neither currently has - a design decision, not a bolt-on.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

@@ -132,6 +132,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MaxPendingProposals` counts pending rows only. `Apply` refuses a withdrawn proposal the same way it
   already refused an applied one.
 
+  Reviewed before merge, and three real bugs survived until it was: the "evidence unchanged, leave
+  alone" fast path didn't distinguish withdrawn from dismissed, so a proposal with static evidence
+  (the B7c memory-finding kinds) could never return to pending once withdrawn - fixed by treating a
+  withdrawn row like "no row" for that check, so it revives; the revival itself then needed the same
+  pending-cap check a brand new proposal gets, or a burst of revivals could silently exceed it; and
+  `WithdrawStalePending`'s dedupe key was a `"kind|subject"` string concatenation, not collision-safe
+  against a filesystem path containing `|` - replaced with a struct key, and its per-row updates moved
+  into one transaction. A fourth, lower-severity finding (a transiently-unreadable memory store can
+  cause a one-pass withdrawal flicker) filed as #59 rather than fixed here - self-healing after the
+  fix above, and a real fix needs a design decision this PR shouldn't carry.
+
 - `get_recommendation` serialised an empty `matches` list as JSON `null` rather than `[]`, found by
   calling the live MCP tool for real rather than trusting the test suite - the existing test built
   its expectation by unmarshaling the response back into a Go slice, and `nil` and `[]T{}` unmarshal

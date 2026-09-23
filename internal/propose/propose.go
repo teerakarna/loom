@@ -483,9 +483,9 @@ func asFloat(v any) float64 {
 // this before the upsert loop below, not after, is what lets a proposal
 // freed by a withdrawal fill the same pass's MaxPendingProposals slot.
 func Store(db *ledger.DB, ps []Proposal, now time.Time) (int, error) {
-	generated := make(map[string]bool, len(ps))
+	generated := make(map[ledger.ProposalIdentity]bool, len(ps))
 	for _, p := range ps {
-		generated[p.Kind+"|"+p.Subject] = true
+		generated[ledger.ProposalIdentity{Kind: p.Kind, Subject: p.Subject}] = true
 	}
 	if err := db.WithdrawStalePending(generated); err != nil {
 		return 0, err
