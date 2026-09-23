@@ -924,6 +924,38 @@ self-healing the exact gap #49 found, not just closing it for whatever ships nex
 this machine's own real ledger, backed up first: `feature_version` read `1` on all 57 runs afterward,
 and `tool_usage`/`compactions` both grew.
 
+#### The first real trial found the promotion rules starving each other - BUILT 2026-09-23
+
+Issue #65, from the AMC trial: `detectBrokenLinks` ran first in `GenerateMemoryFindings` and, on that
+machine's real corpus, found 15 broken links - enough on its own to fill the entire 20-slot
+`MaxPendingProposals` cap before `detectFilenameSlugDrift` or `detectUnreachableAssets` stored a single
+proposal. Worse than an ordering quirk: the issue showed 6 of those 15 broken links pointed at files
+that exist, under a name that only fails on a snake-vs-kebab separator drift - the exact thing
+`detectFilenameSlugDrift` would have reported, with the actual fix (16 frontmatter lines), if it had
+ever been given a slot. Whichever detector runs first and is loudest was silently deciding which
+*true* finding a user gets told about.
+
+Fixed with the cheaper of the two shapes the issue itself proposed: `Store` now interleaves every
+proposal by kind, round-robin, before the upsert loop that fills the cap (`interleaveByKind`), so no
+kind can exhaust `MaxPendingProposals` before every other kind with real findings gets a fair share of
+it. `GenerateMemoryFindings`'s own order also changed - `detectFilenameSlugDrift`/
+`detectUnreachableAssets` (root cause) now run before `detectBrokenLinks` (symptom), so the two are
+tied on standing but the root-cause kind wins the margin once the cap actually cuts a round short. The
+stronger shape the issue described - suppressing a `broken_link` proposal outright when the target's
+own drifted filename matches, folding it into that file's `filename_slug_drift` evidence instead of
+just filling a different slot for it - is real future work, not done here: it needs `detectBrokenLinks`
+and `detectFilenameSlugDrift` to share state neither currently does, and the interleave alone already
+fixes the reported bug (nothing generator-side gets silently dropped from view again).
+
+Two smaller findings in the same issue, fixed alongside: `[[MEMORY]]` could never resolve, because
+`DiscoverAllMemory` deliberately excludes the index itself from the file set the checks run against -
+not a missing file, a file that was never going to be in the set that gets a `Slug` registered. New
+`asset.MemoryIndexSlug` special-cases it in `detectBrokenLinks`. The other finding - a link to a real
+skill, not a memory, is reported broken with rationale text that says "renamed, moved, or never
+existed", which is only sometimes true - deferred rather than fixed here: distinguishing the two needs
+cross-project skill discovery, which does not exist (`Discover()` is single-project, keyed to cwd;
+`DiscoverAllMemory` is the only cross-project scan this package has, and it does not look at skills).
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

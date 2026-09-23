@@ -53,6 +53,16 @@ var linkRe = regexp.MustCompile(`\[\[([a-zA-Z0-9_-]+)\]\]`)
 // unreachable-asset checks.
 const memoryIndexName = "MEMORY.md"
 
+// MemoryIndexSlug is the conventional [[link]] target for a store's own
+// index (issue #65: "[[MEMORY]] can never resolve" - a real link in a real
+// store, `feedback_maintain_skills`). Because DiscoverAllMemory deliberately
+// excludes memoryIndexName from the file set, MEMORY.md never gets a Slug
+// to register - not because it lacks frontmatter (expected, by design), but
+// because it isn't in the set being checked at all. A caller building a
+// broken-link check needs this to special-case the one legitimate target
+// that will otherwise always read as missing.
+const MemoryIndexSlug = "MEMORY"
+
 // DiscoverAllMemory walks every project's memory store under
 // <home>/.claude/projects/*/memory and returns every memory file found
 // except the index itself, hashed and parsed for B7c's structural checks.
@@ -137,6 +147,22 @@ func readMemoryFile(path, store, filename string) (MemoryFile, bool) {
 		Store: store, Path: path, Filename: filename, Slug: fm.Name,
 		ContentHash: hex.EncodeToString(sum[:]), Links: links,
 	}, true
+}
+
+// HasMemoryIndex reports whether store has a readable MEMORY.md at all -
+// distinct from MemoryIndex's return value, which deliberately collapses
+// "missing" and "present but empty" to the same empty map, correct for its
+// own purpose (every file is equally unreachable either way) but wrong for
+// this one. detectBrokenLinks needs the distinction: a [[MEMORY]] link only
+// actually resolves if the index it names exists, not just because it's the
+// conventional target - found by code review, before this shipped, when the
+// special case for [[MEMORY]] would have unconditionally treated it as
+// resolved even in a store with no index file at all, the exact class of
+// bug this fix exists to catch, reintroduced for one specific slug.
+func HasMemoryIndex(home, store string) bool {
+	path := filepath.Join(home, ".claude", "projects", store, "memory", memoryIndexName)
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // MemoryIndex reads one store's MEMORY.md and returns the set of filenames
