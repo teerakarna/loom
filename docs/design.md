@@ -956,6 +956,27 @@ existed", which is only sometimes true - deferred rather than fixed here: distin
 cross-project skill discovery, which does not exist (`Discover()` is single-project, keyed to cwd;
 `DiscoverAllMemory` is the only cross-project scan this package has, and it does not look at skills).
 
+#### broken_link was flagging a permitted convention as a defect - BUILT 2026-09-23
+
+Issue #67, also from the AMC trial, found while auditing loom's own output against the memory
+convention it checks: Claude Code's own instructions say a `[[link]]` to a slug that doesn't exist yet
+is fine, "it marks something worth writing later, not an error." `detectBrokenLinks` flagged it anyway,
+indistinguishably from real rot, because the two look identical on disk - the evidence for the
+distinction is intent, which the filesystem does not carry. Measured by hand across this machine's 16
+real memory stores: 505 links resolved, 291 within their own store, 29 in a different store, **185
+(86% of the 214 `broken_link` findings) pointed at a slug that exists nowhere on the machine at all**.
+
+Fixed with the smaller of the two shapes the issue proposed - drop the "exists nowhere" class entirely,
+treat the convention as authoritative - rather than the aggregate-per-store alternative: `detectBrokenLinks`
+now also builds a global slug index across every store (`existsAnywhere`), not just each file's own
+store, and only reports a link whose target exists somewhere but not here. A target that exists nowhere
+at all is silently permitted; a target that exists in the wrong store is still a real, actionable
+finding - the reference is real, just scoped wrong. This directly changes #65's own arithmetic, not by
+coincidence: with the forward-reference class gone, `broken_link` shrank from 214 findings to roughly
+29 on the corpus that motivated it, which on its own no longer fills the pending cap - #65's
+interleave-by-kind fix stays, as defense against whichever kind is ever loud again, but this is the fix
+that actually explains why it was loud this time.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

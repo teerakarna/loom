@@ -3,6 +3,7 @@ package propose
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/teerakarna/loom/internal/asset"
@@ -93,16 +94,26 @@ func TestDetectBrokenLinks_MemoryIndexNeverReadsAsBroken(t *testing.T) {
 		t.Errorf("got %+v, want no broken-link proposal for [[MEMORY]] - the index really exists here", got)
 	}
 
-	// A link to anything else not on disk is still reported - the special
-	// case is narrow, not a general "anything unresolvable is fine".
-	writeMemoryFile(t, home, "store-a", "b.md", "---\nname: b\n---\nSee [[nonexistent]].")
+	// A link to a target that exists, just in a different store, is still
+	// reported - the special case is narrow to [[MEMORY]] specifically, not
+	// a general "anything unresolvable is fine" (and a target that exists
+	// nowhere at all is a permitted forward reference - see issue #67 - so
+	// this uses a genuinely cross-store target to keep testing real rot).
+	writeMemoryFile(t, home, "store-a", "b.md", "---\nname: b\n---\nSee [[elsewhere]].")
+	writeMemoryFile(t, home, "store-c", "elsewhere.md", "---\nname: elsewhere\n---\nLives in a different store.")
 	files, err = asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := detectBrokenLinks(home, files)
-	if len(got) != 1 || got[0].Evidence["target_slug"] != "nonexistent" {
-		t.Errorf("got %+v, want exactly one broken link, to nonexistent", got)
+	found := false
+	for _, p := range got {
+		if p.Evidence["target_slug"] == "elsewhere" && p.Evidence["store"] == "store-a" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("got %+v, want a broken link from store-a to elsewhere (exists only in store-c)", got)
 	}
 }
 
@@ -111,6 +122,10 @@ func TestDetectBrokenLinks_MemoryIndexNeverReadsAsBroken(t *testing.T) {
 // reported as broken when the store it appears in has no MEMORY.md at all
 // - the special case resolves a reference to a real index, not any
 // reference spelled the conventional way regardless of whether one exists.
+// Also checks the message text itself, not just target_slug: a second
+// review pass found the first fix reused the cross-store wording ("exists,
+// just not here") for this case too, which is false - no MEMORY.md exists
+// anywhere in this scenario, not just in the wrong place.
 func TestDetectBrokenLinks_MemoryIndexIsBrokenWhenIndexMissing(t *testing.T) {
 	home := t.TempDir()
 	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[MEMORY]] for the full index.")
@@ -122,7 +137,44 @@ func TestDetectBrokenLinks_MemoryIndexIsBrokenWhenIndexMissing(t *testing.T) {
 	}
 	got := detectBrokenLinks(home, files)
 	if len(got) != 1 || got[0].Evidence["target_slug"] != "MEMORY" {
-		t.Errorf("got %+v, want one broken link to MEMORY - no index exists in this store to resolve it", got)
+		t.Fatalf("got %+v, want one broken link to MEMORY - no index exists in this store to resolve it", got)
+	}
+	if strings.Contains(got[0].Summary, "exists") || strings.Contains(got[0].Rationale, "exists, just not here") {
+		t.Errorf("Summary/Rationale = %+v, want wording that does not claim MEMORY.md exists somewhere - it does not exist at all", got[0])
+	}
+}
+
+// TestDetectBrokenLinks_ForwardReferenceIsNotADefect is the regression test
+// for issue #67: a [[link]] whose target doesn't exist anywhere on the
+// machine yet is a permitted forward reference under Claude Code's own
+// memory convention ("a [[name]] that doesn't match an existing memory yet
+// is fine, it marks something worth writing later"), not rot - measured on
+// a real corpus, 185 of 214 broken_link findings (86%) were exactly this
+// class. A target that exists, just in a different store, is a different
+// case and still a real finding - the convention permits writing ahead of a
+// memory, not permanently mis-scoping a reference to one that exists.
+func TestDetectBrokenLinks_ForwardReferenceIsNotADefect(t *testing.T) {
+	home := t.TempDir()
+	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[not-written-yet]] for context.")
+
+	files, err := asset.DiscoverAllMemory(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := detectBrokenLinks(home, files); len(got) != 0 {
+		t.Errorf("got %+v, want no broken-link proposal - the target exists nowhere yet, a permitted forward reference", got)
+	}
+
+	// The target shows up later, in a different store - now it's a real,
+	// actionable cross-store scoping problem, not a forward reference.
+	writeMemoryFile(t, home, "store-b", "not-written-yet.md", "---\nname: not-written-yet\n---\nNow it exists, elsewhere.")
+	files, err = asset.DiscoverAllMemory(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := detectBrokenLinks(home, files)
+	if len(got) != 1 || got[0].Evidence["target_slug"] != "not-written-yet" {
+		t.Errorf("got %+v, want one broken link now that the target exists (in the wrong store)", got)
 	}
 }
 

@@ -123,6 +123,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `broken_link` flagged a `[[link]]` to a slug that doesn't exist anywhere yet as a defect (#67), which
+  Claude Code's own memory convention explicitly permits as a forward reference ("it marks something
+  worth writing later, not an error"). Measured by hand across this machine's 16 real memory stores:
+  185 of 214 broken_link findings (86%) were exactly this class. `detectBrokenLinks` now also builds a
+  global slug index across every store and only reports a link whose target exists somewhere but not
+  in the same store - a real, actionable scoping problem, not a permitted forward reference. Changes
+  #65's own arithmetic: `broken_link` shrank from 214 findings to roughly 29 on the corpus that
+  motivated it, no longer filling the pending cap on its own.
+
 - `loom propose`'s promotion-rule detectors could starve each other out of the pending-proposal cap
   (#65, found on the AMC trial's real corpus) - `detectBrokenLinks` ran first, found 15 broken links,
   filled all 20 slots, and `detectFilenameSlugDrift`/`detectUnreachableAssets` never stored a single
