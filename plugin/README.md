@@ -9,11 +9,9 @@ This directory is the plugin. It registers Loom's MCP server with Claude Code an
 /plugin install loom@loom
 ```
 
-The plugin does not contain Loom. Install the binary separately:
-
-```
-go install github.com/teerakarna/loom/cmd/loom@latest
-```
+The plugin does not contain Loom. Install the binary separately - see the main
+[README](../README.md#install): the repo is private for now, so `go install ...@latest` needs
+`GOPRIVATE` set and repo access, or build from a clone.
 
 Then restart Claude Code. `/mcp` should list `loom` as connected, and `loom` gains one tool:
 `get_recommendation`. Everything else (cost reports, proposals, recording an outcome) is

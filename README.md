@@ -58,8 +58,22 @@ entries; that class of failure is designed out here, not carefully avoided.
 
 ## Install
 
+The repo is private for now (see "Status" above), by deliberate choice, not oversight - going public
+is gated on at least one evidence-based proposal (a model pin, a retirement, a regression) actually
+firing on real data, which hasn't happened yet. See [`docs/design.md`](docs/design.md), "Going
+public", for the reasoning. Until then, `go install ...@latest` needs read access to the repo and
+`GOPRIVATE` set - it does not work for a stranger, and does not work for the owner either without
+both:
+
 ```sh
-go install github.com/teerakarna/loom/cmd/loom@latest
+GOPRIVATE=github.com/teerakarna go install github.com/teerakarna/loom/cmd/loom@latest
+```
+
+Or build from a clone, which needs neither:
+
+```sh
+git clone https://github.com/teerakarna/loom
+cd loom && go build -o ~/go/bin/loom ./cmd/loom
 ```
 
 Optionally register the MCP server with Claude Code, so a session can query its own cost history:

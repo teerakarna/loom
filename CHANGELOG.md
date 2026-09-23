@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- README/`plugin/README.md` install instructions no longer lead with `go install
+  github.com/teerakarna/loom/cmd/loom@latest` - it doesn't work while the repo is private, for
+  anyone, including the owner (checksum-server 404, then a credential-less git prompt), found on the
+  first real trial on a second machine (#57). Checked B6d's own "going public" gate against the real
+  local ledger before deciding: no evidence-based proposal has ever fired, so staying private is
+  correct, not a stopgap. README now leads with a private-install path instead.
+
 - Renamed Loom's core concept from "artifact" to "asset" throughout the codebase and docs
   (`internal/artifact` -> `internal/asset`, `ArtifactRecord`/`ArtifactRow`/`ArtifactUsageSummary`/
   `ArtifactLookup`/`ArtifactTouch` -> `Asset...`, `KindRetireArtifact`/`KindUnreachableArtifact` and
