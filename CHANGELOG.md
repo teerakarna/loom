@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- MCP surface widened back to four tools (#62, the last of the AMC trial's four findings, and the one
+  that reverses an earlier decision): `get_cost_summary`, `get_context_occupancy` and `list_proposals`
+  restored alongside `get_recommendation`. The narrowing this reverses was explicitly labelled
+  unmeasured reasoning, reversible if a later trial said otherwise - the first real trial did: a
+  session connected to a real, 205-run ledger could see nothing about cost, occupancy or proposals.
+  `dismiss_proposal`/`record_outcome` stay CLI-only; that half of the original reasoning rested on
+  B5's settled write-at-the-terminal rule, not on the unmeasured cost claim, and this trial gave no
+  reason to revisit it. `NewServer` regains its `home` parameter (constructor-injected, not resolved
+  per-request - the same hermeticity fix as before). Contract version `v0.3.0` -> `v0.4.0`,
+  `plugin.json` bumped to match. Verified for real over the wire: `loom serve`'s `tools/list` returns
+  all four.
+
 - README/`plugin/README.md` install instructions no longer lead with `go install
   github.com/teerakarna/loom/cmd/loom@latest` - it doesn't work while the repo is private, for
   anyone, including the owner (checksum-server 404, then a credential-less git prompt), found on the

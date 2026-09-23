@@ -73,11 +73,11 @@ Usage:
   loom record-outcome --outcome <accepted|corrected|rejected> [--detail <text>] <task text>
                              Record how a task turned out, for future selector tuning.
                              Write-only.
-  loom serve                Run the MCP server on stdio, exposing get_recommendation only.
-                             query_ledger, list_proposals, dismiss_proposal and
-                             record_outcome are CLI-only (report/status/context, propose,
-                             propose dismiss, record-outcome) - see docs/design.md,
-                             "MCP server shape".
+  loom serve                Run the MCP server on stdio, exposing get_recommendation,
+                             get_cost_summary, get_context_occupancy and list_proposals.
+                             dismiss_proposal and record_outcome stay CLI-only (propose
+                             dismiss, record-outcome) - see docs/design.md,
+                             "MCP surface widened back".
 
 See docs/design.md for the full design.`)
 }

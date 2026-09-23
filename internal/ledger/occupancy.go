@@ -107,9 +107,9 @@ type CompactionRow struct {
 	At            string
 }
 
-// OccupancyReport is what `loom context` and query_ledger's occupancy
-// dimension both read. Bytes throughout, never tokens - see
-// docs/design.md, B7b, "bytes are not tokens".
+// OccupancyReport is what `loom context` and the MCP get_context_occupancy
+// tool both read. Bytes throughout, never tokens - see docs/design.md, B7b,
+// "bytes are not tokens".
 type OccupancyReport struct {
 	ByTool   []ToolOutputRow // descending by ResultBytes
 	ByBucket []ToolOutputRow // ToolName is the bucket name here; descending by ResultBytes
