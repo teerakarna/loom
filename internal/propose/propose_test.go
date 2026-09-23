@@ -382,6 +382,197 @@ func TestHashIsStableAndEvidenceSensitive(t *testing.T) {
 	}
 }
 
+// TestWithdrawnWhenEvidenceStopsHolding is the regression test for issue
+// #40: a retire proposal fires for a genuinely stale asset, the asset then
+// gets used (the evidence stops holding), and a second Generate+Store must
+// not leave the old proposal sitting there as still-pending. Before the fix,
+// UpsertProposal's dedupe rule only ever inserted, replaced or left alone -
+// nothing retracted a proposal the generator stopped producing.
+func TestWithdrawnWhenEvidenceStopsHolding(t *testing.T) {
+	db := openDB(t)
+	if err := db.UpsertAsset(ledger.AssetRecord{Kind: "skill", Path: "/s/comeback.md", Name: "comeback"},
+		now.Add(-StaleAfter-48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	ps, err := Generate(db, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Store(db, ps, now); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := db.ListProposals(true)
+	if len(pending) != 1 || pending[0].Kind != KindRetireAsset {
+		t.Fatalf("setup: got %+v, want one retire proposal", pending)
+	}
+	id := pending[0].ID
+
+	// The asset gets used - the evidence retireStaleAssets rested on is gone.
+	if err := db.InsertRun(ledger.RunRecord{Path: "/run/a.jsonl", Kind: "session", StartedAt: now.Add(-1 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := db.RunIDByPath("/run/a.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceAssetUsage(runID, []ledger.ResolvedTouch{{ToolUseID: "t1", AssetPath: "/s/comeback.md"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	ps, err = Generate(db, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != 0 {
+		t.Fatalf("setup: generator still produced %+v, want nothing - the asset is used now", ps)
+	}
+	if _, err := Store(db, ps, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if pending, _ = db.ListProposals(true); len(pending) != 0 {
+		t.Errorf("stale proposal still pending after its evidence stopped holding: %+v", pending)
+	}
+	got, err := db.GetProposal(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != ledger.ProposalWithdrawn {
+		t.Errorf("Status = %q, want %q - withdrawn is a different event from dismissed", got.Status, ledger.ProposalWithdrawn)
+	}
+
+	// A dismissed proposal must not be swept up by the same mechanism -
+	// dismissal is a human's decision, withdrawal is the generator's.
+	if err := db.UpsertAsset(ledger.AssetRecord{Kind: "skill", Path: "/s/rejected.md", Name: "rejected"},
+		now.Add(-StaleAfter-48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	ps, _ = Generate(db, now)
+	if _, err := Store(db, ps, now); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ = db.ListProposals(true)
+	if len(pending) != 1 {
+		t.Fatalf("setup: got %d pending, want 1", len(pending))
+	}
+	if err := db.DismissProposal(pending[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	ps, _ = Generate(db, now)
+	if _, err := Store(db, ps, now); err != nil {
+		t.Fatal(err)
+	}
+	got, err = db.GetProposal(pending[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != ledger.ProposalDismissed {
+		t.Errorf("Status = %q, want dismissed to survive untouched (evidence unchanged)", got.Status)
+	}
+}
+
+// TestWithdrawalFreesTheCapForANewProposal is issue #40's second half: the
+// pending cap should count only proposals the generator still stands
+// behind. Fill the cap, let one stop applying, and confirm a brand new
+// candidate gets the slot the withdrawal freed - in the same Store call, not
+// a later one.
+func TestWithdrawalFreesTheCapForANewProposal(t *testing.T) {
+	db := openDB(t)
+	for i := range ledger.MaxPendingProposals {
+		if err := db.UpsertAsset(ledger.AssetRecord{
+			Kind: "skill", Path: fmt.Sprintf("/s/old-%d.md", i), Name: fmt.Sprintf("old%d", i),
+		}, now.Add(-StaleAfter-48*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ps, _ := Generate(db, now)
+	if _, err := Store(db, ps, now); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := db.ListProposals(true)
+	if len(pending) != ledger.MaxPendingProposals {
+		t.Fatalf("setup: got %d pending, want the cap of %d", len(pending), ledger.MaxPendingProposals)
+	}
+
+	// One of the cap-filling assets gets used, freeing a slot, and a brand
+	// new stale asset appears in the same pass.
+	if err := db.InsertRun(ledger.RunRecord{Path: "/run/a.jsonl", Kind: "session", StartedAt: now.Add(-1 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := db.RunIDByPath("/run/a.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceAssetUsage(runID, []ledger.ResolvedTouch{{ToolUseID: "t1", AssetPath: "/s/old-0.md"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertAsset(ledger.AssetRecord{Kind: "skill", Path: "/s/new.md", Name: "newcomer"},
+		now.Add(-StaleAfter-48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	ps, err = Generate(db, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != ledger.MaxPendingProposals {
+		t.Fatalf("generator produced %d, want %d (old-0 dropped out, newcomer added)", len(ps), ledger.MaxPendingProposals)
+	}
+	if _, err := Store(db, ps, now); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, _ = db.ListProposals(true)
+	if len(pending) != ledger.MaxPendingProposals {
+		t.Errorf("got %d pending after withdrawal freed a slot, want the cap of %d still full", len(pending), ledger.MaxPendingProposals)
+	}
+	found := false
+	for _, p := range pending {
+		if p.Subject == "/s/new.md" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the newcomer must have taken the slot old-0's withdrawal freed, in the same pass")
+	}
+}
+
+// TestApplyRefusesWithdrawnProposal is the other half of issue #40: applying
+// a withdrawn proposal would act on evidence that no longer holds.
+func TestApplyRefusesWithdrawnProposal(t *testing.T) {
+	db := openDB(t)
+	if err := db.UpsertAsset(ledger.AssetRecord{Kind: "skill", Path: "/s/comeback.md", Name: "comeback"},
+		now.Add(-StaleAfter-48*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	ps, _ := Generate(db, now)
+	if _, err := Store(db, ps, now); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := db.ListProposals(true)
+	id := pending[0].ID
+
+	if err := db.InsertRun(ledger.RunRecord{Path: "/run/a.jsonl", Kind: "session", StartedAt: now.Add(-1 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	runID, err := db.RunIDByPath("/run/a.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceAssetUsage(runID, []ledger.ResolvedTouch{{ToolUseID: "t1", AssetPath: "/s/comeback.md"}}); err != nil {
+		t.Fatal(err)
+	}
+	ps, _ = Generate(db, now)
+	if _, err := Store(db, ps, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Apply(db, id, now); err == nil {
+		t.Error("Apply on a withdrawn proposal succeeded, want a refusal")
+	}
+}
+
 // The rule that is not a setting: Loom refuses to apply anything touching the
 // user's files, and refusing is not an error the caller can configure away.
 func TestApplyRefusesAnythingTouchingUserFiles(t *testing.T) {

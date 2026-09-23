@@ -14,6 +14,12 @@ const (
 	// so the record says what happened, not merely that it stopped being
 	// shown.
 	ProposalApplied = "applied"
+	// ProposalWithdrawn means the generator stopped producing this proposal -
+	// the evidence it rested on no longer holds. Kept distinct from dismissed
+	// for the same reason applied is: "the situation changed" is a different
+	// event from "a human rejected it", and collapsing them loses the thing
+	// the ledger is for (issue #40).
+	ProposalWithdrawn = "withdrawn"
 )
 
 // MaxPendingProposals bounds how many proposals can be waiting at once.
@@ -86,6 +92,38 @@ func (d *DB) UpsertProposal(p ProposalRow, at time.Time) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// WithdrawStalePending marks pending proposals withdrawn when the generator
+// no longer produces them - the case UpsertProposal's dedupe rule leaves
+// silent (evidence gone, not changed, so nothing re-raises and nothing
+// removes it either). generated is the (kind, subject) pairs, as
+// "kind|subject", that the current run actually produced; any row still
+// status=pending but not in that set has outlived its own evidence.
+//
+// Dismissed and applied rows are untouched - a proposal a human already
+// acted on is not this function's concern either way.
+//
+// Callers should run this before re-upserting the generated set, not after:
+// MaxPendingProposals' cap (in UpsertProposal) counts status=pending rows, so
+// withdrawing stale ones first is what lets a newly-generated proposal use
+// the slot a now-stale one just gave up, in the same pass (issue #40's
+// second half: "the cap should count only proposals the generator still
+// stands behind").
+func (d *DB) WithdrawStalePending(generated map[string]bool) error {
+	pending, err := d.ListProposals(true)
+	if err != nil {
+		return err
+	}
+	for _, p := range pending {
+		if generated[p.Kind+"|"+p.Subject] {
+			continue
+		}
+		if _, err := d.sql.Exec(`UPDATE proposals SET status = ? WHERE id = ?`, ProposalWithdrawn, p.ID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CountPendingProposals reports how many proposals are currently waiting.

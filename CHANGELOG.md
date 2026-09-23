@@ -123,6 +123,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A pending proposal was never withdrawn when its evidence stopped holding (#40) - `UpsertProposal`'s
+  dedupe rule only ever inserted, replaced, or left alone, so a proposal stayed pending, quoting
+  stale numbers, until a human dismissed something that was never wrong so much as out of date. New
+  `ProposalWithdrawn` status, distinct from dismissed (a different event: the generator changed its
+  mind, not a human). `Store` now withdraws stale pending rows before its own upsert loop, which lets
+  a genuinely new proposal use the slot a withdrawn one just freed in the same pass, since
+  `MaxPendingProposals` counts pending rows only. `Apply` refuses a withdrawn proposal the same way it
+  already refused an applied one.
+
 - `get_recommendation` serialised an empty `matches` list as JSON `null` rather than `[]`, found by
   calling the live MCP tool for real rather than trusting the test suite - the existing test built
   its expectation by unmarshaling the response back into a Go slice, and `nil` and `[]T{}` unmarshal
