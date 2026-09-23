@@ -1,9 +1,9 @@
 // Package mcp is the primary integration surface: an MCP server over stdio
-// exposing tools to query the ledger, get a task recommendation, list and
-// dismiss proposals, and record an outcome. See docs/design.md ("Integration
-// - MCP first"). Built on github.com/modelcontextprotocol/go-sdk.
+// exposing get_recommendation, a task recommendation tool. See docs/design.md
+// ("Integration - MCP first"). Built on github.com/modelcontextprotocol/go-sdk.
 //
-// Five tools, all advisory: query_ledger, get_recommendation, list_proposals,
-// dismiss_proposal (added in B5b), and record_outcome. None of them write to
-// a human-authored file - constraint 8.
+// One tool, advisory only, and it does not write to a human-authored file -
+// constraint 8. Everything else (querying the ledger, listing/dismissing
+// proposals, recording an outcome) is CLI-only - see cmd/loom and
+// docs/design.md, "MCP server shape, narrowed further".
 package mcp

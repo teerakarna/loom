@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -12,7 +11,7 @@ import (
 
 // runServe starts Loom's MCP server on stdio and blocks until the client
 // disconnects. This is the primary integration surface (docs/design.md,
-// "Integration — MCP first") — no separate daemon process, no socket, no
+// "Integration, MCP first"), no separate daemon process, no socket, no
 // flags: a client spawns `loom serve` as a subprocess per its own MCP
 // server config.
 func runServe(_ []string) error {
@@ -26,10 +25,6 @@ func runServe(_ []string) error {
 	}
 	defer func() { _ = db.Close() }()
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	server := mcp.NewServer(db, home)
+	server := mcp.NewServer(db)
 	return server.Run(context.Background(), &gomcp.StdioTransport{})
 }
