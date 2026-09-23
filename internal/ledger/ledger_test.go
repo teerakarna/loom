@@ -330,3 +330,76 @@ func TestUpsertProposalRevivalRespectsThePendingCap(t *testing.T) {
 		t.Errorf("reviving into a full queue = (%v, %v), want (false, nil) - revival must respect the cap", ok, err)
 	}
 }
+
+// TestNeedsIngestBackfillsOnFeatureVersionBump is the regression test for
+// issue #49: a file whose size hasn't changed since before a new derived
+// table shipped never got that table's data, forever, because size alone
+// can't tell "unchanged content" from "unchanged content but loom has grown
+// a new table since". InsertRun always stamps the current feature version,
+// so simulating "ingested by an older loom" means writing feature_version
+// back down by hand, the same way a real pre-bump ledger would read.
+func TestNeedsIngestBackfillsOnFeatureVersionBump(t *testing.T) {
+	db := openTestDB(t)
+	const path = "old-session.jsonl"
+
+	if err := db.InsertRun(RunRecord{Path: path, SizeBytes: 1000, Kind: "session"}); err != nil {
+		t.Fatal(err)
+	}
+	if needs, err := db.NeedsIngest(path, 1000); err != nil || needs {
+		t.Fatalf("setup: NeedsIngest right after InsertRun = (%v, %v), want (false, nil)", needs, err)
+	}
+
+	if _, err := db.sql.Exec(`UPDATE runs SET feature_version = 0 WHERE path = ?`, path); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same size as before, but stamped below CurrentFeatureVersion - must
+	// re-ingest even though nothing about the file itself changed.
+	if needs, err := db.NeedsIngest(path, 1000); err != nil || !needs {
+		t.Errorf("NeedsIngest on an unchanged-size run below CurrentFeatureVersion = (%v, %v), want (true, nil) - this is the backfill gap", needs, err)
+	}
+
+	// Re-ingesting (InsertRun always stamps CurrentFeatureVersion) settles it.
+	if err := db.InsertRun(RunRecord{Path: path, SizeBytes: 1000, Kind: "session"}); err != nil {
+		t.Fatal(err)
+	}
+	if needs, err := db.NeedsIngest(path, 1000); err != nil || needs {
+		t.Errorf("NeedsIngest after re-ingesting = (%v, %v), want (false, nil)", needs, err)
+	}
+}
+
+// TestMigrateFeatureVersionBackfillsExistingRuns confirms a ledger that
+// predates the feature_version column (every ledger before this change)
+// gets every one of its runs re-ingested once, automatically: DEFAULT 0 on
+// ADD COLUMN backfills existing rows with 0, which is below
+// CurrentFeatureVersion, so NeedsIngest reports true for all of them without
+// anyone needing to know the column was ever missing.
+func TestMigrateFeatureVersionBackfillsExistingRuns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`
+		CREATE TABLE runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE,
+			size_bytes INTEGER NOT NULL DEFAULT 0, kind TEXT NOT NULL,
+			weighted_cost REAL NOT NULL DEFAULT 0
+		);
+		INSERT INTO runs (path, size_bytes, kind) VALUES ('pre-existing.jsonl', 500, 'session');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Open(path) // runs the migration
+	if err != nil {
+		t.Fatalf("Open on a pre-feature-version ledger failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if needs, err := db.NeedsIngest("pre-existing.jsonl", 500); err != nil || !needs {
+		t.Errorf("NeedsIngest on a migrated pre-existing run, same size = (%v, %v), want (true, nil) - it must backfill once", needs, err)
+	}
+}

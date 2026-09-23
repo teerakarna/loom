@@ -7,6 +7,19 @@ import (
 	"github.com/teerakarna/loom/internal/ingest"
 )
 
+// CurrentFeatureVersion is the schema/feature version InsertRun stamps onto
+// every run it writes. Bump it whenever a new derived table or column needs
+// data backfilled onto files that were ingested before that feature existed
+// (issue #49) - NeedsIngest re-reads any run stored below this value
+// regardless of whether its size has changed, so the backfill happens on the
+// next `loom report` with nothing for the user to know or ask for.
+//
+// 1 is B7b/B7a's occupancy and asset-usage tables (tool_usage, compactions,
+// asset_usage), the gap this mechanism was built to close: a session file
+// untouched since before those tables existed had a runs row but none of
+// their data, forever, confirmed on this machine's own real ledger.
+const CurrentFeatureVersion = 1
+
 // RunRecord is what gets written to the runs table for one ingested
 // transcript file. ReportedSubagentTokens/ReportedToolUses/ReportedDurationMs
 // are pointers so "not an agent run" and "agent run, but no notification
@@ -46,8 +59,8 @@ func (d *DB) InsertRun(r RunRecord) error {
 			path, size_bytes, session_id, kind, model, lane, agent_type, effort, started_at, ended_at,
 			input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
 			weighted_cost, tool_use_count, denial_count, feedback_count,
-			reported_subagent_tokens, reported_tool_uses, reported_duration_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			reported_subagent_tokens, reported_tool_uses, reported_duration_ms, feature_version
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path) DO UPDATE SET
 			size_bytes = excluded.size_bytes, session_id = excluded.session_id,
 			kind = excluded.kind, model = excluded.model, lane = excluded.lane,
@@ -60,11 +73,12 @@ func (d *DB) InsertRun(r RunRecord) error {
 			denial_count = excluded.denial_count, feedback_count = excluded.feedback_count,
 			reported_subagent_tokens = excluded.reported_subagent_tokens,
 			reported_tool_uses = excluded.reported_tool_uses,
-			reported_duration_ms = excluded.reported_duration_ms`,
+			reported_duration_ms = excluded.reported_duration_ms,
+			feature_version = excluded.feature_version`,
 		r.Path, r.SizeBytes, r.SessionID, r.Kind, r.Model, r.Lane, r.AgentType, r.Effort, formatTime(r.StartedAt), formatTime(r.EndedAt),
 		r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheCreationTokens,
 		r.WeightedCost, r.ToolUseCount, r.DenialCount, r.FeedbackCount,
-		r.ReportedSubagentTokens, r.ReportedToolUses, r.ReportedDurationMs,
+		r.ReportedSubagentTokens, r.ReportedToolUses, r.ReportedDurationMs, CurrentFeatureVersion,
 	)
 	return err
 }

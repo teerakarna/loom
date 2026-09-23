@@ -123,6 +123,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A file whose size never changed since before a new ingest feature shipped never gained that
+  feature's data (#49) - `NeedsIngest` only ever asked "has this file's size changed", so B7b/B7a's
+  `tool_usage`/`compactions`/`asset_usage` tables silently never backfilled onto anything already
+  ingested before those tables existed, confirmed against this machine's own real ledger. New
+  `runs.feature_version` column, stamped by `InsertRun` on every write against a new
+  `ledger.CurrentFeatureVersion` constant; `NeedsIngest` now also re-reads a run stored below the
+  current value, regardless of size. `ADD COLUMN ... DEFAULT 0` backfills every existing row below
+  the current version automatically, so upgrading to this version re-ingests everything once and
+  self-heals the exact gap #49 found, not just future ones.
+
 - A pending proposal was never withdrawn when its evidence stopped holding (#40) - `UpsertProposal`'s
   dedupe rule only ever inserted, replaced, or left alone, so a proposal stayed pending, quoting
   stale numbers, until a human dismissed something that was never wrong so much as out of date. New
