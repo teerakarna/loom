@@ -1,26 +1,60 @@
 # Loom
 
-An artifact lifecycle and cost/routing engine for [Claude Code](https://claude.com/claude-code).
+[![CI](https://github.com/teerakarna/loom/actions/workflows/ci.yml/badge.svg)](https://github.com/teerakarna/loom/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/go-1.27-blue.svg)](go.mod)
+
+An artifact lifecycle and cost/routing engine for [Claude Code](https://claude.com/claude-code)
+that needs no instrumentation, no hooks, and no write access to anything you own. It reads the
+session transcripts Claude Code already writes, and never touches a file it did not create itself.
+
+**Status: pre-1.0, under active development.** Ingest, ledger and reporting; artifact discovery,
+selector and MCP server; the policy table and generated agent definitions; per-lane filtering;
+advisor proposals and the loop that re-measures after one is applied; context occupancy; promotion
+rules over memory stores. See [`docs/design.md`](docs/design.md) for the full design and current
+phase.
+
+## Why
 
 Claude Code accumulates durable artifacts - scratch drafts, memory, skills, plans, hooks, agents,
-workflows, plugins - and nothing tracks which are used, which have gone stale, what each one
-costs, or which combination fits a given task. Loom reads the session transcripts Claude Code
-already writes to disk, builds a local ledger of what actually happened, and reports where cost
-and rework go. It measures and recommends; a human applies.
+workflows, plugins - and nothing tracks which are used, which have gone stale, what each one costs,
+or which combination fits a given task. The predictable result is skills nobody invokes, plans
+nobody finishes, hooks that fire every session for no reason, and model selection by guesswork.
 
-**Status: pre-1.0, under active development.** Working today: ingest, ledger and reporting;
-artifact discovery, selector and MCP server; the policy table and generated agent definitions;
-per-lane filtering; advisor proposals and the loop that re-measures after one is applied; context
-occupancy. See [`docs/design.md`](docs/design.md) for the full design (problem, architecture,
-promotion rules, current phase and what is still ahead) and
-[`docs/transcript-schema.md`](docs/transcript-schema.md) for the transcript format Loom ingests.
+The data to answer all of it already sits on disk. Every session writes a transcript carrying the
+model, the token usage by kind, tool calls, denials and corrections - and nobody reads it.
 
-The evidence-driven half of the tool - pin proposals, retirement, regression detection - is
-tested but has not yet fired on a real corpus. On real data it currently reports insufficient
-evidence, which is correct and is also the point: see "Going public" in the design doc.
+**The obvious next step is a tool that acts on what it finds: retire this, rewrite that hook, edit
+this rule.** Loom is not that tool, on purpose, and has refused to become it five separate times
+while its design was under review:
 
-No content is ever stored - only derived metrics and identifiers - and there is no network
-egress from the core. See the design doc's "Design constraints, non-negotiable" section.
+| An "active steward" would | Loom does instead |
+|---|---|
+| Edit or delete a stale skill | Propose it as a reviewable diff. Never write it |
+| Rewrite a hook it judges wasteful | Report what the hook costs. You decide |
+| Auto-apply a cheaper model once confident | Propose the pin, with its evidence and sample size. `loom policy set` is one command away, never automatic |
+| Compact or consolidate your own files | Nothing. Recall and rewriting a human's own record is out of scope, permanently |
+
+Everything Loom writes to lives in its own SQLite ledger and its own generated-output directory.
+Nothing else. A tool in this space once shipped a version that deleted users' hand-written hook
+entries; that class of failure is designed out here, not carefully avoided.
+
+## How it works
+
+1. **Ingest.** Read every session transcript under `~/.claude/projects`, retroactively over
+   whatever history already exists, then incrementally as new lines are appended. No hooks, no
+   instrumentation - the measurement layer needs none, because the data already exists.
+2. **Store, as derived metrics only.** Token usage, tool calls, denials, timestamps, byte counts,
+   file paths. Never message content. A planted-secret test in CI enforces this on every change,
+   not just on the day it was written.
+3. **Recommend, never apply.** Cost by model and by agent type, which artifacts a task actually
+   needs, which memory files have drifted or gone stale, which policy would pay for itself. Every
+   answer carries its own sample size, so a figure backed by one run never renders identically to
+   one backed by fifty.
+4. **Surface findings as proposals.** Structural, evidence-backed, capped at 20 pending at once, and
+   deduplicated so a dismissal survives until the underlying facts actually change. You act on them,
+   or don't - `loom propose apply` covers only what touches Loom's own state, and reverts in one
+   command.
 
 ## Install
 
@@ -35,24 +69,56 @@ Optionally register the MCP server with Claude Code, so a session can query its 
 /plugin install loom@loom
 ```
 
-The plugin does not contain the binary - install it first. See [`plugin/README.md`](plugin/README.md).
+The plugin does not contain the binary and does not fetch one - install it first. See
+[`plugin/README.md`](plugin/README.md).
 
-## Usage
+## Quick start
 
 ```sh
-loom report                  # ingest ~/.claude/projects, print a cost/usage report
-loom status                  # what Loom knows, how stale it is, and what it cannot answer
-loom context                 # what filled the context window: tool output by tool and by
-                             # bucket, and what compaction cost
-loom advise "task text"      # discover skills/agents/plans/hooks, recommend which are
-                             # relevant plus a cold-start model/effort choice
-loom propose                 # proposals the evidence supports, with what each rests on
-loom policy                  # effective model/effort per agent type, with sample sizes
-loom serve                   # run the MCP server on stdio
+loom report     # ingest ~/.claude/projects, print a cost/usage report
+loom status     # what Loom knows, how stale it is, and what it cannot answer
+loom advise "task text"   # recommend which skills/agents/plans fit, plus a model/effort choice
 ```
 
-`loom serve` exposes five tools over MCP: `query_ledger`, `get_recommendation`, `list_proposals`,
-`dismiss_proposal` and `record_outcome`.
+## Commands
+
+**Report** `loom report` `loom status` `loom context`
+**Recommend** `loom advise` `loom policy`
+**Act on evidence** `loom propose` `loom propose apply` `loom propose dismiss`
+**Integrate** `loom serve`
+
+`loom serve` runs the MCP server on stdio, exposing five tools: `query_ledger`,
+`get_recommendation`, `list_proposals`, `dismiss_proposal`, `record_outcome`.
+
+## Supported
+
+| | |
+|---|---|
+| OS | Linux (CI), macOS (daily use). Pure Go, no CGo - Windows should build, not yet verified |
+| Go | 1.27+ |
+| Transport | stdio only. No daemon, no socket, no listening port |
+
+## Safety
+
+- **No content stored, ever.** Only derived metrics and identifiers - a byte count, a model name, a
+  file path. Never message content, enforced by a test that greps the whole database for a planted
+  secret.
+- **No network egress** from the core, as an invariant, not a default.
+- **Never writes to a file it did not create.** Its own SQLite ledger and its own generated-output
+  directory. Nothing else, ever - see the "Why" table above.
+- **The ledger stays on the machine that produced it.** Never synced, committed, or backed up
+  anywhere Loom controls.
+
+Full threat model in [SECURITY.md](SECURITY.md).
+
+## Docs
+
+| | |
+|---|---|
+| [`docs/design.md`](docs/design.md) | The design, the constraints, and the build history. Read first |
+| [`docs/transcript-schema.md`](docs/transcript-schema.md) | The transcript format Loom ingests |
+| [SECURITY.md](SECURITY.md) | Threat model, and what "no content stored" actually means |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development, review, and merge requirements |
 
 ## License
 
