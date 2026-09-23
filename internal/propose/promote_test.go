@@ -61,7 +61,7 @@ func TestDetectBrokenLinks_ResolvesWithinStoreOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := detectBrokenLinks(files)
+	got := detectBrokenLinks(home, files)
 	if len(got) != 1 {
 		t.Fatalf("got %+v, want exactly one broken link (store-b's c.md -> [[b]])", got)
 	}
@@ -76,17 +76,21 @@ func TestDetectBrokenLinks_ResolvesWithinStoreOnly(t *testing.T) {
 // indexed), so a real reference to it, "[[MEMORY]] for the full index",
 // could never resolve - not because the index is actually missing, but
 // because nothing ever registered a slug for a file that was never in the
-// set being checked.
+// set being checked. Only when the index genuinely exists, though - a
+// straggler code-review finding on the first version of this fix caught
+// that the special case treated [[MEMORY]] as always resolved, even in a
+// store with no MEMORY.md at all, which is still a real broken link.
 func TestDetectBrokenLinks_MemoryIndexNeverReadsAsBroken(t *testing.T) {
 	home := t.TempDir()
 	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[MEMORY]] for the full index.")
+	writeMemoryFile(t, home, "store-a", "MEMORY.md", "- [A](a.md)")
 
 	files, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := detectBrokenLinks(files); len(got) != 0 {
-		t.Errorf("got %+v, want no broken-link proposal for [[MEMORY]] - it has no correct resolution to suggest", got)
+	if got := detectBrokenLinks(home, files); len(got) != 0 {
+		t.Errorf("got %+v, want no broken-link proposal for [[MEMORY]] - the index really exists here", got)
 	}
 
 	// A link to anything else not on disk is still reported - the special
@@ -96,9 +100,29 @@ func TestDetectBrokenLinks_MemoryIndexNeverReadsAsBroken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := detectBrokenLinks(files)
+	got := detectBrokenLinks(home, files)
 	if len(got) != 1 || got[0].Evidence["target_slug"] != "nonexistent" {
 		t.Errorf("got %+v, want exactly one broken link, to nonexistent", got)
+	}
+}
+
+// TestDetectBrokenLinks_MemoryIndexIsBrokenWhenIndexMissing is the direct
+// regression test for the code-review finding: [[MEMORY]] must still be
+// reported as broken when the store it appears in has no MEMORY.md at all
+// - the special case resolves a reference to a real index, not any
+// reference spelled the conventional way regardless of whether one exists.
+func TestDetectBrokenLinks_MemoryIndexIsBrokenWhenIndexMissing(t *testing.T) {
+	home := t.TempDir()
+	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[MEMORY]] for the full index.")
+	// Deliberately no MEMORY.md written in store-a.
+
+	files, err := asset.DiscoverAllMemory(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := detectBrokenLinks(home, files)
+	if len(got) != 1 || got[0].Evidence["target_slug"] != "MEMORY" {
+		t.Errorf("got %+v, want one broken link to MEMORY - no index exists in this store to resolve it", got)
 	}
 }
 

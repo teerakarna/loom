@@ -149,6 +149,22 @@ func readMemoryFile(path, store, filename string) (MemoryFile, bool) {
 	}, true
 }
 
+// HasMemoryIndex reports whether store has a readable MEMORY.md at all -
+// distinct from MemoryIndex's return value, which deliberately collapses
+// "missing" and "present but empty" to the same empty map, correct for its
+// own purpose (every file is equally unreachable either way) but wrong for
+// this one. detectBrokenLinks needs the distinction: a [[MEMORY]] link only
+// actually resolves if the index it names exists, not just because it's the
+// conventional target - found by code review, before this shipped, when the
+// special case for [[MEMORY]] would have unconditionally treated it as
+// resolved even in a store with no index file at all, the exact class of
+// bug this fix exists to catch, reintroduced for one specific slug.
+func HasMemoryIndex(home, store string) bool {
+	path := filepath.Join(home, ".claude", "projects", store, "memory", memoryIndexName)
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // MemoryIndex reads one store's MEMORY.md and returns the set of filenames
 // it links to (the target of a markdown link, extension stripped) - what
 // the unreachable-asset check treats as "reachable". A missing,

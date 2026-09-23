@@ -71,7 +71,7 @@ func GenerateMemoryFindings(home string) ([]Proposal, error) {
 	out = append(out, detectMemoryDuplicates(files)...)
 	out = append(out, detectFilenameSlugDrift(files)...)
 	out = append(out, detectUnreachableAssets(home, files)...)
-	out = append(out, detectBrokenLinks(files)...)
+	out = append(out, detectBrokenLinks(home, files)...)
 	return out, nil
 }
 
@@ -130,7 +130,7 @@ func detectMemoryDuplicates(files []asset.MemoryFile) []Proposal {
 // DiscoverAllMemory produced them, which is disk order (os.ReadDir sorts by
 // name), so no separate sort is needed here the way detectMemoryDuplicates
 // needs one.
-func detectBrokenLinks(files []asset.MemoryFile) []Proposal {
+func detectBrokenLinks(home string, files []asset.MemoryFile) []Proposal {
 	knownSlugs := map[string]map[string]bool{}
 	for _, f := range files {
 		if f.Slug == "" {
@@ -142,6 +142,10 @@ func detectBrokenLinks(files []asset.MemoryFile) []Proposal {
 		knownSlugs[f.Store][f.Slug] = true
 	}
 
+	// Cached per store, not checked once globally: HasMemoryIndex costs one
+	// os.Stat, cheap, but every file in a store would otherwise repeat it.
+	hasIndex := map[string]bool{}
+
 	var out []Proposal
 	for _, f := range files {
 		for _, link := range f.Links {
@@ -150,8 +154,20 @@ func detectBrokenLinks(files []asset.MemoryFile) []Proposal {
 			// being indexed - see memoryIndexName), so it never gets a Slug
 			// to register here. Without this, a real, legitimate reference
 			// to it - "[[MEMORY]] for the full index" - reads as broken
-			// forever, with no correct resolution possible (issue #65).
-			if link == asset.MemoryIndexSlug || knownSlugs[f.Store][link] {
+			// forever, with no correct resolution possible (issue #65). But
+			// only when the index actually exists - a store with no
+			// MEMORY.md at all has nothing for [[MEMORY]] to resolve to,
+			// and that is still a real broken link, not a free pass just
+			// because it names the conventional target (found by code
+			// review, before this shipped).
+			if link == asset.MemoryIndexSlug {
+				if _, cached := hasIndex[f.Store]; !cached {
+					hasIndex[f.Store] = asset.HasMemoryIndex(home, f.Store)
+				}
+				if hasIndex[f.Store] {
+					continue
+				}
+			} else if knownSlugs[f.Store][link] {
 				continue
 			}
 			subject := f.Store + "/" + f.Filename + " -> " + link
