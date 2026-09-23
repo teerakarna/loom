@@ -188,16 +188,29 @@ func detectBrokenLinks(home string, files []asset.MemoryFile) []Proposal {
 				continue
 			}
 			subject := f.Store + "/" + f.Filename + " -> " + link
+			summary := fmt.Sprintf("%s links to [[%s]], which exists but not in this store", f.Filename, link)
+			rationale := "A [[link]] resolves against another memory file's frontmatter name in the " +
+				"same store. A file with this name exists, just not here - the reference is real, " +
+				"scoped to the wrong store. Loom will not edit it: this is a suggestion to fix the " +
+				"reference yourself."
+			// The [[MEMORY]] case that falls through here (no index in this
+			// store at all) is not the cross-store case above: the target
+			// doesn't exist anywhere, not "just not here" - found by code
+			// review, before this shipped, sharing the wrong wording with
+			// the general case.
+			if link == asset.MemoryIndexSlug {
+				summary = fmt.Sprintf("%s links to [[MEMORY]], but this store has no MEMORY.md", f.Filename)
+				rationale = "A [[MEMORY]] link resolves to the store's own index file, which does not " +
+					"exist here. Loom will not create it: this is a suggestion to add one, or fix the " +
+					"reference if the store was never meant to have one."
+			}
 			out = append(out, Proposal{
 				Kind: KindBrokenLink, Subject: subject,
 				Evidence: map[string]any{
 					"store": f.Store, "filename": f.Filename, "target_slug": link,
 				},
-				Summary: fmt.Sprintf("%s links to [[%s]], which exists but not in this store", f.Filename, link),
-				Rationale: "A [[link]] resolves against another memory file's frontmatter name in the " +
-					"same store. A file with this name exists, just not here - the reference is real, " +
-					"scoped to the wrong store. Loom will not edit it: this is a suggestion to fix the " +
-					"reference yourself.",
+				Summary:   summary,
+				Rationale: rationale,
 			})
 		}
 	}

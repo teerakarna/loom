@@ -3,6 +3,7 @@ package propose
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/teerakarna/loom/internal/asset"
@@ -121,6 +122,10 @@ func TestDetectBrokenLinks_MemoryIndexNeverReadsAsBroken(t *testing.T) {
 // reported as broken when the store it appears in has no MEMORY.md at all
 // - the special case resolves a reference to a real index, not any
 // reference spelled the conventional way regardless of whether one exists.
+// Also checks the message text itself, not just target_slug: a second
+// review pass found the first fix reused the cross-store wording ("exists,
+// just not here") for this case too, which is false - no MEMORY.md exists
+// anywhere in this scenario, not just in the wrong place.
 func TestDetectBrokenLinks_MemoryIndexIsBrokenWhenIndexMissing(t *testing.T) {
 	home := t.TempDir()
 	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[MEMORY]] for the full index.")
@@ -132,7 +137,10 @@ func TestDetectBrokenLinks_MemoryIndexIsBrokenWhenIndexMissing(t *testing.T) {
 	}
 	got := detectBrokenLinks(home, files)
 	if len(got) != 1 || got[0].Evidence["target_slug"] != "MEMORY" {
-		t.Errorf("got %+v, want one broken link to MEMORY - no index exists in this store to resolve it", got)
+		t.Fatalf("got %+v, want one broken link to MEMORY - no index exists in this store to resolve it", got)
+	}
+	if strings.Contains(got[0].Summary, "exists") || strings.Contains(got[0].Rationale, "exists, just not here") {
+		t.Errorf("Summary/Rationale = %+v, want wording that does not claim MEMORY.md exists somewhere - it does not exist at all", got[0])
 	}
 }
 
