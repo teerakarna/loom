@@ -262,3 +262,51 @@ func TestPinProposalIsNotFlaggedAsTouchingUserFiles(t *testing.T) {
 		t.Error("expected a pin proposal once the sample threshold is met")
 	}
 }
+
+// TestGetRecommendationBelowThresholdSurfacesOverMCP is the live-tool
+// counterpart to selector.TestRecommendFallsBackToWeakMatchesRatherThanNone
+// (issue #64): a weak-but-real match must reach an MCP caller with
+// below_threshold set, not just the CLI. Text chosen to share only "vendor"
+// with the candidate's description - real overlap, too thin on its own to
+// clear minScore, exactly the case the fallback exists for.
+func TestGetRecommendationBelowThresholdSurfacesOverMCP(t *testing.T) {
+	session, db := connectTestClient(t)
+	rec := ledger.AssetRecord{
+		Kind: "memory", Path: "/mem/a.md", Name: "vendor-onboarding-checklist",
+		Description: "steps to onboard a new vendor into the procurement system",
+	}
+	if err := db.UpsertAsset(rec, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	out := callTool[RecommendationOutput](t, session, "get_recommendation", map[string]any{
+		"text": "chase outstanding invoices and confirm the vendor has been paid for last quarter's work",
+	})
+	if len(out.Matches) == 0 {
+		t.Fatal("got no matches, want the weak-but-real vendor match surfaced instead of silence")
+	}
+	if !out.BelowThreshold {
+		t.Error("BelowThreshold = false over MCP, want true - this match didn't clear minScore on its own merits")
+	}
+}
+
+// TestGetRecommendationUsesAgentTypePolicyOverMCP is the live-tool
+// counterpart to selector.TestRecommendPrefersEvidenceBackedPolicyOverColdStart
+// (issue #63): a caller that passes agent_type gets that type's real
+// policy, not a cold-start keyword guess, even when the task text would
+// otherwise read as planning-flavored.
+func TestGetRecommendationUsesAgentTypePolicyOverMCP(t *testing.T) {
+	session, db := connectTestClient(t)
+	if err := db.UpsertPolicy(ledger.PolicyRow{
+		AgentType: "Explore", Model: "haiku", Effort: "low", Source: "evidence", SampleSize: 68,
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	out := callTool[RecommendationOutput](t, session, "get_recommendation", map[string]any{
+		"text": "design the architecture and decide on the right tradeoff", "agent_type": "Explore",
+	})
+	if out.Model != "haiku" || out.Effort != "low" {
+		t.Errorf("got model=%s effort=%s over MCP, want the policy's haiku/low, not a cold-start guess", out.Model, out.Effort)
+	}
+}

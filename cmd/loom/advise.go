@@ -17,11 +17,38 @@ import (
 // across several invocations.
 const staleAfter = 30 * 24 * time.Hour
 
-func runAdvise(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: loom advise <task description>")
+const adviseUsage = "usage: loom advise [--agent-type <type>] <task description>"
+
+// parseAdviseArgs is split out from runAdvise so the parsing logic can be
+// tested directly (same reasoning as parseRecordOutcomeArgs). --agent-type
+// must precede the task text: once the first non-flag token appears,
+// everything remaining is the task description, even if it happens to
+// contain the literal words "--agent-type".
+func parseAdviseArgs(args []string) (agentType, text string, err error) {
+	i := 0
+	for ; i < len(args); i++ {
+		if args[i] == "--agent-type" {
+			if i+1 >= len(args) {
+				return "", "", fmt.Errorf("--agent-type needs a value (see `loom policy` for the agent types in your ledger)")
+			}
+			agentType = args[i+1]
+			i++
+			continue
+		}
+		break
 	}
-	text := strings.Join(args, " ")
+	rest := args[i:]
+	if len(rest) == 0 {
+		return "", "", fmt.Errorf("%s", adviseUsage)
+	}
+	return agentType, strings.Join(rest, " "), nil
+}
+
+func runAdvise(args []string) error {
+	agentType, text, err := parseAdviseArgs(args)
+	if err != nil {
+		return err
+	}
 
 	ledgerPath, err := defaultLedgerPath()
 	if err != nil {
@@ -41,7 +68,18 @@ func runAdvise(args []string) error {
 	if err != nil {
 		return err
 	}
-	rec := selector.Recommend(selector.TaskDescriptor{Text: text}, activeOnly(assets))
+	// A live policy for a known agent type is real evidence, measured on
+	// this machine's own runs - preferred over the keyword-only cold-start
+	// guess whenever one exists (issue #63). nil when no agent type was
+	// given, or none has a policy yet, and Recommend falls back unchanged.
+	var policy *ledger.PolicyRow
+	if agentType != "" {
+		policy, err = db.GetPolicy(agentType)
+		if err != nil {
+			return err
+		}
+	}
+	rec := selector.Recommend(selector.TaskDescriptor{Text: text}, activeOnly(assets), policy)
 
 	printRecommendation(rec)
 	return nil
@@ -94,7 +132,11 @@ func printRecommendation(rec selector.Recommendation) {
 		fmt.Println("\nNo matching skills/agents/plans found.")
 		return
 	}
-	fmt.Println("\nRelevant assets:")
+	if rec.BelowThreshold {
+		fmt.Println("\nNo strong match - closest guesses shown, weigh these accordingly:")
+	} else {
+		fmt.Println("\nRelevant assets:")
+	}
 	for _, m := range rec.Matches {
 		warn := ""
 		if m.Suspicious {

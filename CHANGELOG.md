@@ -65,6 +65,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `loom advise --agent-type <type>` and `get_recommendation`'s new optional `agent_type` (#63, found
+  on the AMC trial - `loom policy` showed four evidence-backed agent-type policies, `loom advise` on
+  the same ledger still said "no history yet to personalize from"). When given and a policy exists,
+  `selector.Recommend` uses that real, measured (or hand-set) policy directly instead of a cold-start
+  keyword guess - `selector` stays database-free, the caller resolves and passes in the `*ledger.PolicyRow`.
+
+### Changed
+
+- `loom advise`'s cold-start heuristic no longer escalates to `opus` on a single incidental keyword
+  (#63) - the query that found this, a debugging task, matched "why" and got `opus`/`high` although
+  `opus` costs roughly 272x `sonnet`'s per-run cost on the corpus measured. `"why"` removed from
+  `planningWords` (too common in ordinary debugging phrasing), and escalating now needs at least two
+  distinct planning-keyword hits (`minPlanningHits`), not a one-word margin. Ambiguity now defaults
+  cheap, not expensive.
+
+- `loom advise`/`get_recommendation` no longer return nothing on a lexical near-miss (#64) - a real
+  memory file named `devicefarm-public-devices-fail-device-gate` scored zero against a query
+  containing "Device Farm" because "device"+"farm" (the query's spacing) and "devicefarm" (the
+  asset's own naming) were different token strings. New `tokenizeWithCompounds` adds adjacent-word
+  concatenations as bonus match tokens, on both sides, without inflating the score's denominator.
+  `Recommend` also never returns fully empty when something, even weak, scored above zero - the best
+  candidates surface with a new `BelowThreshold` flag instead of silence.
+
 - `loom propose --lane <lane>` (#68, found on the AMC trial - 14 of 20 pending proposals on that
   machine belonged to a different lane than the session running the command, printing another
   project's memory-store paths uninvited). Narrows the four B7c memory-finding kinds to one store;

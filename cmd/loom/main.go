@@ -50,8 +50,11 @@ Usage:
                             Ingest transcripts under path (default ~/.claude/projects)
                              and print an aggregate cost/usage report, optionally
                              narrowed to one lane (the project directory a session ran in).
-  loom advise <task text>   Discover skills/agents/plans/hooks, and recommend which
-                             are relevant plus a cold-start model/effort choice.
+  loom advise [--agent-type <type>] <task text>
+                             Discover skills/agents/plans/hooks, and recommend which
+                             are relevant plus a model/effort choice. With --agent-type,
+                             uses that type's real policy (loom policy) when one exists,
+                             instead of a keyword-only cold-start guess.
   loom status [path]        Report on loom itself: freshness, what it knows, and what
                              it cannot answer. Read-only, never ingests.
   loom context [--lane <lane>]
