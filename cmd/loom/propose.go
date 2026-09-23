@@ -25,7 +25,16 @@ var laneScopedKinds = map[string]bool{
 
 // filterPendingByLane keeps every proposal whose kind isn't lane-scoped
 // (pin_model, revert_policy, retire_asset - shown regardless), plus any
-// lane-scoped proposal whose own store matches lane.
+// lane-scoped proposal that touches lane.
+//
+// Two evidence shapes, not one: three of the four kinds carry a singular
+// "store" (the one store the finding is about), but
+// KindPromoteMemoryDuplicate's evidence is "stores", a list - the finding
+// is inherently about every store the duplicate spans, found by code
+// review, before this shipped. Checking "store" alone silently dropped
+// every duplicate-kind proposal from every --lane view, regardless of
+// lane, contradicting laneScopedKinds' own comment that all four are
+// unambiguously per-store.
 func filterPendingByLane(pending []ledger.ProposalRow, lane string) []ledger.ProposalRow {
 	out := make([]ledger.ProposalRow, 0, len(pending))
 	for _, p := range pending {
@@ -34,10 +43,21 @@ func filterPendingByLane(pending []ledger.ProposalRow, lane string) []ledger.Pro
 			continue
 		}
 		var ev struct {
-			Store string `json:"store"`
+			Store  string   `json:"store"`
+			Stores []string `json:"stores"`
 		}
-		if err := json.Unmarshal([]byte(p.Evidence), &ev); err == nil && ev.Store == lane {
+		if err := json.Unmarshal([]byte(p.Evidence), &ev); err != nil {
+			continue
+		}
+		if ev.Store == lane {
 			out = append(out, p)
+			continue
+		}
+		for _, s := range ev.Stores {
+			if s == lane {
+				out = append(out, p)
+				break
+			}
 		}
 	}
 	return out
@@ -129,10 +149,23 @@ func runPropose(args []string) error {
 	if err != nil {
 		return err
 	}
+	totalPending := len(pending)
 	if lane != "" {
 		pending = filterPendingByLane(pending, lane)
 	}
 	if len(pending) == 0 {
+		if lane != "" && totalPending > 0 {
+			// Found by code review, before this shipped: the generic
+			// "nothing in the ledger" message below is false here - there
+			// are totalPending proposals, just none for this lane. Left
+			// unqualified, a reader would reasonably conclude loom found no
+			// evidence at all rather than that the lane filter excluded
+			// everything.
+			fmt.Printf("No proposals for lane %s.\n", ingest.LaneDisplay(lane))
+			fmt.Println()
+			fmt.Printf("%d proposal(s) exist for other lanes, or aren't lane-scoped. Drop --lane to see them.\n", totalPending)
+			return nil
+		}
 		fmt.Println("No proposals.")
 		fmt.Println()
 		fmt.Println("Nothing in the ledger currently supports one. A proposal with no evidence behind")

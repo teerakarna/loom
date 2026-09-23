@@ -47,3 +47,20 @@ func TestFilterPendingByLaneUnknownLaneKeepsOnlyUnscoped(t *testing.T) {
 		t.Errorf("got %+v, want only the revert_policy proposal", got)
 	}
 }
+
+// TestFilterPendingByLaneMatchesPluralStores is the regression test for a
+// bug code review found before this shipped: KindPromoteMemoryDuplicate's
+// evidence carries "stores" (plural, a list - the finding is inherently
+// about every store the duplicate spans), not the singular "store" every
+// other lane-scoped kind uses. Checking only "store" silently dropped every
+// duplicate-kind proposal from every --lane view, regardless of lane.
+func TestFilterPendingByLaneMatchesPluralStores(t *testing.T) {
+	pending := []ledger.ProposalRow{
+		{ID: 1, Kind: propose.KindPromoteMemoryDuplicate, Evidence: `{"filename":"x","stores":["lane-a","lane-b","lane-c"]}`},
+		{ID: 2, Kind: propose.KindPromoteMemoryDuplicate, Evidence: `{"filename":"y","stores":["lane-b","lane-c","lane-d"]}`},
+	}
+	got := filterPendingByLane(pending, "lane-a")
+	if len(got) != 1 || got[0].ID != 1 {
+		t.Errorf("got %+v, want only the duplicate proposal whose stores includes lane-a", got)
+	}
+}
