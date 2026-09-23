@@ -125,7 +125,7 @@ func summaryFor(p ledger.ProposalRow, ev map[string]any) string {
 		return fmt.Sprintf("promote %q to a reference skill, identical across %v stores",
 			ev["filename"], ev["stores"])
 	case propose.KindBrokenLink:
-		return fmt.Sprintf("%v links to [[%v]], which does not exist in its store",
+		return fmt.Sprintf("%v links to [[%v]], which exists but not in this store",
 			ev["filename"], ev["target_slug"])
 	case propose.KindUnreachableAsset:
 		return fmt.Sprintf("%v exists but is not linked from its store's MEMORY.md", ev["filename"])
