@@ -838,6 +838,25 @@ Remaining: **B6a** if and when B6d is decided yes, and **B6d** itself, still gat
 evidence path firing on real data. Both of the pieces worth having regardless of that decision -
 B6b and B6c - are done.
 
+#### The README's install command does not work, filed and fixed - BUILT 2026-09-23
+
+Found on the first real trial on a second machine (AMC), filed as loom #57: `go install
+github.com/teerakarna/loom/cmd/loom@latest`, the README's headline command, fails for everyone while
+the repo is private, including the owner with valid credentials - `sum.golang.org` 404s on a module
+it cannot fetch, and the proxy's fallback to a direct `git ls-remote` does not go through the normal
+credential helper, so it prompts for a username with prompts disabled. The issue itself framed the
+real question correctly: this is a symptom of "go public or stay private", not a bug to patch around
+either way, so it stayed unimplemented pending a decision rather than getting a quick unprincipled
+fix.
+
+Checked directly against this section's own gate before deciding: `pin_model`/`retire_asset`/
+`revert_policy` proposal counts and the `policies` table, on this machine's real ledger, all still
+zero. The gate is unmet, so **stay private**, consistent with what this section already committed to
+rather than a fresh call. README and `plugin/README.md` now lead with a private-install path
+(`GOPRIVATE=github.com/teerakarna go install ...`, or build from a clone) instead of the command that
+does not work, and say plainly that this is deliberate, not a stale README - it goes back to a
+one-liner once B6d actually fires.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a
