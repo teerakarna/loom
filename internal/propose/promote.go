@@ -132,6 +132,17 @@ func detectMemoryDuplicates(files []asset.MemoryFile) []Proposal {
 // needs one.
 func detectBrokenLinks(home string, files []asset.MemoryFile) []Proposal {
 	knownSlugs := map[string]map[string]bool{}
+	// existsAnywhere is the same slugs, flattened across every store - what
+	// distinguishes a real broken link from a forward reference (issue #67).
+	// Claude Code's own memory convention says a [[link]] to a slug that
+	// doesn't exist yet is fine, a deliberate marker for something worth
+	// writing later, not rot: "a [[name]] that doesn't match an existing
+	// memory yet is fine". Measured on a real corpus: 185 of 214 broken_link
+	// findings (86%) were this class. A target that exists nowhere at all is
+	// indistinguishable on disk from a not-yet-written forward reference, so
+	// it is not flagged; a target that exists in a different store is a real
+	// finding (the reference is real, just scoped wrong), and still is.
+	existsAnywhere := map[string]bool{}
 	for _, f := range files {
 		if f.Slug == "" {
 			continue
@@ -140,6 +151,7 @@ func detectBrokenLinks(home string, files []asset.MemoryFile) []Proposal {
 			knownSlugs[f.Store] = map[string]bool{}
 		}
 		knownSlugs[f.Store][f.Slug] = true
+		existsAnywhere[f.Slug] = true
 	}
 
 	// Cached per store, not checked once globally: HasMemoryIndex costs one
@@ -167,7 +179,12 @@ func detectBrokenLinks(home string, files []asset.MemoryFile) []Proposal {
 				if hasIndex[f.Store] {
 					continue
 				}
-			} else if knownSlugs[f.Store][link] {
+			} else if knownSlugs[f.Store][link] || !existsAnywhere[link] {
+				// Resolves here, or resolves nowhere at all - the second
+				// case is a permitted forward reference, not a defect
+				// (issue #67), and looks identical on disk to real rot;
+				// the evidence to tell them apart is intent, which the
+				// filesystem does not carry.
 				continue
 			}
 			subject := f.Store + "/" + f.Filename + " -> " + link
@@ -176,11 +193,11 @@ func detectBrokenLinks(home string, files []asset.MemoryFile) []Proposal {
 				Evidence: map[string]any{
 					"store": f.Store, "filename": f.Filename, "target_slug": link,
 				},
-				Summary: fmt.Sprintf("%s links to [[%s]], which does not exist in its store", f.Filename, link),
+				Summary: fmt.Sprintf("%s links to [[%s]], which exists but not in this store", f.Filename, link),
 				Rationale: "A [[link]] resolves against another memory file's frontmatter name in the " +
-					"same store. No file with this name was found there - the target was renamed, " +
-					"moved, or never existed under that name. Loom will not edit it: this is a " +
-					"suggestion to fix the reference yourself.",
+					"same store. A file with this name exists, just not here - the reference is real, " +
+					"scoped to the wrong store. Loom will not edit it: this is a suggestion to fix the " +
+					"reference yourself.",
 			})
 		}
 	}
