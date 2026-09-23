@@ -977,6 +977,30 @@ coincidence: with the forward-reference class gone, `broken_link` shrank from 21
 interleave-by-kind fix stays, as defense against whichever kind is ever loud again, but this is the fix
 that actually explains why it was loud this time.
 
+#### loom propose gained --lane - BUILT 2026-09-23
+
+Issue #68, also from the AMC trial: `loom report`/`loom context` both accept `--lane <lane>` to narrow
+to one project directory, `loom propose` did not, and `GenerateMemoryFindings` scans every store
+unconditionally with no lane attached to the result. On the machine that found this, 14 of 20 pending
+proposals belonged to a different lane than the session running the command - not just noise, a
+boundary the tool was crossing uninvited on a machine that deliberately keeps its lanes separate, and
+sharp because #65's global cap meant a lane's own findings could be crowded out entirely with no way to
+narrow back to them.
+
+`--lane` now filters `loom propose`'s **display** only, to the four B7c memory-finding kinds
+(`MemoryFile.Store` is already exactly the same slug `--lane` filters on elsewhere, nothing new needed
+discovering). `pin_model`/`revert_policy`/`retire_asset` show regardless of `--lane` and the output says
+so: their evidence is not store-shaped, and the policy they write is machine-global, so filtering them
+by lane would misrepresent what applying one actually does - the smallest useful version the issue
+itself named, rather than pretending otherwise.
+
+Deliberately a display filter, not a generation filter: `Store` still receives the full, unfiltered
+generated set on every `--lane` run, never a lane-narrowed one. `Store` withdraws any pending proposal
+its input doesn't contain (issue #40) - passing it a filtered subset would have made `--lane` an
+accidental way to withdraw every other lane's still-valid proposals as a side effect of narrowing one
+session's own view. Verified for real: ran `--lane` against this machine's own dotfiles lane, confirmed
+the pending count in the ledger stayed at 20 (nothing withdrawn), only the printed list narrowed.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

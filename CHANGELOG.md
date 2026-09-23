@@ -53,6 +53,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `loom propose --lane <lane>` (#68, found on the AMC trial - 14 of 20 pending proposals on that
+  machine belonged to a different lane than the session running the command, printing another
+  project's memory-store paths uninvited). Narrows the four B7c memory-finding kinds to one store;
+  `pin_model`/`revert_policy`/`retire_asset` always show, since the policy they write is
+  machine-global and filtering them by lane would misrepresent what applying one actually does.
+  Display-only: `Store` still gets the full, unfiltered set on every run, so `--lane` can never
+  withdraw another lane's still-valid proposals as a side effect of narrowing this one's view.
+
 - Promotion rules as read-only proposals (B7c, #41): four structural checks over every project's
   memory store, cross-project via a new `asset.DiscoverAllMemory` (the one place Loom looks
   beyond home + the current project). A memory file byte-identical across three or more stores is
