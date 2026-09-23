@@ -1072,10 +1072,26 @@ scorers are returned anyway with a new `BelowThreshold` flag, surfaced in the CL
 live-tool test - a caller can discard a weak guess, but cannot discover an asset it was never told
 about.
 
-Both issues verified for real, not just by unit test: `loom advise --agent-type Explore` against a
-scratch ledger with a hand-set policy printed that policy's model, not a cold-start guess; the
-`devicefarm` compound match and the weak-signal-does-not-escalate fix both confirmed against the
-issue's own real query text.
+**A real bug found by `/code-review high` before merge, confirmed by reproduction, not just argued.**
+`SkillMatch.Score`'s own doc comment promises a 0 to 1 range, and the compound-match fix above broke
+it: `queryMatchTokens` (the numerator side) can have more members than `queryTokens` (the denominator)
+- every compound is an extra token on top of the unigrams already counted - so a candidate whose own
+description independently repeats the same phrase the query uses matches both the unigrams and their
+compound separately, and overlap can exceed the query's own token count. Reproduced directly: `"device
+farm"` against a candidate whose own description also contains "Device Farm" scored `1.5`. A caller
+treating that as a confidence fraction - the CLI's `[%.2f]`, the MCP JSON `score` field - would see a
+nonsensical result. Fixed by clamping `score`'s return value to `1`, the minimal fix that restores the
+documented invariant without complicating the matching semantics further. The same pass found
+`tokenizeWithCompounds` lowercasing and regex-tokenizing its input twice (once inside its own call to
+`tokenize`, once again to build compounds) for no reason - not a correctness bug, but real waste on
+every candidate scored on every `Recommend` call; fixed by splitting the words once and deriving both
+the unigram set and the compounds from that single pass.
+
+Every issue in this section verified for real, not just by unit test: `loom advise --agent-type
+Explore` against a scratch ledger with a hand-set policy printed that policy's model, not a cold-start
+guess; the `devicefarm` compound match and the weak-signal-does-not-escalate fix both confirmed
+against the issue's own real query text; the score-clamp fix confirmed against the exact reproduction
+that found it.
 
 ### B7 scope, agreed 2026-09-22
 

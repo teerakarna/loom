@@ -48,6 +48,33 @@ func TestRecommendMatchesCompoundAssetName(t *testing.T) {
 	if rec.Matches[0].Name != "devicefarm-public-devices-fail-device-gate" {
 		t.Errorf("top match = %q, want the devicefarm asset", rec.Matches[0].Name)
 	}
+	for _, m := range rec.Matches {
+		if m.Score > 1 {
+			t.Errorf("%s: Score = %v, want <= 1", m.Name, m.Score)
+		}
+	}
+}
+
+// TestScoreNeverExceedsOne is the direct regression test for a bug code
+// review found by reproduction, before this shipped: a candidate whose own
+// description independently repeats the same phrase the query uses can
+// match both the query's unigrams ("device", "farm") and their compound
+// ("devicefarm") separately, so overlap exceeded the query's own token
+// count and score returned 1.5 - breaking SkillMatch.Score's documented 0
+// to 1 range. A caller treating that as a confidence fraction (the CLI's
+// "[%.2f]", the MCP JSON score field) would see a nonsensical value.
+func TestScoreNeverExceedsOne(t *testing.T) {
+	assets := []ledger.AssetRow{
+		{Kind: "memory", Name: "devicefarm-public-devices-fail-device-gate", Path: "/mem/a.md",
+			Description: "iOS fails on Device Farm's public devices at the gate check"},
+	}
+	rec := Recommend(TaskDescriptor{Text: "device farm"}, assets, nil)
+	if len(rec.Matches) == 0 {
+		t.Fatal("got no matches, want the devicefarm asset to surface")
+	}
+	if rec.Matches[0].Score > 1 {
+		t.Errorf("Score = %v, want <= 1 - this is the exact reproduction that found the bug", rec.Matches[0].Score)
+	}
 }
 
 // TestRecommendFallsBackToWeakMatchesRatherThanNone is the regression test

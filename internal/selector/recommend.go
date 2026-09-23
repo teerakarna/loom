@@ -104,25 +104,36 @@ func tokenize(s string) map[string]bool {
 // tokenize, and zero overlap between "device"+"farm" and "devicefarm" no
 // matter how relevant the match. Confirmed on a real corpus (issue #64):
 // four real memory files with "devicefarm" in the name, zero of them
-// matched a query containing "Device Farm". Computed from the raw word
-// list before stopword filtering, since a genuine compound rarely has a
-// stopword between its two halves anyway ("Device Farm", not "Device the
-// Farm"). Used for matching only, never for the score's denominator - see
-// score - so it can only add overlap, never take any away.
+// matched a query containing "Device Farm". Compounds are built from the
+// raw word list before stopword filtering, since a genuine compound rarely
+// has a stopword between its two halves anyway ("Device Farm", not "Device
+// the Farm"). Used for matching only, never for the score's denominator -
+// see score - so it can only add overlap, never take any away.
+//
+// Splits and lowercases s once, not twice: an earlier version called
+// tokenize(s) (its own full lowercase+regex pass) and then repeated the
+// same lowercase+regex pass itself to build compounds - found by code
+// review, wasteful since this runs once per candidate on every Recommend
+// call, not a correctness bug but free to fix in the same pass.
 func tokenizeWithCompounds(s string) map[string]bool {
-	out := tokenize(s)
 	words := tokenPattern.FindAllString(strings.ToLower(s), -1)
-	for i := 0; i+1 < len(words); i++ {
-		out[words[i]+words[i+1]] = true
+	out := map[string]bool{}
+	for i, w := range words {
+		if !stopwords[w] {
+			out[w] = true
+		}
+		if i+1 < len(words) {
+			out[w+words[i+1]] = true
+		}
 	}
 	return out
 }
 
-// score is |queryMatchTokens ∩ candidateTokens| / |queryTokens|, how much of
-// the task descriptor this asset's own words account for. Deliberately
-// asymmetric (not Jaccard over the union): a short, precise skill description
-// that is a subset of a long task descriptor should score as a strong match,
-// not get penalized for being short.
+// score is |queryMatchTokens ∩ candidateTokens| / |queryTokens|, clamped to
+// 1, how much of the task descriptor this asset's own words account for.
+// Deliberately asymmetric (not Jaccard over the union): a short, precise
+// skill description that is a subset of a long task descriptor should score
+// as a strong match, not get penalized for being short.
 //
 // queryTokens (the denominator) and queryMatchTokens (the numerator side) are
 // deliberately different sets: queryMatchTokens includes compound-word
@@ -131,6 +142,18 @@ func tokenizeWithCompounds(s string) map[string]bool {
 // as any bonus overlap grows the numerator, erasing the benefit for exactly
 // the long, natural-language queries it's meant to help (verified by hand
 // against issue #64's own real query before shipping this shape).
+//
+// The clamp is load-bearing, not defensive dressing: queryMatchTokens can
+// have more members than queryTokens (every compound is an extra token on
+// top of the unigrams already counted), so when a candidate independently
+// contains both a query's unigrams and their compound - a real case, not
+// hypothetical: a candidate whose own description repeats the same phrase
+// the query uses - overlap can exceed len(queryTokens) and the fraction
+// would exceed 1 without this. Confirmed by reproduction before this
+// shipped: "device farm" against a candidate whose own description also
+// contains "Device Farm" scored 1.5. SkillMatch.Score's own doc comment
+// promises 0 to 1; a caller (CLI printf, MCP JSON) treating an unclamped
+// value as a confidence fraction would see a nonsensical result.
 func score(queryTokens, queryMatchTokens, candidate map[string]bool) float64 {
 	if len(queryTokens) == 0 || len(candidate) == 0 {
 		return 0
@@ -141,7 +164,11 @@ func score(queryTokens, queryMatchTokens, candidate map[string]bool) float64 {
 			overlap++
 		}
 	}
-	return float64(overlap) / float64(len(queryTokens))
+	s := float64(overlap) / float64(len(queryTokens))
+	if s > 1 {
+		return 1
+	}
+	return s
 }
 
 // Recommend scores every active asset in assets against desc and returns

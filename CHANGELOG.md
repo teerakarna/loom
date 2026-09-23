@@ -88,6 +88,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Recommend` also never returns fully empty when something, even weak, scored above zero - the best
   candidates surface with a new `BelowThreshold` flag instead of silence.
 
+  Reviewed before merge, and a real bug survived until it was: the compound-match fix above broke
+  `SkillMatch.Score`'s documented 0-1 range, since the numerator side can have more tokens than the
+  denominator (every compound is extra, on top of the unigrams already counted) - a candidate whose
+  own description independently repeats the query's phrase matched both, and overlap exceeded the
+  query's own token count. Reproduced directly: `"device farm"` against a matching candidate scored
+  `1.5`. Fixed by clamping the score to `1`. Also fixed in the same pass, found by the same review:
+  `tokenizeWithCompounds` lowercased and regex-tokenized its input twice for no reason - real waste on
+  every candidate scored on every call, not a correctness bug, fixed by splitting the words once.
+
 - `loom propose --lane <lane>` (#68, found on the AMC trial - 14 of 20 pending proposals on that
   machine belonged to a different lane than the session running the command, printing another
   project's memory-store paths uninvited). Narrows the four B7c memory-finding kinds to one store;
