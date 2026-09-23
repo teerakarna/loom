@@ -903,6 +903,27 @@ brings them back once the store is readable again. Narrower and self-healing aft
 a real fix needs `internal/asset` and `internal/ledger`'s withdrawal step to share a concept ("which
 stores were actually scanned this pass") neither currently has - a design decision, not a bolt-on.
 
+#### A file that never changed size never gains a new feature's data - BUILT 2026-09-23
+
+Issue #49, found while confirming #38 - a session file untouched since before B7b/B7a's tables
+existed had a `runs` row but zero `tool_usage`/`compactions`/`asset_usage` rows, forever, because
+`NeedsIngest` only ever asked "has this file's size changed", never "does this row have every derived
+table a current loom populates". Confirmed directly against this machine's own real ledger: one file
+last modified before B7b shipped had a `runs` row whose `size_bytes` matched exactly, so every
+`loom report` since treated it as current and skipped it, silently understating the compaction/
+occupancy figures this doc itself records.
+
+New `CurrentFeatureVersion` constant (`run.go`) and a `runs.feature_version` column, stamped by
+`InsertRun` on every write. `NeedsIngest` now re-reads a file when its size changed **or** its stored
+version is below `CurrentFeatureVersion`, regardless of size - the version-stamp shape the issue asked
+for a decision on, over a `--force` flag, because it needs nothing from the user, ever, matching
+loom's own bias toward discovering rather than asking. `ALTER TABLE ... ADD COLUMN ... DEFAULT 0`
+backfills every existing row with `0`, which is below the current value of `1`, so a ledger that
+predates this column gets every one of its runs re-ingested once on the next `loom report` -
+self-healing the exact gap #49 found, not just closing it for whatever ships next. Verified against
+this machine's own real ledger, backed up first: `feature_version` read `1` on all 57 runs afterward,
+and `tool_usage`/`compactions` both grew.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

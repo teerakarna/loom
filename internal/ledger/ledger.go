@@ -104,7 +104,13 @@ CREATE TABLE IF NOT EXISTS runs (
 	-- docs/transcript-schema.md, "Reconciliation does NOT hold".
 	reported_subagent_tokens INTEGER,
 	reported_tool_uses       INTEGER,
-	reported_duration_ms     INTEGER
+	reported_duration_ms     INTEGER,
+	-- Issue #49: size alone answers "did this file change", never "does this
+	-- row have every derived table a current loom populates". A run stamped
+	-- below CurrentFeatureVersion (run.go) is re-ingested by NeedsIngest
+	-- regardless of size, so a feature added after a file was first ingested
+	-- backfills onto it instead of silently never applying.
+	feature_version          INTEGER NOT NULL DEFAULT 0
 );
 
 ` + policiesSchema + `
@@ -231,6 +237,14 @@ func migrate(db *sql.DB) error {
 		{"runs", map[string]string{
 			"size_bytes": `ALTER TABLE runs ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0`,
 			"lane":       `ALTER TABLE runs ADD COLUMN lane TEXT NOT NULL DEFAULT ''`,
+		}},
+		{"runs", map[string]string{
+			// DEFAULT 0 on ADD COLUMN backfills every existing row with 0,
+			// which is below CurrentFeatureVersion - so a ledger that
+			// predates this column gets every one of its runs re-ingested on
+			// the next `loom report`, which is exactly the backfill issue
+			// #49 needed and had no mechanism for until now.
+			"feature_version": `ALTER TABLE runs ADD COLUMN feature_version INTEGER NOT NULL DEFAULT 0`,
 		}},
 		{"proposals", map[string]string{
 			"subject":       `ALTER TABLE proposals ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
@@ -441,30 +455,42 @@ func (d *DB) Close() error {
 	return d.sql.Close()
 }
 
-// NeedsIngest reports whether the transcript at path should be read: either it
-// has never been ingested, or its size has changed since it was.
+// NeedsIngest reports whether the transcript at path should be read: it has
+// never been ingested, its size has changed since it was, or the stored run
+// predates a feature that needs backfilling onto it (see CurrentFeatureVersion,
+// issue #49).
 //
-// Size, not just presence. An earlier version keyed on path alone, justified by
-// a comment asserting that an edited-in-place transcript "shouldn't happen -
-// Claude Code only appends". That premise was backwards: appending is exactly
-// what happens, continuously, for the whole life of a session. Any session
-// ingested while still running was frozen at that moment permanently, and no
-// amount of re-running `loom report` would correct it, because the path was
-// already known. On a real corpus the largest run was understated by roughly
-// half. Silent under-counting, in the one number the tool exists to get right.
+// Size, not just presence, for the first two. An earlier version keyed on path
+// alone, justified by a comment asserting that an edited-in-place transcript
+// "shouldn't happen - Claude Code only appends". That premise was backwards:
+// appending is exactly what happens, continuously, for the whole life of a
+// session. Any session ingested while still running was frozen at that moment
+// permanently, and no amount of re-running `loom report` would correct it,
+// because the path was already known. On a real corpus the largest run was
+// understated by roughly half. Silent under-counting, in the one number the
+// tool exists to get right.
+//
+// Feature version, for the third. Confirmed on this machine's own real
+// ledger: a file whose size never moved after B7b/B7a's tables shipped kept
+// its runs row but never gained a single tool_usage/compactions/asset_usage
+// row, because nothing about "did this file change" was ever going to catch
+// "did loom gain a new table since I last read this file". Re-reading on a
+// version bump, not just a size change, is what closes that gap - and closes
+// it for every future feature the same way, not just this one.
 //
 // A byte-offset checkpoint (docs/design.md, "Ingest") is the efficient version
-// and belongs with the fsnotify-following work. Re-reading a changed file is
-// the obviously correct version, and ingest is fast enough that correctness is
-// the better trade today.
+// of the size check and belongs with the fsnotify-following work. Re-reading a
+// changed file is the obviously correct version, and ingest is fast enough
+// that correctness is the better trade today.
 func (d *DB) NeedsIngest(path string, size int64) (bool, error) {
-	var stored int64
-	err := d.sql.QueryRow(`SELECT size_bytes FROM runs WHERE path = ?`, path).Scan(&stored)
+	var storedSize, storedVersion int64
+	err := d.sql.QueryRow(`SELECT size_bytes, feature_version FROM runs WHERE path = ?`, path).
+		Scan(&storedSize, &storedVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return true, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return stored != size, nil
+	return storedSize != size || storedVersion < CurrentFeatureVersion, nil
 }
