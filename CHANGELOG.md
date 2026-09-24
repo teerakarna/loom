@@ -257,8 +257,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not just the in-process Proposal text. `knownSkills` matches both a skill's frontmatter name and its
   directory name (a `[[link]]` author references what they invoke it as, which can drift from its own
   frontmatter), and only `KindSkill`, not `KindReference` (a flat file, never actually loadable as a
-  skill) - both also found by review. The identical gap for agents and plans is deferred as
-  [#78](https://github.com/teerakarna/loom/issues/78), pending real corpus evidence.
+  skill) - both also found by review.
+
+- `broken_link` stayed silent on a `[[link]]` to a real agent or plan, the identical gap #66 fixed for
+  skills (#78, generalizing #66) - `asset.DefaultLocations` gives `AgentDirs`/`PlanDirs` the same
+  global-plus-per-project shape `SkillDirs` has, and a `[[link]]` never resolves against an agent's or
+  a plan's name either. New `asset.DiscoverGlobalAgents`/`DiscoverGlobalPlans`, mirroring
+  `DiscoverGlobalSkills`. Took #66's own deferred second review finding seriously this time: the
+  classification logic that had drifted into structurally different shapes between `detectBrokenLinks`
+  and `SummaryFor` is now one shared `brokenLinkText` function both call, so a fourth and fifth branch
+  could not repeat that drift. `target_is_skill` stays untouched rather than being renamed to a shared
+  `target_kind` field (#78's own original suggestion, reconsidered against #66's own hash-stability
+  lesson) - new, parallel `target_is_agent`/`target_is_plan` booleans instead, each set only when true.
+  Verified against the real binary: a memory file linking to a real agent and a real plan, both
+  flagged with kind-specific wording, alongside a genuinely unwritten reference that stayed silent.
+  `/code-review high` found four more real issues, all fixed: a name existing as more than one kind
+  now deterministically picks the first-registered one, not whichever call happened to run last; a
+  new `asset.Asset.OnDiskName` field lets `linkTargetNames` reuse the on-disk name callers already
+  compute instead of re-deriving it from a path; a missing `brokenLinkKindNoun` entry now falls back
+  to the raw kind string instead of rendering a malformed sentence; and a stale paragraph in
+  `docs/design.md` asserting #78 still open (left over from #66's own write-up) is corrected.
 
 - `broken_link` flagged a `[[link]]` to a slug that doesn't exist anywhere yet as a defect (#67), which
   Claude Code's own memory convention explicitly permits as a forward reference ("it marks something

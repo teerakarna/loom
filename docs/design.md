@@ -1309,17 +1309,20 @@ Second: `DiscoverGlobalSkills` returns `KindReference` assets too (a flat `.md` 
 loadable as a skill), and the first version labelled a link to one "a skill" anyway - factually
 wrong. Fixed by filtering to `KindSkill` only.
 
-One deferred rather than fixed here: the identical silence gap exists for agents and plans, which
-have the same global-plus-per-project shape as skills in `asset.DefaultLocations` - filed as
-[#78](https://github.com/teerakarna/loom/issues/78), since no real corpus evidence exists yet for
+One deferred rather than fixed here at the time: the identical silence gap for agents and plans,
+which have the same global-plus-per-project shape as skills in `asset.DefaultLocations` - filed as
+[#78](https://github.com/teerakarna/loom/issues/78), since no real corpus evidence existed yet for
 that shape the way #66 itself had for skills, and building it speculatively would be exactly the
 kind of guess constraint 11 warns against. The same round also noted the three-way classification
-logic is now duplicated in structurally different shapes between `detectBrokenLinks` and
-`SummaryFor`, and that the skills-directory scan runs unconditionally on every
-`GenerateMemoryFindings` call even when nothing needs it - both real, both left as-is: the first
-matches an existing pattern this codebase already accepts elsewhere (`DiscoverAllMemory` itself
-scans unconditionally on every call), and both are proportionate to revisit only if and when #78 adds
-a second kind worth unifying against, not before.
+logic was duplicated in structurally different shapes between `detectBrokenLinks` and `SummaryFor`,
+and that the skills-directory scan ran unconditionally on every `GenerateMemoryFindings` call even
+when nothing needed it - the first left as-is at the time (matches an existing pattern this codebase
+already accepts elsewhere, `DiscoverAllMemory` itself scans unconditionally on every call), the
+second proportionate to revisit only once #78 added a second kind worth unifying against.
+
+**Update, same day: #78 was picked up anyway, on explicit instruction overriding the deferral
+above** - see "The skill-shadow fix generalized to agents and plans" below for what shipped,
+including the classification-logic unification this paragraph left for later.
 
 #### A root scan failure protected forever, not just for a blip - BUILT 2026-09-24
 
@@ -1386,6 +1389,79 @@ left as-is: `RecordRootScanCoverage`'s success path writes unconditionally on ev
 checking first whether the streak is already clear - a guard would need its own read first, which
 would cost more on the common case (still working fine) than the occasional unnecessary write it
 would save.
+
+#### The skill-shadow fix generalized to agents and plans - BUILT 2026-09-24
+
+Issue #78, filed from #66's own review round and picked up on explicit instruction despite the
+issue's own deferral reasoning (no measured corpus case, unlike #66's real `entity-team`). `[[link]]`
+naming a real agent or plan reproduces the identical silence #66 fixed for skills - a `[[link]]`
+never resolves against an agent's or a plan's name either, only a memory's frontmatter name, and
+`asset.DefaultLocations` gives `AgentDirs`/`PlanDirs` the same global-plus-per-project shape
+`SkillDirs` has. New `asset.DiscoverGlobalAgents`/`DiscoverGlobalPlans`, thin wrappers mirroring
+`DiscoverGlobalSkills` exactly, scoped the same way (global directory only - a project's own
+working directory is not recoverable from its `~/.claude/projects/<slug>` state-storage path).
+
+Took the review's own second suggestion seriously this time rather than deferring it again:
+`detectBrokenLinks` and `SummaryFor` had the three-way classification logic duplicated in
+structurally different shapes since #66 shipped, flagged as worth unifying "before adding a fourth
+branch" - now a fourth and fifth branch both needed adding at once, so this was the moment. New
+`brokenLinkText(filename, targetSlug, isMemoryIndex, otherKind)` is the one function that knows how
+to render every classification; both `detectBrokenLinks` (fresh scan data) and `SummaryFor` (stored
+evidence only) call it, so the two can no longer drift into different wording for the same case.
+
+One thing #78's own "shape of a fix" suggested but turned out to be the wrong call once weighed
+against #66's own review lesson: a single shared `target_kind` evidence field, replacing
+`target_is_skill`. That would rename a field #66 already shipped - exactly the hash-changing mistake
+#66's first review round caught and fixed, reapplied to itself. `target_is_skill` stays untouched;
+`target_is_agent`/`target_is_plan` are new, parallel boolean keys, each set only when true, never as
+a literal `false` (same reasoning as before: an unconditional key on the plain cross-store case would
+change every existing cross-store finding's hash too). `SummaryFor` reconstructs the single
+`otherKind` `brokenLinkText` actually needs by checking whichever of the three booleans is present,
+so a row stored before this shipped - carrying only `target_is_skill`, the one key that existed then
+- still resolves correctly.
+
+`linkTargetNames` registers both a discovered asset's frontmatter name and its on-disk name,
+generalizing #66's skill-only drift handling. Unlike skills, an agent or a plan can be either of
+`scanMarkdownDir`'s two shapes (a flat "name.md" or a "name/SKILL.md" subdirectory) under the
+identical `Kind`, where `scanSkillDir` splits the two shapes into different Kinds instead - so the
+on-disk name can't be read off `Kind` the way it could for skills alone.
+
+**`/code-review high` found five findings, four real and fixed.** `knownOtherAssets` collapsing a
+name that exists as more than one kind to "whichever registers last" was an accident of call order,
+not a real answer - changed to first-registration-wins, with the precedence now the fixed, documented
+order the calls are written in (skill, agent, plan). The stale "deferred" paragraph directly above
+this one, from #66's own write-up, still asserted #78 as open after this same diff closed it -
+corrected with a pointer rather than silently rewritten, since the reasoning it recorded was real at
+the time. `linkTargetNames`'s first version re-derived the on-disk name by sniffing `Path`'s basename
+for a literal `"SKILL.md"`, duplicating a computation `assetFromFile`'s own caller (`scanSkillDir`/
+`scanMarkdownDir`) had already done once and discarded - fixed by carrying it forward instead, a new
+`asset.Asset.OnDiskName` field populated where it was already known, so `linkTargetNames` reads it
+rather than re-deriving it and cannot silently go stale if the directory-shape convention ever
+changes. `brokenLinkKindNoun`'s lookup had no fallback for a future kind missing an entry - would
+have silently rendered "which is , not a memory" - given a documented pairing requirement plus a
+fallback to the raw kind string, so a forgotten entry reads as a defect worth reporting rather than a
+malformed sentence nobody would notice. The fifth, three sequential directory scans (skill, agent,
+plan) where one existed before, on the MCP hot path `list_proposals` calls every time - left as-is,
+matching this same PR's own precedent for the equivalent single-scan cost in #66, and this codebase's
+established acceptance of `DiscoverAllMemory` scanning unconditionally on every call already.
+
+Verified against the real binary: a memory file linking to a real agent and a real plan under
+`~/.claude/agents`/`~/.claude/plans`, alongside a genuinely unwritten forward reference - both the
+agent and plan links flagged with kind-specific wording, the forward reference stayed silent.
+
+**A third round found no correctness bugs** - the two earlier rounds had already caught what a
+fresh pass would normally find first, confirmed independently re-derived and then verified already
+fixed. New `TestBrokenLinkKindsStayInSync`, from the round's one worthwhile suggestion: the "other
+asset" kind list is spelled out independently in four places (`registerOtherAssets`' calls,
+`detectBrokenLinks`' evidence-writing switch, `SummaryFor`'s evidence-reading switch,
+`brokenLinkKindNoun`), with nothing but a comment holding them together. The test walks one
+canonical kind list through both the write path and the read path and checks they agree, so a kind
+added to one of the four places but not the others fails a test rather than silently degrading at
+runtime the way `brokenLinkKindNoun`'s own fallback already tolerates. Two smaller suggestions from
+the same round (extracting a shared helper for `DiscoverGlobalAgents`/`DiscoverGlobalPlans`'s
+near-identical bodies; a filter check in `registerOtherAssets` that is dead code for two of its
+three callers) were weighed and left as-is - each is two one-line functions or one harmless,
+already-explained guard, not real risk.
 
 ### B7 scope, agreed 2026-09-22
 

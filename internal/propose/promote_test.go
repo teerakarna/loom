@@ -1,6 +1,7 @@
 package propose
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,32 @@ func writeMemoryFile(t *testing.T, home, store, filename, content string) {
 func writeSkillFile(t *testing.T, home, name, content string) {
 	t.Helper()
 	path := filepath.Join(home, ".claude", "skills", name, "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeAgentFile writes a flat-file-convention agent (name.md) under
+// <home>/.claude/agents - the shape DiscoverGlobalAgents also reads,
+// unlike skills (scanSkillDir routes a flat file to KindReference instead).
+func writeAgentFile(t *testing.T, home, name, content string) {
+	t.Helper()
+	path := filepath.Join(home, ".claude", "agents", name+".md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writePlanFile mirrors writeAgentFile for <home>/.claude/plans.
+func writePlanFile(t *testing.T, home, name, content string) {
+	t.Helper()
+	path := filepath.Join(home, ".claude", "plans", name+".md")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -234,8 +261,8 @@ func TestDetectBrokenLinks_SkillShadowedLinkIsFlagged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	knownSkills := map[string]bool{"entity-team": true}
-	got := detectBrokenLinks(home, files, knownSkills)
+	knownOtherAssets := map[string]string{"entity-team": asset.KindSkill}
+	got := detectBrokenLinks(home, files, knownOtherAssets)
 	if len(got) != 1 || got[0].Evidence["target_slug"] != "entity-team" {
 		t.Fatalf("got %+v, want one broken link flagging entity-team", got)
 	}
@@ -269,8 +296,8 @@ func TestDetectBrokenLinks_CrossStoreTakesPriorityOverSkillMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	knownSkills := map[string]bool{"shared-name": true}
-	got := detectBrokenLinks(home, files, knownSkills)
+	knownOtherAssets := map[string]string{"shared-name": asset.KindSkill}
+	got := detectBrokenLinks(home, files, knownOtherAssets)
 	if len(got) != 1 {
 		t.Fatalf("got %+v, want exactly one broken link", got)
 	}
@@ -287,6 +314,192 @@ func TestDetectBrokenLinks_CrossStoreTakesPriorityOverSkillMatch(t *testing.T) {
 	// comment on the same principle).
 	if _, present := got[0].Evidence["target_is_skill"]; present {
 		t.Errorf("Evidence = %+v, want target_is_skill absent - the cross-store case won", got[0].Evidence)
+	}
+}
+
+// TestBrokenLinkKindsStayInSync is the drift detector code review asked
+// for: the set of "other asset" kinds is spelled out independently in four
+// places (registerOtherAssets' calls, detectBrokenLinks' evidence-writing
+// switch, SummaryFor's evidence-reading switch, and brokenLinkKindNoun),
+// with nothing but a comment enforcing they stay matched. This walks the
+// one canonical list below through the real write path (detectBrokenLinks)
+// and the real read path (SummaryFor) together, so a kind added to one of
+// the four places but not the others fails a test, not just silently
+// degrades at runtime the way brokenLinkKindNoun's own fallback already
+// tolerates.
+//
+// Adding a fourth "other asset" kind means adding it here too - that is
+// the point: this list is itself one of the places that has to change,
+// deliberately, not a mechanism that discovers new kinds on its own.
+func TestBrokenLinkKindsStayInSync(t *testing.T) {
+	for _, kind := range []string{asset.KindSkill, asset.KindAgent, asset.KindPlan} {
+		t.Run(kind, func(t *testing.T) {
+			if brokenLinkKindNoun[kind] == "" {
+				t.Fatalf("brokenLinkKindNoun has no entry for %q", kind)
+			}
+
+			home := t.TempDir()
+			writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[thing]].")
+			files, _, err := asset.DiscoverAllMemory(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			written := detectBrokenLinks(home, files, map[string]string{"thing": kind})
+			if len(written) != 1 {
+				t.Fatalf("got %+v, want exactly one broken link", written)
+			}
+			p := written[0]
+			if !strings.Contains(p.Summary, brokenLinkKindNoun[kind]) {
+				t.Errorf("write side: Summary = %q, want it to contain %q", p.Summary, brokenLinkKindNoun[kind])
+			}
+
+			ev := map[string]any{"filename": "a", "target_slug": "thing"}
+			maps.Copy(ev, p.Evidence)
+			readBack := SummaryFor(KindBrokenLink, "store-a/a", ev)
+			if readBack != p.Summary {
+				t.Errorf("read side: SummaryFor = %q, want it to match the write side's own Summary %q",
+					readBack, p.Summary)
+			}
+		})
+	}
+}
+
+// TestDetectBrokenLinks_AgentAndPlanShadowedLinksAreFlagged is the
+// regression test for issue #78, generalizing #66's skill-only case: a
+// [[link]] naming a real agent or plan is flagged the same way a
+// skill-shadowed one is, with wording naming the actual kind.
+func TestDetectBrokenLinks_AgentAndPlanShadowedLinksAreFlagged(t *testing.T) {
+	home := t.TempDir()
+	writeMemoryFile(t, home, "store-a", "a.md",
+		"---\nname: a\n---\nSee [[deploy-bot]] and [[migration-plan]] for context.")
+
+	files, _, err := asset.DiscoverAllMemory(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	knownOtherAssets := map[string]string{"deploy-bot": asset.KindAgent, "migration-plan": asset.KindPlan}
+	got := detectBrokenLinks(home, files, knownOtherAssets)
+	if len(got) != 2 {
+		t.Fatalf("got %+v, want two broken links (deploy-bot, migration-plan)", got)
+	}
+	byTarget := map[string]Proposal{}
+	for _, p := range got {
+		byTarget[p.Evidence["target_slug"].(string)] = p
+	}
+	agent := byTarget["deploy-bot"]
+	if !strings.Contains(agent.Summary, "which is an agent, not a memory") {
+		t.Errorf("agent Summary = %q, want it to say this is an agent", agent.Summary)
+	}
+	if agent.Evidence["target_is_agent"] != true {
+		t.Errorf("agent Evidence = %+v, want target_is_agent = true", agent.Evidence)
+	}
+	plan := byTarget["migration-plan"]
+	if !strings.Contains(plan.Summary, "which is a plan, not a memory") {
+		t.Errorf("plan Summary = %q, want it to say this is a plan", plan.Summary)
+	}
+	if plan.Evidence["target_is_plan"] != true {
+		t.Errorf("plan Evidence = %+v, want target_is_plan = true", plan.Evidence)
+	}
+}
+
+// TestLinkTargetNames_FlatFileUsesOnDiskName is the flat-file-convention
+// counterpart to the skill subdirectory drift test: an agent stored as
+// "name.md" whose frontmatter has drifted from its own filename must still
+// return both names, reading OnDiskName rather than re-deriving it (found
+// by code review, before this shipped - the first version sniffed Path's
+// basename by hand instead of reusing what assetFromFile already computed).
+func TestLinkTargetNames_FlatFileUsesOnDiskName(t *testing.T) {
+	home := t.TempDir()
+	writeAgentFile(t, home, "deploy-bot", "---\nname: deploy-bot-v2\n---\nBody.")
+
+	agents, err := asset.DiscoverGlobalAgents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("got %+v, want exactly one agent", agents)
+	}
+	got := linkTargetNames(agents[0])
+	want := []string{"deploy-bot-v2", "deploy-bot"}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// TestGenerateMemoryFindings_NameCollisionAcrossKindsPicksFirstRegistered
+// is the regression test for a code-review finding: a name existing as
+// more than one kind used to silently report whichever kind happened to
+// register last - an accident of call order, not a real answer. First
+// registration wins instead, so the precedence is the fixed order
+// GenerateMemoryFindings registers kinds in (skill, then agent, then
+// plan), confirmed here by giving the same name to both a skill and a
+// plan and checking the skill wins.
+func TestGenerateMemoryFindings_NameCollisionAcrossKindsPicksFirstRegistered(t *testing.T) {
+	home := t.TempDir()
+	writeSkillFile(t, home, "migration", "---\nname: migration\n---\nBody.")
+	writePlanFile(t, home, "migration", "---\nname: migration\n---\nBody.")
+	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[migration]] for context.")
+
+	got, _, err := GenerateMemoryFindings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range got {
+		if p.Kind == KindBrokenLink && p.Evidence["target_slug"] == "migration" {
+			found = true
+			if !strings.Contains(p.Summary, "which is a skill, not a memory") {
+				t.Errorf("Summary = %q, want the skill wording (registered first), not the plan wording", p.Summary)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("got %+v, want a broken_link proposal for migration", got)
+	}
+}
+
+// TestGenerateMemoryFindings_WiresGlobalAgentsAndPlansIntoBrokenLinkCheck is
+// the end-to-end counterpart: GenerateMemoryFindings itself discovers
+// <home>/.claude/agents and <home>/.claude/plans and threads them through,
+// not just detectBrokenLinks called directly. Also exercises the flat
+// "name.md" convention, which skills never use (scanSkillDir routes it to
+// KindReference instead) but agents and plans do via scanMarkdownDir.
+func TestGenerateMemoryFindings_WiresGlobalAgentsAndPlansIntoBrokenLinkCheck(t *testing.T) {
+	home := t.TempDir()
+	writeAgentFile(t, home, "deploy-bot", "---\nname: deploy-bot\n---\nBody.")
+	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[deploy-bot]] for context.")
+
+	got, _, err := GenerateMemoryFindings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range got {
+		if p.Kind == KindBrokenLink && p.Evidence["target_slug"] == "deploy-bot" {
+			found = true
+			if !strings.Contains(p.Summary, "which is an agent, not a memory") {
+				t.Errorf("Summary = %q, want the agent-shadow wording", p.Summary)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("got %+v, want a broken_link proposal for deploy-bot", got)
+	}
+}
+
+// TestSummaryFor_LegacyTargetIsSkillEvidenceStillResolves confirms a
+// broken_link row stored before #78 shipped - carrying only
+// target_is_skill, the shape #66 alone ever wrote - still renders with the
+// skill-shadow wording, not a blank or wrong classification. SummaryFor
+// reconstructs otherKind from whichever of the three booleans is present,
+// so this predates target_is_agent/target_is_plan existing at all and must
+// still work.
+func TestSummaryFor_LegacyTargetIsSkillEvidenceStillResolves(t *testing.T) {
+	ev := map[string]any{"filename": "a", "target_slug": "entity-team", "target_is_skill": true}
+	got := SummaryFor(KindBrokenLink, "store-a/a", ev)
+	want := "a links to [[entity-team]], which is a skill, not a memory"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
@@ -404,7 +617,7 @@ func TestDetectBrokenLinks_EvidenceHashStableForCrossStoreFindings(t *testing.T)
 	// cross-store finding and must hash identically, or a ledger that
 	// picks up a new, unrelated skill on disk would revive every existing
 	// dismissed/applied broken_link proposal alongside it.
-	withSkills := detectBrokenLinks(home, files, map[string]bool{"unrelated-skill": true})
+	withSkills := detectBrokenLinks(home, files, map[string]string{"unrelated-skill": asset.KindSkill})
 	withoutSkills := detectBrokenLinks(home, files, nil)
 	if len(withSkills) != 1 || len(withoutSkills) != 1 {
 		t.Fatalf("got %d and %d proposals, want exactly one each", len(withSkills), len(withoutSkills))

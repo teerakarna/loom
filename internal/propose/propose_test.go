@@ -1174,6 +1174,8 @@ func TestSummaryFor(t *testing.T) {
 		{KindBrokenLink, map[string]any{"filename": "a", "target_slug": "b"}, "a links to [[b]], which exists but not in this store"},
 		{KindBrokenLink, map[string]any{"filename": "a", "target_slug": "MEMORY"}, "a links to [[MEMORY]], but this store has no MEMORY.md"},
 		{KindBrokenLink, map[string]any{"filename": "a", "target_slug": "entity-team", "target_is_skill": true}, "a links to [[entity-team]], which is a skill, not a memory"},
+		{KindBrokenLink, map[string]any{"filename": "a", "target_slug": "deploy-bot", "target_is_agent": true}, "a links to [[deploy-bot]], which is an agent, not a memory"},
+		{KindBrokenLink, map[string]any{"filename": "a", "target_slug": "migration-plan", "target_is_plan": true}, "a links to [[migration-plan]], which is a plan, not a memory"},
 		{KindUnreachableAsset, map[string]any{"filename": "orphan"}, "orphan exists but is not linked from its store's MEMORY.md"},
 		{KindFilenameSlugDrift, map[string]any{"filename": "old-name", "slug": "new-name"}, "old-name's filename no longer matches its own name: new-name"},
 		{"unknown_kind", nil, "unknown_kind: some/subject"},
