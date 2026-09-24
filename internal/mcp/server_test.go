@@ -326,6 +326,17 @@ func TestExplainIfStaleProcessWrapsNoSuchTable(t *testing.T) {
 	}
 }
 
+func TestExplainIfStaleProcessWrapsNoSuchColumn(t *testing.T) {
+	// A renamed/dropped column produces the same stale-process symptom as a
+	// renamed/dropped table - a bare match on "no such table" alone missed
+	// this case (found by /code-review high on the first version of this fix).
+	raw := errors.New("SQL logic error: no such column: subject (1)")
+	got := explainIfStaleProcess(raw)
+	if got == nil || !strings.Contains(got.Error(), "restart this session") {
+		t.Errorf("got %v, want a wrapped error mentioning restarting the session", got)
+	}
+}
+
 func TestExplainIfStaleProcessLeavesOtherErrorsAlone(t *testing.T) {
 	raw := errors.New("disk I/O error")
 	if got := explainIfStaleProcess(raw); !errors.Is(got, raw) {

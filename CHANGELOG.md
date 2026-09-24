@@ -192,7 +192,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no signal it has drifted. `query_ledger` never touches the affected table, which is why it kept
   working and masked the problem. Current source was already correct; new `explainIfStaleProcess`
   recognizes the error class at the point each handler returns it and tells the caller to restart the
-  session, rather than leaving them to diagnose a driver string.
+  session, rather than leaving them to diagnose a driver string. Matches `"no such column"` as well
+  as `"no such table"`, and states the diagnosis as a likely cause rather than an assertion, both
+  fixed after `/code-review high` on the first version.
 
 - `broken_link` flagged a `[[link]]` to a slug that doesn't exist anywhere yet as a defect (#67), which
   Claude Code's own memory convention explicitly permits as a forward reference ("it marks something

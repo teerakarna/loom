@@ -356,18 +356,30 @@ func listProposalsHandler(db *ledger.DB, home string) gomcp.ToolHandlerFor[empty
 	}
 }
 
-// explainIfStaleProcess turns a raw "no such table" driver error into one
-// that says what is actually wrong. The plugin's loom-mcp wrapper script
-// resolves the loom binary once, at server spawn, then execs it for the
-// life of the process (see docs/design.md) - so a session whose MCP server
-// started before a rebuild elsewhere keeps running old code indefinitely,
-// with no signal that it has drifted from the ledger schema a newer
-// invocation has since migrated. A raw sqlite string gives the caller no
-// way to tell "your ledger is broken" from "your server process is stale"
-// apart - see issue #74, found and confirmed exactly this way.
+// explainIfStaleProcess turns a raw sqlite schema-mismatch error into one
+// that names a likely, checkable cause. The plugin's loom-mcp wrapper
+// script resolves the loom binary once, at server spawn, then execs it for
+// the life of the process (see docs/design.md) - so a session whose MCP
+// server started before a rebuild elsewhere keeps running old code
+// indefinitely, with no signal that it has drifted from the ledger schema
+// a newer invocation has since migrated. A raw sqlite string gives the
+// caller no way to tell "your ledger is broken" from "your server process
+// is stale" apart - see issue #74, found and confirmed exactly this way.
+//
+// Both "no such table" and "no such column" are covered, not just the one
+// this issue happened to hit - a rename or a dropped column produces the
+// same stale-process symptom as a dropped table. The message is worded as
+// a likely cause, not an assertion: a schema error can also mean a real
+// bug in freshly written code that never touched an old binary at all, and
+// a bare string match on the driver message has no way to tell those
+// apart (found by /code-review high on the first version of this fix).
 func explainIfStaleProcess(err error) error {
-	if err != nil && strings.Contains(err.Error(), "no such table") {
-		return fmt.Errorf("%w - loom's running MCP server process is older than its own ledger schema; restart this session so the server relaunches against the current binary", err)
+	if err == nil {
+		return err
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "no such table") || strings.Contains(msg, "no such column") {
+		return fmt.Errorf("%w - this usually means loom's running MCP server process predates a rebuild of its own ledger schema; restart this session so the server relaunches against the current binary. If restarting doesn't fix it, this is a different, real bug", err)
 	}
 	return err
 }

@@ -1154,6 +1154,18 @@ connection to the same SQLite file a live test server is already using, drops th
 out from under it, and confirms the real MCP call path - not just the helper function in
 isolation - returns the actionable message.
 
+**Two real findings from `/code-review high` on the first version of this fix.** First: the match
+covered only `"no such table"`, missing `"no such column"` - a renamed or dropped column produces
+the identical stale-process symptom as a renamed or dropped table, and the doc comment's own claim
+to cover "any table a future rename or schema change touches" was false for that case. Widened to
+match both. Second, more substantive: a bare substring match on the driver message has no way to
+tell a genuinely stale process apart from an unrelated bug in freshly written code that references
+a table or column that never existed - the original wording asserted staleness as fact regardless.
+Reworded to state it as a likely, checkable cause ("this usually means...") rather than a
+diagnosis, with an explicit "if restarting doesn't fix it, this is a different, real bug" - the
+same principle as constraint 11, never presenting a guess with the confidence of a measured
+finding, applied to the error message itself, not just to loom's own proposals.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a
