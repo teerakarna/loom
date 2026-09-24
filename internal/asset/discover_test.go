@@ -311,3 +311,51 @@ func TestDiscoverGlobalSkills_IgnoresCwdSkills(t *testing.T) {
 		t.Errorf("got %+v, want none - a cwd-local skill is out of scope for the global scan", got)
 	}
 }
+
+func TestDiscoverGlobalAgents(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".claude", "agents", "deploy-bot.md"),
+		"---\nname: deploy-bot\ndescription: runs deploys\n---\nBody.")
+
+	got, err := DiscoverGlobalAgents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Kind != KindAgent || got[0].Name != "deploy-bot" {
+		t.Errorf("got %+v, want one KindAgent named deploy-bot", got)
+	}
+}
+
+func TestDiscoverGlobalAgents_MissingDirIsNotError(t *testing.T) {
+	got, err := DiscoverGlobalAgents(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("got %+v, want nil", got)
+	}
+}
+
+func TestDiscoverGlobalPlans(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".claude", "plans", "migration.md"),
+		"---\nname: migration\n---\nBody.")
+
+	got, err := DiscoverGlobalPlans(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Kind != KindPlan || got[0].Name != "migration" {
+		t.Errorf("got %+v, want one KindPlan named migration", got)
+	}
+}
+
+func TestDiscoverGlobalPlans_MissingDirIsNotError(t *testing.T) {
+	got, err := DiscoverGlobalPlans(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("got %+v, want nil", got)
+	}
+}

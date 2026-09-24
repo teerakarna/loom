@@ -106,15 +106,22 @@ func SummaryFor(kind, subject string, ev map[string]any) string {
 		return fmt.Sprintf("promote %q to a reference skill, identical across %v stores",
 			ev["filename"], ev["stores"])
 	case KindBrokenLink:
+		// One boolean per kind in evidence, not a shared "target_kind"
+		// field - see detectBrokenLinks' own comment on why target_is_skill
+		// can never be renamed once shipped. Reconstructed into the single
+		// otherKind brokenLinkText actually takes, so the two functions
+		// share one classification, not two that could drift (issue #78).
+		otherKind := ""
 		switch {
-		case ev["target_slug"] == asset.MemoryIndexSlug:
-			return fmt.Sprintf("%v links to [[MEMORY]], but this store has no MEMORY.md", ev["filename"])
 		case ev["target_is_skill"] == true:
-			return fmt.Sprintf("%v links to [[%v]], which is a skill, not a memory", ev["filename"], ev["target_slug"])
-		default:
-			return fmt.Sprintf("%v links to [[%v]], which exists but not in this store",
-				ev["filename"], ev["target_slug"])
+			otherKind = asset.KindSkill
+		case ev["target_is_agent"] == true:
+			otherKind = asset.KindAgent
+		case ev["target_is_plan"] == true:
+			otherKind = asset.KindPlan
 		}
+		summary, _ := brokenLinkText(ev["filename"], ev["target_slug"], ev["target_slug"] == asset.MemoryIndexSlug, otherKind)
+		return summary
 	case KindUnreachableAsset:
 		return fmt.Sprintf("%v exists but is not linked from its store's MEMORY.md", ev["filename"])
 	case KindFilenameSlugDrift:

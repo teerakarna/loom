@@ -158,6 +158,22 @@ func DiscoverGlobalSkills(home string) ([]Asset, error) {
 	return scanSkillDir(filepath.Join(home, ".claude", "skills"))
 }
 
+// DiscoverGlobalAgents and DiscoverGlobalPlans mirror DiscoverGlobalSkills
+// for the same reason and the same scope limit (issue #78, generalizing
+// #66's skill-only case): AgentDirs and PlanDirs have the identical
+// global-plus-per-project shape SkillDirs does, and only the global half is
+// reliably enumerable without a specific project's cwd. Unlike skills,
+// neither kind has a KindReference-shaped ambiguity to sort out - every
+// asset scanMarkdownDir finds under either directory already carries the
+// one kind it was called with.
+func DiscoverGlobalAgents(home string) ([]Asset, error) {
+	return scanMarkdownDir(filepath.Join(home, ".claude", "agents"), KindAgent)
+}
+
+func DiscoverGlobalPlans(home string) ([]Asset, error) {
+	return scanMarkdownDir(filepath.Join(home, ".claude", "plans"), KindPlan)
+}
+
 // scanSkillDir finds skills in dir, the one location where the two shapes
 // scanMarkdownDir treats interchangeably actually mean different things
 // (issue #42). A subdirectory with its own SKILL.md is a real, loadable

@@ -36,6 +36,20 @@ func writeSkillFile(t *testing.T, home, name, content string) {
 	}
 }
 
+// writeAgentFile writes a flat-file-convention agent (name.md) under
+// <home>/.claude/agents - the shape DiscoverGlobalAgents also reads,
+// unlike skills (scanSkillDir routes a flat file to KindReference instead).
+func writeAgentFile(t *testing.T, home, name, content string) {
+	t.Helper()
+	path := filepath.Join(home, ".claude", "agents", name+".md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEvidenceStores(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -234,8 +248,8 @@ func TestDetectBrokenLinks_SkillShadowedLinkIsFlagged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	knownSkills := map[string]bool{"entity-team": true}
-	got := detectBrokenLinks(home, files, knownSkills)
+	knownOtherAssets := map[string]string{"entity-team": asset.KindSkill}
+	got := detectBrokenLinks(home, files, knownOtherAssets)
 	if len(got) != 1 || got[0].Evidence["target_slug"] != "entity-team" {
 		t.Fatalf("got %+v, want one broken link flagging entity-team", got)
 	}
@@ -269,8 +283,8 @@ func TestDetectBrokenLinks_CrossStoreTakesPriorityOverSkillMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	knownSkills := map[string]bool{"shared-name": true}
-	got := detectBrokenLinks(home, files, knownSkills)
+	knownOtherAssets := map[string]string{"shared-name": asset.KindSkill}
+	got := detectBrokenLinks(home, files, knownOtherAssets)
 	if len(got) != 1 {
 		t.Fatalf("got %+v, want exactly one broken link", got)
 	}
@@ -287,6 +301,89 @@ func TestDetectBrokenLinks_CrossStoreTakesPriorityOverSkillMatch(t *testing.T) {
 	// comment on the same principle).
 	if _, present := got[0].Evidence["target_is_skill"]; present {
 		t.Errorf("Evidence = %+v, want target_is_skill absent - the cross-store case won", got[0].Evidence)
+	}
+}
+
+// TestDetectBrokenLinks_AgentAndPlanShadowedLinksAreFlagged is the
+// regression test for issue #78, generalizing #66's skill-only case: a
+// [[link]] naming a real agent or plan is flagged the same way a
+// skill-shadowed one is, with wording naming the actual kind.
+func TestDetectBrokenLinks_AgentAndPlanShadowedLinksAreFlagged(t *testing.T) {
+	home := t.TempDir()
+	writeMemoryFile(t, home, "store-a", "a.md",
+		"---\nname: a\n---\nSee [[deploy-bot]] and [[migration-plan]] for context.")
+
+	files, _, err := asset.DiscoverAllMemory(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	knownOtherAssets := map[string]string{"deploy-bot": asset.KindAgent, "migration-plan": asset.KindPlan}
+	got := detectBrokenLinks(home, files, knownOtherAssets)
+	if len(got) != 2 {
+		t.Fatalf("got %+v, want two broken links (deploy-bot, migration-plan)", got)
+	}
+	byTarget := map[string]Proposal{}
+	for _, p := range got {
+		byTarget[p.Evidence["target_slug"].(string)] = p
+	}
+	agent := byTarget["deploy-bot"]
+	if !strings.Contains(agent.Summary, "which is an agent, not a memory") {
+		t.Errorf("agent Summary = %q, want it to say this is an agent", agent.Summary)
+	}
+	if agent.Evidence["target_is_agent"] != true {
+		t.Errorf("agent Evidence = %+v, want target_is_agent = true", agent.Evidence)
+	}
+	plan := byTarget["migration-plan"]
+	if !strings.Contains(plan.Summary, "which is a plan, not a memory") {
+		t.Errorf("plan Summary = %q, want it to say this is a plan", plan.Summary)
+	}
+	if plan.Evidence["target_is_plan"] != true {
+		t.Errorf("plan Evidence = %+v, want target_is_plan = true", plan.Evidence)
+	}
+}
+
+// TestGenerateMemoryFindings_WiresGlobalAgentsAndPlansIntoBrokenLinkCheck is
+// the end-to-end counterpart: GenerateMemoryFindings itself discovers
+// <home>/.claude/agents and <home>/.claude/plans and threads them through,
+// not just detectBrokenLinks called directly. Also exercises the flat
+// "name.md" convention, which skills never use (scanSkillDir routes it to
+// KindReference instead) but agents and plans do via scanMarkdownDir.
+func TestGenerateMemoryFindings_WiresGlobalAgentsAndPlansIntoBrokenLinkCheck(t *testing.T) {
+	home := t.TempDir()
+	writeAgentFile(t, home, "deploy-bot", "---\nname: deploy-bot\n---\nBody.")
+	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[deploy-bot]] for context.")
+
+	got, _, err := GenerateMemoryFindings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range got {
+		if p.Kind == KindBrokenLink && p.Evidence["target_slug"] == "deploy-bot" {
+			found = true
+			if !strings.Contains(p.Summary, "which is an agent, not a memory") {
+				t.Errorf("Summary = %q, want the agent-shadow wording", p.Summary)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("got %+v, want a broken_link proposal for deploy-bot", got)
+	}
+}
+
+// TestSummaryFor_LegacyTargetIsSkillEvidenceStillResolves confirms a
+// broken_link row stored before #78 shipped - carrying only
+// target_is_skill, the shape #66 alone ever wrote - still renders with the
+// skill-shadow wording, not a blank or wrong classification. SummaryFor
+// reconstructs otherKind from whichever of the three booleans is present,
+// so this predates target_is_agent/target_is_plan existing at all and must
+// still work.
+func TestSummaryFor_LegacyTargetIsSkillEvidenceStillResolves(t *testing.T) {
+	ev := map[string]any{"filename": "a", "target_slug": "entity-team", "target_is_skill": true}
+	got := SummaryFor(KindBrokenLink, "store-a/a", ev)
+	want := "a links to [[entity-team]], which is a skill, not a memory"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
@@ -404,7 +501,7 @@ func TestDetectBrokenLinks_EvidenceHashStableForCrossStoreFindings(t *testing.T)
 	// cross-store finding and must hash identically, or a ledger that
 	// picks up a new, unrelated skill on disk would revive every existing
 	// dismissed/applied broken_link proposal alongside it.
-	withSkills := detectBrokenLinks(home, files, map[string]bool{"unrelated-skill": true})
+	withSkills := detectBrokenLinks(home, files, map[string]string{"unrelated-skill": asset.KindSkill})
 	withoutSkills := detectBrokenLinks(home, files, nil)
 	if len(withSkills) != 1 || len(withoutSkills) != 1 {
 		t.Fatalf("got %d and %d proposals, want exactly one each", len(withSkills), len(withoutSkills))

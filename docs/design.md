@@ -1387,6 +1387,47 @@ checking first whether the streak is already clear - a guard would need its own 
 would cost more on the common case (still working fine) than the occasional unnecessary write it
 would save.
 
+#### The skill-shadow fix generalized to agents and plans - BUILT 2026-09-24
+
+Issue #78, filed from #66's own review round and picked up on explicit instruction despite the
+issue's own deferral reasoning (no measured corpus case, unlike #66's real `entity-team`). `[[link]]`
+naming a real agent or plan reproduces the identical silence #66 fixed for skills - a `[[link]]`
+never resolves against an agent's or a plan's name either, only a memory's frontmatter name, and
+`asset.DefaultLocations` gives `AgentDirs`/`PlanDirs` the same global-plus-per-project shape
+`SkillDirs` has. New `asset.DiscoverGlobalAgents`/`DiscoverGlobalPlans`, thin wrappers mirroring
+`DiscoverGlobalSkills` exactly, scoped the same way (global directory only - a project's own
+working directory is not recoverable from its `~/.claude/projects/<slug>` state-storage path).
+
+Took the review's own second suggestion seriously this time rather than deferring it again:
+`detectBrokenLinks` and `SummaryFor` had the three-way classification logic duplicated in
+structurally different shapes since #66 shipped, flagged as worth unifying "before adding a fourth
+branch" - now a fourth and fifth branch both needed adding at once, so this was the moment. New
+`brokenLinkText(filename, targetSlug, isMemoryIndex, otherKind)` is the one function that knows how
+to render every classification; both `detectBrokenLinks` (fresh scan data) and `SummaryFor` (stored
+evidence only) call it, so the two can no longer drift into different wording for the same case.
+
+One thing #78's own "shape of a fix" suggested but turned out to be the wrong call once weighed
+against #66's own review lesson: a single shared `target_kind` evidence field, replacing
+`target_is_skill`. That would rename a field #66 already shipped - exactly the hash-changing mistake
+#66's first review round caught and fixed, reapplied to itself. `target_is_skill` stays untouched;
+`target_is_agent`/`target_is_plan` are new, parallel boolean keys, each set only when true, never as
+a literal `false` (same reasoning as before: an unconditional key on the plain cross-store case would
+change every existing cross-store finding's hash too). `SummaryFor` reconstructs the single
+`otherKind` `brokenLinkText` actually needs by checking whichever of the three booleans is present,
+so a row stored before this shipped - carrying only `target_is_skill`, the one key that existed then
+- still resolves correctly.
+
+`linkTargetNames` (registering both a discovered asset's frontmatter name and its on-disk name,
+generalizing #66's skill-only drift handling) has to read the shape off the path itself for agents
+and plans, unlike skills: `scanSkillDir` splits its two shapes into different Kinds (`KindSkill` for
+a subdirectory, `KindReference` for a flat file), but `scanMarkdownDir` tags both shapes with the
+identical `KindAgent`/`KindPlan` regardless, so only the path's own basename (`SKILL.md` versus
+anything else) says which convention produced it.
+
+Verified against the real binary: a memory file linking to a real agent and a real plan under
+`~/.claude/agents`/`~/.claude/plans`, alongside a genuinely unwritten forward reference - both the
+agent and plan links flagged with kind-specific wording, the forward reference stayed silent.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

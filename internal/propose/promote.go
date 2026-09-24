@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/teerakarna/loom/internal/asset"
 )
@@ -78,6 +79,29 @@ func EvidenceStores(evidence string) []string {
 	return ev.Stores
 }
 
+// linkTargetNames returns every name a [[link]] author might plausibly
+// reference for a: both the frontmatter name assetFromFile resolved and
+// the name actually on disk, which can drift apart (a real, documented
+// failure mode - found by code review on #66, before this shipped, citing
+// this project's own memory of six skills sitting with drifted frontmatter
+// for months unnoticed). The on-disk name is what a human actually
+// invokes, not necessarily whatever the frontmatter claims.
+//
+// The on-disk name depends on which of scanMarkdownDir's two shapes a's
+// Path is: the containing directory's name for the "name/SKILL.md"
+// convention, or the file's own basename for a flat "name.md" - unlike
+// skills (scanSkillDir splits the two shapes into different Kinds), an
+// agent or a plan can be either shape under the identical Kind, so the
+// shape has to be read off the path itself.
+func linkTargetNames(a asset.Asset) []string {
+	names := []string{a.Name}
+	base := filepath.Base(a.Path)
+	if base == "SKILL.md" {
+		return append(names, filepath.Base(filepath.Dir(a.Path)))
+	}
+	return append(names, strings.TrimSuffix(base, filepath.Ext(base)))
+}
+
 // GenerateMemoryFindings scans every project's memory store for B7c's four
 // structural promotion-rule checks and returns whatever proposals the
 // evidence supports, in a stable order - see detectMemoryDuplicates for why
@@ -106,32 +130,43 @@ func GenerateMemoryFindings(home string) ([]Proposal, asset.MemoryScanCoverage, 
 		return nil, asset.MemoryScanCoverage{}, err
 	}
 
-	// A skill-directory read problem degrades to "no known skills" rather
-	// than failing this whole pass (constraint 7) - it only narrows
-	// detectBrokenLinks back to issue #67's behavior (silent on a link
-	// that resolves nowhere), never turns a real finding into an error.
-	knownSkills := map[string]bool{}
-	if skills, err := asset.DiscoverGlobalSkills(home); err == nil {
-		for _, s := range skills {
-			// KindSkill only, not KindReference: a flat .md file directly in
-			// the skills directory is never loadable as a skill
-			// (scanSkillDir's own doc comment) - calling it one would be
-			// factually wrong in the rationale text (found by code review,
-			// before this shipped).
-			if s.Kind != asset.KindSkill {
+	// A read problem on any one of these directories degrades to "nothing
+	// known for that kind" rather than failing this whole pass (constraint
+	// 7) - it only narrows detectBrokenLinks back to issue #67's behavior
+	// (silent on a link that resolves nowhere) for that kind, never turns a
+	// real finding into an error.
+	//
+	// knownOtherAssets maps a name to the one kind (skill, agent or plan)
+	// it belongs to - every kind a [[link]] can name but never actually
+	// resolve against, not just skills (issue #78, generalizing #66's
+	// skill-only case; agents and plans have the identical global-plus-
+	// per-project shape in asset.DefaultLocations, and only the global half
+	// is reliably enumerable the same way skills' is). A name colliding
+	// across two kinds is vanishingly unlikely and not worth resolving
+	// specially - whichever registers last wins.
+	knownOtherAssets := map[string]string{}
+	registerOtherAssets := func(kind string, discover func(string) ([]asset.Asset, error)) {
+		found, err := discover(home)
+		if err != nil {
+			return
+		}
+		for _, a := range found {
+			if a.Kind != kind {
+				// KindSkill only, not KindReference: a flat .md file
+				// directly in the skills directory is never loadable as a
+				// skill (scanSkillDir's own doc comment) - calling it one
+				// would be factually wrong in the rationale text (found by
+				// code review on #66, before this shipped).
 				continue
 			}
-			// Both the frontmatter name and the directory name, not just
-			// the one assetFromFile happened to prefer: a [[link]] author
-			// is referencing what they invoke the skill as, which is the
-			// directory name, and that can drift from its own frontmatter
-			// (a real, documented failure mode - found by code review,
-			// before this shipped, citing this project's own memory of six
-			// skills sitting with drifted frontmatter for months unnoticed).
-			knownSkills[s.Name] = true
-			knownSkills[filepath.Base(filepath.Dir(s.Path))] = true
+			for _, name := range linkTargetNames(a) {
+				knownOtherAssets[name] = kind
+			}
 		}
 	}
+	registerOtherAssets(asset.KindSkill, asset.DiscoverGlobalSkills)
+	registerOtherAssets(asset.KindAgent, asset.DiscoverGlobalAgents)
+	registerOtherAssets(asset.KindPlan, asset.DiscoverGlobalPlans)
 
 	// Root-cause kinds before the symptom kind: a filename/slug drift is
 	// often *why* a link elsewhere is broken, and the cheaper fix. Order
@@ -141,7 +176,7 @@ func GenerateMemoryFindings(home string) ([]Proposal, asset.MemoryScanCoverage, 
 	out = append(out, detectMemoryDuplicates(files)...)
 	out = append(out, detectFilenameSlugDrift(files)...)
 	out = append(out, detectUnreachableAssets(home, files)...)
-	out = append(out, detectBrokenLinks(home, files, knownSkills)...)
+	out = append(out, detectBrokenLinks(home, files, knownOtherAssets)...)
 	return out, coverage, nil
 }
 
@@ -194,6 +229,46 @@ func detectMemoryDuplicates(files []asset.MemoryFile) []Proposal {
 	return out
 }
 
+// brokenLinkKindNoun says how each "other asset" kind reads in a sentence
+// (issue #78, generalizing #66's skill-only case) - the article included,
+// since it is not guessable from the kind string alone.
+var brokenLinkKindNoun = map[string]string{
+	asset.KindSkill: "a skill",
+	asset.KindAgent: "an agent",
+	asset.KindPlan:  "a plan",
+}
+
+// brokenLinkText builds a broken_link finding's display text from its
+// classification alone - the [[MEMORY]] special case (issue #65), the
+// other-asset-kind case (issues #66, #78), or the plain cross-store case
+// (issue #67) - never from a fresh scan. Shared by detectBrokenLinks (which
+// has fresh scan data) and SummaryFor (which only has stored evidence) so
+// the two can never drift into different wording for the same
+// classification (found by code review on #66, before this shipped: they
+// were duplicated in structurally different shapes before this).
+func brokenLinkText(filename, targetSlug any, isMemoryIndex bool, otherKind string) (summary, rationale string) {
+	switch {
+	case isMemoryIndex:
+		return fmt.Sprintf("%v links to [[MEMORY]], but this store has no MEMORY.md", filename),
+			"A [[MEMORY]] link resolves to the store's own index file, which does not exist here. " +
+				"Loom will not create it: this is a suggestion to add one, or fix the reference if the " +
+				"store was never meant to have one."
+	case otherKind != "":
+		noun := brokenLinkKindNoun[otherKind]
+		return fmt.Sprintf("%v links to [[%v]], which is %s, not a memory", filename, targetSlug, noun),
+			fmt.Sprintf("A [[link]] resolves only against another memory file's frontmatter name in the "+
+				"same store - never a skill, agent, plan, or other asset kind, even one with a matching "+
+				"name. This link's target is %s, but the reference will never resolve as written. Loom "+
+				"will not edit it: point at it by name in ordinary prose instead of [[link]] syntax, or "+
+				"write the memory this was meant to reference.", noun)
+	default:
+		return fmt.Sprintf("%v links to [[%v]], which exists but not in this store", filename, targetSlug),
+			"A [[link]] resolves against another memory file's frontmatter name in the same store. A " +
+				"file with this name exists, just not here - the reference is real, scoped to the wrong " +
+				"store. Loom will not edit it: this is a suggestion to fix the reference yourself."
+	}
+}
+
 // detectBrokenLinks checks every [[slug]] reference against the slugs that
 // actually exist in the same store - links resolve within one store, the
 // same scope memory itself loads in. Iterates files in the order
@@ -201,16 +276,16 @@ func detectMemoryDuplicates(files []asset.MemoryFile) []Proposal {
 // name), so no separate sort is needed here the way detectMemoryDuplicates
 // needs one.
 //
-// knownSkills is every skill/reference name DiscoverGlobalSkills found
-// (issue #66): a link that resolves nowhere as a memory is normally a
-// permitted forward reference (issue #67) - but if the name is a known
-// skill instead, it will never become a memory, since a [[link]] only ever
-// resolves against a memory's own frontmatter name. Real on a real corpus:
-// [[entity-team]] named a skill directory, not a not-yet-written note, and
-// staying silent about it (issue #67's own default for "resolves nowhere")
-// told the reader nothing useful about a reference that was never going to
-// resolve as written.
-func detectBrokenLinks(home string, files []asset.MemoryFile, knownSkills map[string]bool) []Proposal {
+// knownOtherAssets maps a name to the skill, agent or plan it belongs to
+// (issues #66, #78): a link that resolves nowhere as a memory is normally a
+// permitted forward reference (issue #67) - but if the name already
+// belongs to one of those, it will never become a memory either, since a
+// [[link]] only ever resolves against a memory's own frontmatter name.
+// Real on a real corpus: [[entity-team]] named a skill directory, not a
+// not-yet-written note, and staying silent about it (issue #67's own
+// default for "resolves nowhere") told the reader nothing useful about a
+// reference that was never going to resolve as written.
+func detectBrokenLinks(home string, files []asset.MemoryFile, knownOtherAssets map[string]string) []Proposal {
 	knownSlugs := map[string]map[string]bool{}
 	// existsAnywhere is the same slugs, flattened across every store - what
 	// distinguishes a real broken link from a forward reference (issue #67).
@@ -242,7 +317,7 @@ func detectBrokenLinks(home string, files []asset.MemoryFile, knownSkills map[st
 	for _, f := range files {
 		for _, link := range f.Links {
 			existsElsewhere := existsAnywhere[link]
-			isKnownSkill := knownSkills[link]
+			otherKind := knownOtherAssets[link]
 			// The store's own index is deliberately excluded from the file
 			// set DiscoverAllMemory returns (it is the index, not a fact
 			// being indexed - see memoryIndexName), so it never gets a Slug
@@ -264,61 +339,52 @@ func detectBrokenLinks(home string, files []asset.MemoryFile, knownSkills map[st
 			} else if knownSlugs[f.Store][link] {
 				// Resolves here - not broken.
 				continue
-			} else if !existsElsewhere && !isKnownSkill {
-				// Resolves nowhere at all, and isn't a known skill either -
-				// a permitted forward reference (issue #67), and looks
-				// identical on disk to real rot; the evidence to tell them
-				// apart is intent, which the filesystem does not carry.
+			} else if !existsElsewhere && otherKind == "" {
+				// Resolves nowhere at all, and isn't a known skill, agent or
+				// plan either - a permitted forward reference (issue #67),
+				// and looks identical on disk to real rot; the evidence to
+				// tell them apart is intent, which the filesystem does not
+				// carry.
 				continue
 			}
 			subject := f.Store + "/" + f.Filename + " -> " + link
-			summary := fmt.Sprintf("%s links to [[%s]], which exists but not in this store", f.Filename, link)
-			rationale := "A [[link]] resolves against another memory file's frontmatter name in the " +
-				"same store. A file with this name exists, just not here - the reference is real, " +
-				"scoped to the wrong store. Loom will not edit it: this is a suggestion to fix the " +
-				"reference yourself."
-			// Excludes link == MemoryIndexSlug even if a skill literally
-			// named "MEMORY" exists - that case is handled entirely by the
-			// switch's first arm below, and letting this be true there
-			// would store evidence contradicting the MEMORY-specific
-			// wording actually displayed (found by code review, before
-			// this shipped).
-			targetIsSkill := link != asset.MemoryIndexSlug && !existsElsewhere && isKnownSkill
-			switch {
-			// The [[MEMORY]] case that falls through here (no index in this
-			// store at all) is not the cross-store case above: the target
-			// doesn't exist anywhere, not "just not here" - found by code
-			// review, before this shipped, sharing the wrong wording with
-			// the general case.
-			case link == asset.MemoryIndexSlug:
-				summary = fmt.Sprintf("%s links to [[MEMORY]], but this store has no MEMORY.md", f.Filename)
-				rationale = "A [[MEMORY]] link resolves to the store's own index file, which does not " +
-					"exist here. Loom will not create it: this is a suggestion to add one, or fix the " +
-					"reference if the store was never meant to have one."
-			// Checked after existsElsewhere, not before: a real memory slug
-			// in another store is the more specific, more actionable
-			// finding (issue #67's original case) even on the rare chance
-			// a skill happens to share its name (issue #66).
-			case targetIsSkill:
-				summary = fmt.Sprintf("%s links to [[%s]], which is a skill, not a memory", f.Filename, link)
-				rationale = "A [[link]] resolves only against another memory file's frontmatter name in " +
-					"the same store - never a skill, agent, or other asset kind, even one with a " +
-					"matching name. A skill named this exists, but this reference will never resolve as " +
-					"written. Loom will not edit it: point at the skill by name in ordinary prose " +
-					"instead of [[link]] syntax, or write the memory this was meant to reference."
+			// Excludes link == MemoryIndexSlug even if some asset literally
+			// named "MEMORY" exists - that case is handled entirely by
+			// brokenLinkText's isMemoryIndex branch, and letting this be
+			// non-empty there would store evidence contradicting the
+			// MEMORY-specific wording actually displayed (found by code
+			// review, before this shipped).
+			targetKind := ""
+			if link != asset.MemoryIndexSlug && !existsElsewhere {
+				// Checked after existsElsewhere, not before: a real memory
+				// slug in another store is the more specific, more
+				// actionable finding (issue #67's original case) even on
+				// the rare chance another kind happens to share its name
+				// (issues #66, #78).
+				targetKind = otherKind
 			}
+			summary, rationale := brokenLinkText(f.Filename, link, link == asset.MemoryIndexSlug, targetKind)
 			ev := map[string]any{
 				"store": f.Store, "filename": f.Filename, "target_slug": link,
 			}
-			// Set only when true, never a literal false - an unconditional
-			// key would change every plain cross-store finding's evidence
-			// hash the moment this shipped, silently reviving any
-			// previously dismissed or applied row on the very next pass
-			// (UpsertProposal resets status to pending on any hash change,
-			// regardless of prior status - the same regression class #77
-			// fixed, found by code review before this one shipped).
-			if targetIsSkill {
+			// One boolean per kind, set only when true, never a rename to a
+			// shared "target_kind" field: target_is_skill already shipped
+			// in #66 and is load-bearing for any ledger with a real
+			// skill-shadow finding already stored - renaming it would
+			// change that row's evidence hash the moment this shipped,
+			// silently reviving any previously dismissed or applied one on
+			// the very next pass (the same regression class #77 fixed,
+			// found by code review before this one shipped). An
+			// unconditional key of any shape has the identical problem for
+			// the plain cross-store case, which is why none of the three
+			// is ever written as a literal false either.
+			switch targetKind {
+			case asset.KindSkill:
 				ev["target_is_skill"] = true
+			case asset.KindAgent:
+				ev["target_is_agent"] = true
+			case asset.KindPlan:
+				ev["target_is_plan"] = true
 			}
 			out = append(out, Proposal{
 				Kind: KindBrokenLink, Subject: subject,
