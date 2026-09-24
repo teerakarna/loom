@@ -545,7 +545,7 @@ func TestStoreProtectsPendingProposalsForAStoreNotScannedThisPass(t *testing.T) 
 	if !scanned.Scanned["store-a"] {
 		t.Fatalf("scanned = %+v, want store-a scanned - its memory directory is readable this pass", scanned)
 	}
-	if _, err := Store(db, findings, scanned, now); err != nil {
+	if _, err := Store(db, findings, &scanned, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, err := db.ListProposals(true)
@@ -581,7 +581,7 @@ func TestStoreProtectsPendingProposalsForAStoreNotScannedThisPass(t *testing.T) 
 	if scanned.Scanned["store-a"] {
 		t.Fatalf("scanned = %+v, want store-a not scanned this pass - its memory directory is unreadable", scanned)
 	}
-	if _, err := Store(db, findings, scanned, now); err != nil {
+	if _, err := Store(db, findings, &scanned, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -609,7 +609,7 @@ func TestStoreStillWithdrawsAGenuinelyFixedFinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Store(db, findings, scanned, now); err != nil {
+	if _, err := Store(db, findings, &scanned, now); err != nil {
 		t.Fatal(err)
 	}
 	if pending, _ := db.ListProposals(true); len(pending) != 1 {
@@ -630,7 +630,7 @@ func TestStoreStillWithdrawsAGenuinelyFixedFinding(t *testing.T) {
 	if len(findings) != 0 {
 		t.Fatalf("got %+v, want none - the file is linked now", findings)
 	}
-	if _, err := Store(db, findings, scanned, now); err != nil {
+	if _, err := Store(db, findings, &scanned, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -654,7 +654,7 @@ func TestStoreWithdrawsWhenAStoreIsPermanentlyDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Store(db, findings, scanned, now); err != nil {
+	if _, err := Store(db, findings, &scanned, now); err != nil {
 		t.Fatal(err)
 	}
 	if pending, _ := db.ListProposals(true); len(pending) != 1 {
@@ -674,7 +674,7 @@ func TestStoreWithdrawsWhenAStoreIsPermanentlyDeleted(t *testing.T) {
 	if scanned.Present["store-a"] {
 		t.Fatalf("scanned = %+v, want store-a absent from Present - it no longer exists as a project", scanned)
 	}
-	if _, err := Store(db, findings, scanned, now); err != nil {
+	if _, err := Store(db, findings, &scanned, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -700,7 +700,7 @@ func TestStoreProtectsEverythingWhenTheRootScanFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Store(db, findings, scanned, now); err != nil {
+	if _, err := Store(db, findings, &scanned, now); err != nil {
 		t.Fatal(err)
 	}
 	if pending, _ := db.ListProposals(true); len(pending) != 1 {
@@ -722,7 +722,7 @@ func TestStoreProtectsEverythingWhenTheRootScanFails(t *testing.T) {
 	if len(findings) != 0 {
 		t.Fatalf("got %+v, want none - nothing exists under the wrong root", findings)
 	}
-	if _, err := Store(db, findings, scanned, now); err != nil {
+	if _, err := Store(db, findings, &scanned, now); err != nil {
 		t.Fatal(err)
 	}
 

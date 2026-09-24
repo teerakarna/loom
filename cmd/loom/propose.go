@@ -104,7 +104,7 @@ func runPropose(args []string) error {
 	// contain (issue #40), so passing it a lane-filtered subset would
 	// wrongly withdraw every other lane's still-valid proposals as a side
 	// effect of narrowing this one invocation's own display.
-	if _, err := propose.Store(db, generated, scannedStores, now); err != nil {
+	if _, err := propose.Store(db, generated, &scannedStores, now); err != nil {
 		return err
 	}
 

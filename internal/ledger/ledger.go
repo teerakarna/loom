@@ -184,6 +184,18 @@ CREATE TABLE IF NOT EXISTS coordination (
 	payload TEXT NOT NULL, -- JSON
 	ts      TEXT NOT NULL
 );
+
+-- A singleton row (id fixed at 1 by the CHECK), not one row per pass:
+-- there is exactly one <home>/.claude/projects root per ledger, so there is
+-- exactly one streak to track. unscanned_since is NULL whenever the root
+-- was successfully enumerated last pass (whatever happened before does not
+-- matter once it works again) and holds the timestamp of the first pass in
+-- an unbroken run of scan failures otherwise - see issue #76,
+-- propose.needsProtection's expiry.
+CREATE TABLE IF NOT EXISTS memory_root_scan (
+	id              INTEGER PRIMARY KEY CHECK (id = 1),
+	unscanned_since TEXT
+);
 `
 
 // Open opens (creating if necessary) the SQLite database at path, in WAL

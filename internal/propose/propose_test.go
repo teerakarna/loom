@@ -316,7 +316,7 @@ func TestDismissalHoldsUntilEvidenceChanges(t *testing.T) {
 	}
 
 	ps, _ := Generate(db, now)
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -329,7 +329,7 @@ func TestDismissalHoldsUntilEvidenceChanges(t *testing.T) {
 
 	// Run again with nothing changed: must stay dismissed.
 	ps, _ = Generate(db, now)
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	if pending, _ = db.ListProposals(true); len(pending) != 0 {
@@ -339,7 +339,7 @@ func TestDismissalHoldsUntilEvidenceChanges(t *testing.T) {
 	// Now the facts change: another month passes, so days_unseen differs.
 	later := now.Add(30 * 24 * time.Hour)
 	ps, _ = Generate(db, later)
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, later); err != nil {
+	if _, err := Store(db, ps, nil, later); err != nil {
 		t.Fatal(err)
 	}
 	if pending, _ = db.ListProposals(true); len(pending) != 1 {
@@ -361,7 +361,7 @@ func TestPendingCapBoundsTheQueue(t *testing.T) {
 	if len(ps) != ledger.MaxPendingProposals+5 {
 		t.Fatalf("generator produced %d, want %d", len(ps), ledger.MaxPendingProposals+5)
 	}
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -412,7 +412,7 @@ func TestStoreDoesNotLetOneKindStarveAnother(t *testing.T) {
 	ps = append(ps, Proposal{Kind: KindFilenameSlugDrift, Subject: "drift-0", Evidence: map[string]any{}})
 	ps = append(ps, Proposal{Kind: KindUnreachableAsset, Subject: "unreachable-0", Evidence: map[string]any{}})
 
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -459,7 +459,7 @@ func TestWithdrawnWhenEvidenceStopsHolding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -487,7 +487,7 @@ func TestWithdrawnWhenEvidenceStopsHolding(t *testing.T) {
 	if len(ps) != 0 {
 		t.Fatalf("setup: generator still produced %+v, want nothing - the asset is used now", ps)
 	}
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -509,7 +509,7 @@ func TestWithdrawnWhenEvidenceStopsHolding(t *testing.T) {
 		t.Fatal(err)
 	}
 	ps, _ = Generate(db, now)
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ = db.ListProposals(true)
@@ -520,7 +520,7 @@ func TestWithdrawnWhenEvidenceStopsHolding(t *testing.T) {
 		t.Fatal(err)
 	}
 	ps, _ = Generate(db, now)
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	got, err = db.GetProposal(pending[0].ID)
@@ -547,7 +547,7 @@ func TestWithdrawalFreesTheCapForANewProposal(t *testing.T) {
 		}
 	}
 	ps, _ := Generate(db, now)
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -579,7 +579,7 @@ func TestWithdrawalFreesTheCapForANewProposal(t *testing.T) {
 	if len(ps) != ledger.MaxPendingProposals {
 		t.Fatalf("generator produced %d, want %d (old-0 dropped out, newcomer added)", len(ps), ledger.MaxPendingProposals)
 	}
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -607,7 +607,7 @@ func TestApplyRefusesWithdrawnProposal(t *testing.T) {
 		t.Fatal(err)
 	}
 	ps, _ := Generate(db, now)
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -624,7 +624,7 @@ func TestApplyRefusesWithdrawnProposal(t *testing.T) {
 		t.Fatal(err)
 	}
 	ps, _ = Generate(db, now)
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -642,7 +642,7 @@ func TestApplyRefusesAnythingTouchingUserFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	ps, _ := Generate(db, now)
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -662,7 +662,7 @@ func TestApplyPinsTheModelAndIsRevertible(t *testing.T) {
 	db := openDB(t)
 	seedAgentRuns(t, db, "Explore", policy.MinSampleSize, 0)
 	ps, _ := Generate(db, now)
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -721,7 +721,7 @@ func TestApplyRejectsUnknownAndRepeatIDs(t *testing.T) {
 
 	seedAgentRuns(t, db, "Explore", policy.MinSampleSize, 0)
 	ps, _ := Generate(db, now)
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
+	if _, err := Store(db, ps, nil, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -761,7 +761,7 @@ func applyAPin(t *testing.T, db *ledger.DB, agentType string, at time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, at); err != nil {
+	if _, err := Store(db, ps, nil, at); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -900,7 +900,7 @@ func TestApplyingARevertReopensTheQuestion(t *testing.T) {
 
 	later := now.Add(2 * time.Hour)
 	ps, _ := Generate(db, later)
-	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, later); err != nil {
+	if _, err := Store(db, ps, nil, later); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -971,22 +971,189 @@ func TestNeedsProtection(t *testing.T) {
 		Scanned: map[string]bool{"store-a": true},
 	}
 	cases := []struct {
-		name     string
-		stores   []string
-		coverage asset.MemoryScanCoverage
-		want     bool
+		name               string
+		stores             []string
+		coverage           asset.MemoryScanCoverage
+		rootFailureExpired bool
+		want               bool
 	}{
-		{"store fully scanned - a real withdrawal, no protection", []string{"store-a"}, coverage, false},
-		{"store present but not scanned - transient failure, protect", []string{"store-b"}, coverage, true},
-		{"store not present at all - deleted, let it withdraw normally", []string{"store-c"}, coverage, false},
-		{"mixed - one gap anywhere protects the whole proposal", []string{"store-a", "store-b"}, coverage, true},
-		{"no stores at all - can't tell, protect", nil, coverage, true},
-		{"root scan itself failed - protect regardless of the store named", []string{"store-a"}, asset.MemoryScanCoverage{}, true},
+		{"store fully scanned - a real withdrawal, no protection", []string{"store-a"}, coverage, false, false},
+		{"store present but not scanned - transient failure, protect", []string{"store-b"}, coverage, false, true},
+		{"store not present at all - deleted, let it withdraw normally", []string{"store-c"}, coverage, false, false},
+		{"mixed - one gap anywhere protects the whole proposal", []string{"store-a", "store-b"}, coverage, false, true},
+		{"no stores at all - can't tell, protect", nil, coverage, false, true},
+		{"root scan itself failed, within tolerance - protect regardless of the store named",
+			[]string{"store-a"}, asset.MemoryScanCoverage{}, false, true},
+		{"root scan itself failed, tolerance exceeded (issue #76) - stop protecting",
+			[]string{"store-a"}, asset.MemoryScanCoverage{}, true, false},
 	}
 	for _, c := range cases {
-		if got := needsProtection(c.stores, c.coverage); got != c.want {
+		if got := needsProtection(c.stores, c.coverage, c.rootFailureExpired); got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// TestStoreExpiresRootProtectionAfterTolerance is the end-to-end regression
+// test for issue #76: a root-scan failure protects every lane-scoped
+// pending proposal (issue #59), but only for a one-pass blip - a
+// persistently wrong $HOME must eventually stop protecting and fall back
+// to normal withdrawal, or a stale proposal sits occupying a pending slot
+// forever with nothing left backing it.
+func TestStoreExpiresRootProtectionAfterTolerance(t *testing.T) {
+	db := openDB(t)
+	start := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	row := ledger.ProposalRow{
+		Kind: KindUnreachableAsset, Subject: "store-a/orphan",
+		Evidence: `{"store":"store-a","filename":"orphan"}`, EvidenceHash: "h1", SampleSize: 1,
+	}
+	if _, err := db.UpsertProposal(row, start); err != nil {
+		t.Fatal(err)
+	}
+
+	failing := &asset.MemoryScanCoverage{} // Present == nil: the root itself never enumerated
+	if _, err := Store(db, nil, failing, start); err != nil {
+		t.Fatal(err)
+	}
+	if pending, _ := db.ListProposals(true); len(pending) != 1 {
+		t.Fatalf("got %+v, want the proposal protected on the first failing pass", pending)
+	}
+
+	// Still within the tolerance window - protected.
+	if _, err := Store(db, nil, failing, start.Add(RootScanFailureTolerance-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if pending, _ := db.ListProposals(true); len(pending) != 1 {
+		t.Fatalf("got %+v, want still protected just under the tolerance", pending)
+	}
+
+	// Tolerance exceeded - the streak has run long enough that this reads
+	// as a persistently wrong $HOME, not a blip. Falls back to normal
+	// withdrawal.
+	if _, err := Store(db, nil, failing, start.Add(RootScanFailureTolerance+time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if pending, _ := db.ListProposals(true); len(pending) != 0 {
+		t.Errorf("got %+v, want the proposal withdrawn once RootScanFailureTolerance is exceeded", pending)
+	}
+}
+
+// TestStoreRootProtectionStreakResetsAfterAWorkingPass confirms the streak
+// really does reset the moment the root becomes readable again, not just
+// that this pass isn't protected - a later failure must be timed from
+// scratch, not from whatever the earlier, now-irrelevant streak's start
+// was.
+func TestStoreRootProtectionStreakResetsAfterAWorkingPass(t *testing.T) {
+	db := openDB(t)
+	start := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	row := ledger.ProposalRow{
+		Kind: KindUnreachableAsset, Subject: "store-a/orphan",
+		Evidence: `{"store":"store-a","filename":"orphan"}`, EvidenceHash: "h1", SampleSize: 1,
+	}
+	if _, err := db.UpsertProposal(row, start); err != nil {
+		t.Fatal(err)
+	}
+
+	failing := &asset.MemoryScanCoverage{}
+	if _, err := Store(db, nil, failing, start); err != nil {
+		t.Fatal(err)
+	}
+
+	// The root scans fine again shortly after - the failing streak ends
+	// here, whatever it was. This pass also withdraws the proposal itself
+	// (a genuine scan found nothing for store-a), so it is re-seeded below
+	// to keep testing the streak, not this pass's own withdrawal.
+	working := &asset.MemoryScanCoverage{Present: map[string]bool{}, Scanned: map[string]bool{}}
+	if _, err := Store(db, nil, working, start.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.UpsertProposal(row, start.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	// A new failing streak starts two hours after the original start, not
+	// at the original start itself.
+	newStreakStart := start.Add(2 * time.Hour)
+	if _, err := Store(db, nil, failing, newStreakStart); err != nil {
+		t.Fatal(err)
+	}
+	// Well within the NEW streak's own tolerance window - but if the
+	// earlier streak had never actually reset, this timestamp is already
+	// an hour past where THAT streak (measured from the original start)
+	// would have expired.
+	checkAt := newStreakStart.Add(RootScanFailureTolerance - time.Hour)
+	if _, err := Store(db, nil, failing, checkAt); err != nil {
+		t.Fatal(err)
+	}
+	if pending, _ := db.ListProposals(true); len(pending) != 1 {
+		t.Errorf("got %+v, want still protected - within the new streak's own window, even though it is "+
+			"past where the pre-reset streak would have expired", pending)
+	}
+}
+
+// TestStoreRootProtectionStreakClearsWithNothingPending is the regression
+// test for a code-review finding on the first version of this fix: Store
+// only recorded root-scan coverage when something was actually pending,
+// so a successful scan with nothing pending never cleared an in-progress
+// streak. A later, unrelated proposal appearing under a fresh failure
+// would then silently inherit the stale, already-expired streak start
+// from long before and lose its own one-pass grace period immediately -
+// reproducing the exact bug this whole fix exists to prevent.
+func TestStoreRootProtectionStreakClearsWithNothingPending(t *testing.T) {
+	db := openDB(t)
+	start := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	row1 := ledger.ProposalRow{
+		Kind: KindUnreachableAsset, Subject: "store-a/orphan",
+		Evidence: `{"store":"store-a","filename":"orphan"}`, EvidenceHash: "h1", SampleSize: 1,
+	}
+	if _, err := db.UpsertProposal(row1, start); err != nil {
+		t.Fatal(err)
+	}
+
+	failing := &asset.MemoryScanCoverage{}
+	if _, err := Store(db, nil, failing, start); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := db.ListProposals(true)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("got %+v (%v), want the proposal protected on the first failing pass", pending, err)
+	}
+	if err := db.DismissProposal(pending[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The root scans fine for a while, well past what would have been the
+	// original streak's tolerance window, with nothing pending the whole
+	// time - Store must still notice and clear the streak.
+	working := &asset.MemoryScanCoverage{Present: map[string]bool{}, Scanned: map[string]bool{}}
+	for i := 1; i <= 3; i++ {
+		at := start.Add(RootScanFailureTolerance + time.Duration(i)*24*time.Hour)
+		if _, err := Store(db, nil, working, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A new, unrelated proposal appears under a fresh failure, well past
+	// the original (now-irrelevant) streak's expiry point.
+	row2 := ledger.ProposalRow{
+		Kind: KindUnreachableAsset, Subject: "store-b/other",
+		Evidence: `{"store":"store-b","filename":"other"}`, EvidenceHash: "h2", SampleSize: 1,
+	}
+	newFailureAt := start.Add(RootScanFailureTolerance + 4*24*time.Hour)
+	if _, err := db.UpsertProposal(row2, newFailureAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Store(db, nil, failing, newFailureAt); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err = db.ListProposals(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Subject != "store-b/other" {
+		t.Errorf("got %+v, want store-b/other protected on its own first failing pass, not withdrawn on "+
+			"an inherited, already-expired streak from long before", pending)
 	}
 }
 

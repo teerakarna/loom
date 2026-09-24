@@ -102,6 +102,20 @@ func formatTime(t time.Time) any {
 	return t.UTC().Format(time.RFC3339)
 }
 
+// parseTime is formatTime's counterpart, for the rare caller that needs a
+// stored timestamp back as a time.Time rather than as an opaque string to
+// compare or display (issue #76: propose.needsProtection measures how long
+// a streak has run, which needs real duration arithmetic, not just
+// ordering). An empty string (formatTime's NULL) reports the zero time and
+// no error - the caller's job to treat that as "not set", not as a parse
+// failure.
+func parseTime(s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, s)
+}
+
 // Summary is the aggregate `loom report` reads back.
 type Summary struct {
 	TotalRuns         int
@@ -185,9 +199,9 @@ type ShareAtN struct {
 }
 
 // Report aggregates everything currently in the ledger. It does not attempt
-// to reconcile weighted_cost against reported_subagent_tokens — see
+// to reconcile weighted_cost against reported_subagent_tokens - see
 // docs/transcript-schema.md, "Reconciliation does NOT hold under naive
-// summing" — it only counts how many agent runs have a reported figure at
+// summing" - it only counts how many agent runs have a reported figure at
 // all, as a visibility signal.
 // Report aggregates the whole ledger. ReportForLane narrows the same summary
 // to one lane.
