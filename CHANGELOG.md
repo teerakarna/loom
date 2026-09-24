@@ -47,7 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `!cancelled()`/checkout-outcome condition on six steps with a YAML anchor, so a future step missing
   it is a visibly absent `if:` line rather than a subtly wrong one. Also collapsed `scripts/ci.sh`'s
   four near-identical optional-tool blocks into one `optional_check` helper, raised independently by
-  two separate review rounds.
+  two separate review rounds. A fifth round found `scripts/ci.sh` claimed to install `govulncheck`
+  itself, which it never did (corrected); guarded an array expansion that would abort the whole
+  script on older bash if a future optional check omitted a version command; and collapsed
+  `build`/`vet`/`test`'s own hand-copied blocks into a matching `required_check` helper. Also
+  documented one more instance of the billed-minutes-for-latency trade this merge makes: GitHub's
+  "re-run failed jobs" now re-runs the whole merged job instead of just the one check that failed.
 
 - MCP surface widened back to four tools (#62, the last of the AMC trial's four findings, and the one
   that reverses an earlier decision): `get_cost_summary`, `get_context_occupancy` and `list_proposals`

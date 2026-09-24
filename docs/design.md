@@ -1501,9 +1501,12 @@ went from five independent pass/fail indicators to two - a PR that only fails li
 `ci` with no indication which of five steps broke without opening the log, where it used to show
 `lint` red and the other four green at a glance (found by code review, before this shipped - not
 fixed, since restoring it means restoring the five separate jobs, the opposite of this merge's whole
-point, but worth saying plainly rather than discovering by surprise the first time a check fails).
-Worth paying deliberately, not by accident: fewer billed minutes, slower feedback and coarser
-failure-attribution on each individual push.
+point, but worth saying plainly rather than discovering by surprise the first time a check fails). A
+fifth review round added one more instance of the same trade: GitHub's own "re-run failed jobs"
+button used to re-run only the one job that actually failed (roughly a minute); now it re-runs the
+whole merged `ci` job every time, which can offset this PR's own per-push savings on any PR needing
+more than one retry. Worth paying deliberately, not by accident: fewer billed minutes on a clean run,
+slower feedback, coarser failure-attribution, and a costlier retry on one that is not.
 
 A further cost lever the same review round raised and this merge does not take: path-based gating
 (skipping the job entirely for a docs-only change, say `CHANGELOG.md` or this file). Not implemented
@@ -1620,6 +1623,28 @@ review passes flagging the same duplication is a real signal, not a one-off nitp
 gitleaks/plugin-manifests to a single call instead of a ~10-line block, verified against every
 scenario already covered: a clean run, a missing required tool, a missing optional tool, and a real
 check failure with later checks still running - all four confirmed identical to before the refactor.
+
+**A fifth round found three more real, smaller issues in `scripts/ci.sh`, plus the re-run-granularity
+trade above.** A comment claimed the script installs `govulncheck` at `@latest` the way `ci.yml`
+does - it never did, only checks whether the tool is already on `PATH` and skips with a hint if not;
+corrected. `optional_check`'s version-print expanded `"${version_cmd[@]}"` without checking it was
+non-empty first - harmless today (all four calls supply one), but expanding an empty array under
+`set -u` throws an unbound-variable error on bash older than 4.4 (macOS's own default `/bin/bash` is
+3.2), which would abort the whole script for a future call that omits a version command - exactly the
+"one step kills everything after it" failure this file was rewritten to stop doing. Guarded with a
+length check first. And `build`/`vet`/`test` were still three hand-copied two-line blocks, the same
+shape `optional_check` exists to collapse for the other four checks - new `required_check` (no
+`installed()` branching needed, `go` is already checked once before any of these run) for the same
+reason.
+
+Two more from the same round weighed and left as-is: running this script via `sh scripts/ci.sh`
+(bypassing the shebang, which already declares bash) fails differently and lands on exit 2, which
+could look like "incomplete" rather than an obvious crash - out of the documented invocation pattern
+(`./scripts/ci.sh`, matching how `CONTRIBUTING.md`/`CLAUDE.md` describe it), not fixed. And the script
+hand-duplicates a couple of literal command strings from `ci.yml` (the `govulncheck` install line, the
+plugin-validate invocation) with no shared source between YAML and shell - already stated plainly in
+the file's own header as an accepted limitation of having two separate execution contexts, not a new
+finding needing a different answer.
 
 Branch protection's required status checks were updated to match (`ci`, `secrets`, replacing the
 five old names) - confirmed with the owner before changing it, both that the change should happen at

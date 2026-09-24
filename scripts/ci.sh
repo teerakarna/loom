@@ -41,10 +41,14 @@
 # that's what's on PATH, but nothing here enforces the match - a different
 # local version can pass here and fail in CI, or the reverse, with no
 # warning beyond the version this prints. govulncheck is not pinned by
-# either side: both ci.yml and this script install it at @latest, so there
-# is nothing to compare it against. Versions are informational, not
-# enforced, so treat a clean run here as a fast local check, not a
-# substitute for watching the real CI run once Actions is working again.
+# either side: ci.yml installs it fresh at @latest every run, so there is
+# nothing to compare it against - this script does not install it itself,
+# only checks whether it is already on PATH and skips with a hint if not
+# (found by code review, before this shipped: an earlier version of this
+# comment claimed the script installs it too, which it never did).
+# Versions are informational, not enforced, so treat a clean run here as a
+# fast local check, not a substitute for watching the real CI run once
+# Actions is working again.
 
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -72,6 +76,17 @@ run() {
 		failed_checks+=("$name")
 	fi
 	echo
+}
+
+# required_check NAME CMD... - the build/vet/test shape: no installed()
+# branching (go's presence is already checked once, below, before any of
+# these run), just a header and a tracked run(), written once instead of
+# three copies with the name changed.
+required_check() {
+	local name="$1"
+	shift
+	echo "== $name =="
+	run "$name" "$@"
 }
 
 # installed TOOL - reports whether TOOL is on PATH, recording it as missing
@@ -112,8 +127,17 @@ optional_check() {
 	# Best-effort and untracked, same reason run() itself never prints a
 	# version: a --version flag failing for an unrelated reason must never
 	# be mistaken for the real check (which follows, still to come below)
-	# having failed.
-	"${version_cmd[@]}" || true
+	# having failed. Length-checked first, not just expanded directly
+	# (found by code review, before this shipped): expanding an empty
+	# array under set -u throws an unbound-variable error on bash <4.4
+	# (macOS's own default /bin/bash is 3.2), which would abort the whole
+	# script rather than just skip an empty version command - none of the
+	# calls below hit this today, but a future optional_check call with no
+	# VERSION_CMD would otherwise reintroduce exactly the "one step kills
+	# everything after it" failure this file was rewritten to stop doing.
+	if [ "${#version_cmd[@]}" -gt 0 ]; then
+		"${version_cmd[@]}" || true
+	fi
 	run "$name" "$@"
 }
 
@@ -122,14 +146,9 @@ if ! installed go; then
 	exit "$EXIT_INCOMPLETE"
 fi
 
-echo "== build =="
-run build go build ./...
-
-echo "== vet =="
-run vet go vet ./...
-
-echo "== test =="
-run test go test ./...
+required_check build go build ./...
+required_check vet go vet ./...
+required_check test go test ./...
 
 optional_check lint golangci-lint "https://golangci-lint.run/welcome/install/" \
 	golangci-lint --version -- golangci-lint run ./...
