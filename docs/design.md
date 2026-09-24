@@ -1166,6 +1166,49 @@ diagnosis, with an explicit "if restarting doesn't fix it, this is a different, 
 same principle as constraint 11, never presenting a guess with the confidence of a measured
 finding, applied to the error message itself, not just to loom's own proposals.
 
+#### A store unreadable for one pass could wrongly withdraw its own real proposals - BUILT 2026-09-24
+
+Issue #59, found by code review while shipping #40's withdrawal mechanism (`WithdrawStalePending`,
+"a pending proposal is never withdrawn when its evidence stops holding"). `DiscoverAllMemory`
+silently skips any store whose `memory/` directory fails to read - a deliberate B7c decision,
+constraint 7, one project's permission problem must not take every other store's findings down
+with it. Before #40 that was harmless: a skipped store just meant one pass with no findings for
+it. After #40, a skipped store looked, from `WithdrawStalePending`'s point of view, identical to a
+store whose findings genuinely stopped being true - every real, unchanged `broken_link`/
+`unreachable_asset`/`filename_slug_drift`/`promote_memory_duplicate` proposal for that store got
+marked withdrawn on the one pass it couldn't be read, even though nothing about the underlying
+facts changed. Self-healing on the next successful pass (#40's own revival rule brings it back
+once the scan reproduces the identical finding), but a real, if narrow, flicker in between.
+
+Fixing it meant crossing a package boundary that did not have the vocabulary for it:
+`ledger.WithdrawStalePending` has no concept of "store", `internal/asset` has no concept of a
+proposal. Resolved without teaching either package about the other's concept. `DiscoverAllMemory`
+now returns a second value alongside its files: the set of stores whose `memory/` directory was
+actually readable this pass. `GenerateMemoryFindings` forwards it untouched - it has nothing to
+add. `propose.Store` is the one place that already understood both sides (it holds a `*ledger.DB`
+and it already builds proposal evidence), so it does the store-awareness entirely on its own: new
+`LaneScopedKinds` (promoted from a var of the same name and shape already living in
+`cmd/loom/propose.go` for issue #68's `--lane` filter) and `EvidenceStores` (also generalizing
+that file's inline evidence-parsing struct, now shared by both the lane filter and this fix,
+removing a duplicate) identify which pending proposals are store-scoped and which store(s) each
+one's evidence names. Before withdrawing, any pending lane-scoped proposal the current pass did
+not reproduce is checked against the scanned-stores set: if any store its evidence names was not
+actually scanned this pass, it is treated as reproduced rather than stale, protecting it until a
+pass that actually looks at that store again says otherwise. `ledger.WithdrawStalePending` itself
+is untouched - the crossing happens entirely on `propose`'s side of the boundary, which is where
+both concepts it needs were already in scope.
+
+`scannedStores` is `nil` for a caller with no memory findings (`Generate`'s DB-only kinds have
+nothing store-scoped to protect), which is also the signal `Store` uses to skip the extra
+`ListProposals` lookup entirely when there is nothing to protect - existing DB-only tests pass
+`nil` unchanged and see no behavior difference.
+
+Verified for real, not just by unit test: built the binary against a scratch `HOME`, raised a
+genuine `unreachable_asset` finding, made the store's `memory/` directory unreadable (a file where
+a directory should be) and reran `loom propose` - the proposal stayed pending. Fixed the store for
+real (added the missing `MEMORY.md` entry) and reran again - the proposal withdrew, confirming the
+fix protects an unscanned store without breaking a genuine withdrawal.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

@@ -491,12 +491,44 @@ func asFloat(v any) float64 {
 // stopped applying is not the same event as one a human dismissed. Doing
 // this before the upsert loop below, not after, is what lets a proposal
 // freed by a withdrawal fill the same pass's MaxPendingProposals slot.
-func Store(db *ledger.DB, ps []Proposal, now time.Time) (int, error) {
+//
+// scannedStores is DiscoverAllMemory's own scanned-stores set (nil when the
+// caller has no memory findings at all, e.g. tests exercising Generate's
+// DB-only kinds in isolation - nothing lane-scoped can appear in ps then,
+// so there is nothing to protect). Issue #59, found by code review while
+// shipping #40: a store whose memory directory was transiently unreadable
+// this pass produces no findings for it, which WithdrawStalePending cannot
+// tell apart from a store whose findings genuinely stopped being true -
+// every real, unchanged proposal for that store would be marked withdrawn
+// even though nothing about the underlying facts changed. Before
+// withdrawing, any pending lane-scoped proposal ps did not reproduce is
+// checked against scannedStores: if any store its evidence names was not
+// actually scanned this pass, it is treated as reproduced rather than
+// stale - protected, not withdrawn, until a pass that actually looked at
+// that store again says otherwise. A proposal ps did reproduce is already
+// safe regardless, and one whose stores were all scanned this pass and
+// still isn't reproduced is a real withdrawal, exactly as before.
+func Store(db *ledger.DB, ps []Proposal, scannedStores map[string]bool, now time.Time) (int, error) {
 	ps = interleaveByKind(ps)
 
 	generated := make(map[ledger.ProposalIdentity]bool, len(ps))
 	for _, p := range ps {
 		generated[ledger.ProposalIdentity{Kind: p.Kind, Subject: p.Subject}] = true
+	}
+	if scannedStores != nil {
+		pending, err := db.ListProposals(true)
+		if err != nil {
+			return 0, err
+		}
+		for _, p := range pending {
+			id := ledger.ProposalIdentity{Kind: p.Kind, Subject: p.Subject}
+			if generated[id] || !LaneScopedKinds[p.Kind] {
+				continue
+			}
+			if !allStoresScanned(EvidenceStores(p.Evidence), scannedStores) {
+				generated[id] = true // protect: this pass never actually looked at every store behind it
+			}
+		}
 	}
 	if err := db.WithdrawStalePending(generated); err != nil {
 		return 0, err
@@ -521,6 +553,22 @@ func Store(db *ledger.DB, ps []Proposal, now time.Time) (int, error) {
 		}
 	}
 	return written, nil
+}
+
+// allStoresScanned reports whether every store stores names is present in
+// scanned. Empty stores - evidence that failed to parse, or named no store
+// at all - returns false: Store's caller treats "can't tell" the same as
+// "not fully scanned", protecting rather than guessing.
+func allStoresScanned(stores []string, scanned map[string]bool) bool {
+	if len(stores) == 0 {
+		return false
+	}
+	for _, s := range stores {
+		if !scanned[s] {
+			return false
+		}
+	}
+	return true
 }
 
 // interleaveByKind reorders ps so proposals of different kinds round-robin

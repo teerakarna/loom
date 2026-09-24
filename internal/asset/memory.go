@@ -65,14 +65,24 @@ const MemoryIndexSlug = "MEMORY"
 
 // DiscoverAllMemory walks every project's memory store under
 // <home>/.claude/projects/*/memory and returns every memory file found
-// except the index itself, hashed and parsed for B7c's structural checks.
-// A missing or unreadable store is skipped, not an error - most stores
-// will exist, not all (design doc constraint 1), and this scans dozens of
-// stores at once, unlike Discover's single-project scan: one store with a
-// permission problem must not take proposal listing down for every other
-// store along with it (constraint 7, degrade never block - found by code
-// review, an earlier version propagated any error past os.IsNotExist and
-// let one bad store fail the whole scan).
+// except the index itself, hashed and parsed for B7c's structural checks,
+// plus the set of stores whose memory directory was actually readable this
+// pass. A missing or unreadable store is skipped, not an error - most
+// stores will exist, not all (design doc constraint 1), and this scans
+// dozens of stores at once, unlike Discover's single-project scan: one
+// store with a permission problem must not take proposal listing down for
+// every other store along with it (constraint 7, degrade never block -
+// found by code review, an earlier version propagated any error past
+// os.IsNotExist and let one bad store fail the whole scan).
+//
+// The scanned-stores set exists for a caller downstream of this function,
+// not for anything here: issue #59, found by code review while shipping
+// #40's withdrawal mechanism. A store skipped for one pass looks, from a
+// withdrawal check's point of view, identical to a store whose findings
+// genuinely stopped being true - propose.Store uses this to tell the two
+// apart and protect a store's pending proposals when this pass never
+// actually looked at it. Callers that don't care (a plain listing, a test
+// with no withdrawal step) can ignore the second return value.
 //
 // Two conventions are recognized side by side, mirroring scanMarkdownDir's
 // own two shapes for this exact kind (KindMemory) in the single-project
@@ -81,17 +91,18 @@ const MemoryIndexSlug = "MEMORY"
 // without this, a memory asset using the subdirectory convention was
 // invisible to every B7c check, including a false broken_link report
 // against a [[link]] whose target genuinely existed.
-func DiscoverAllMemory(home string) ([]MemoryFile, error) {
+func DiscoverAllMemory(home string) ([]MemoryFile, map[string]bool, error) {
 	root := filepath.Join(home, ".claude", "projects")
 	stores, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var out []MemoryFile
+	scanned := map[string]bool{}
 	for _, s := range stores {
 		if !s.IsDir() {
 			continue
@@ -101,6 +112,7 @@ func DiscoverAllMemory(home string) ([]MemoryFile, error) {
 		if err != nil {
 			continue // this store is unreadable; every other store still gets scanned
 		}
+		scanned[s.Name()] = true
 		for _, e := range entries {
 			if e.IsDir() {
 				path := filepath.Join(memDir, e.Name(), "SKILL.md")
@@ -121,7 +133,7 @@ func DiscoverAllMemory(home string) ([]MemoryFile, error) {
 			}
 		}
 	}
-	return out, nil
+	return out, scanned, nil
 }
 
 // readMemoryFile reads path and builds a MemoryFile, or reports false if

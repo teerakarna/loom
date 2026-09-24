@@ -312,12 +312,12 @@ func listProposalsHandler(db *ledger.DB, home string) gomcp.ToolHandlerFor[empty
 		// to run the test suite, which is not the same thing as the server's
 		// own configured home and made tests non-hermetic (found by the test
 		// suite itself, not by review).
-		memoryFindings, err := propose.GenerateMemoryFindings(home)
+		memoryFindings, scannedStores, err := propose.GenerateMemoryFindings(home)
 		if err != nil {
 			return nil, ProposalsOutput{}, explainIfStaleProcess(err)
 		}
 		generated = append(generated, memoryFindings...)
-		if _, err := propose.Store(db, generated, now); err != nil {
+		if _, err := propose.Store(db, generated, scannedStores, now); err != nil {
 			return nil, ProposalsOutput{}, explainIfStaleProcess(err)
 		}
 

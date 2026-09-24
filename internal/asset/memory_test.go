@@ -17,7 +17,7 @@ func TestDiscoverAllMemory_CrossProject(t *testing.T) {
 	writeFile(t, filepath.Join(home, ".claude", "projects", "store-a", "memory", "MEMORY.md"),
 		"- [Shared fact](fact.md)")
 
-	files, err := DiscoverAllMemory(home)
+	files, _, err := DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestDiscoverAllMemory_LinksExtracted(t *testing.T) {
 	writeFile(t, filepath.Join(home, ".claude", "projects", "store-a", "memory", "a.md"),
 		"---\nname: a\n---\nSee [[b]] and [[c]] for more.")
 
-	files, err := DiscoverAllMemory(home)
+	files, _, err := DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestDiscoverAllMemory_LinksExtracted(t *testing.T) {
 }
 
 func TestDiscoverAllMemory_MissingHomeIsNotError(t *testing.T) {
-	files, err := DiscoverAllMemory(filepath.Join(t.TempDir(), "does-not-exist"))
+	files, _, err := DiscoverAllMemory(filepath.Join(t.TempDir(), "does-not-exist"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestDiscoverAllMemory_NoFrontmatterLeavesSlugEmpty(t *testing.T) {
 	home := t.TempDir()
 	writeFile(t, filepath.Join(home, ".claude", "projects", "store-a", "memory", "plain.md"), "# Just a heading\n\nBody.")
 
-	files, err := DiscoverAllMemory(home)
+	files, _, err := DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestDiscoverAllMemory_OneUnreadableStoreDoesNotFailTheScan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	files, err := DiscoverAllMemory(home)
+	files, _, err := DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatalf("DiscoverAllMemory returned an error, want the bad store skipped: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestDiscoverAllMemory_SubdirectoryConvention(t *testing.T) {
 	writeFile(t, filepath.Join(home, ".claude", "projects", "store-a", "memory", "not-a-topic", "notes.md"),
 		"stray file, not SKILL.md")
 
-	files, err := DiscoverAllMemory(home)
+	files, _, err := DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
