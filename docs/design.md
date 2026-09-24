@@ -1377,6 +1377,16 @@ time. Fixed with one atomic `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` sta
 keeping the existing value across every consecutive failure and only taking the new one the first
 time - no separate read, nothing to race.
 
+**A third round found the second fix's own doc comment had gone stale**, still describing the
+pre-refactor value-type sentinel ("pass the zero value") after `coverage` became a pointer mid-fix -
+a future maintainer following it literally would pass `&asset.MemoryScanCoverage{}`, which is a real
+scan reporting nothing found, not "no scan attempted," and would start a genuine failure streak for
+a call that never scanned. Corrected to state the actual sentinel (`nil`). One more, low severity,
+left as-is: `RecordRootScanCoverage`'s success path writes unconditionally on every call rather than
+checking first whether the streak is already clear - a guard would need its own read first, which
+would cost more on the common case (still working fine) than the occasional unnecessary write it
+would save.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

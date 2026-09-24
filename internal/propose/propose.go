@@ -549,14 +549,16 @@ func asFloat(v any) float64 {
 // this before the upsert loop below, not after, is what lets a proposal
 // freed by a withdrawal fill the same pass's MaxPendingProposals slot.
 //
-// coverage is DiscoverAllMemory's own scan-coverage report. Pass the zero
-// value only when the caller genuinely never runs GenerateMemoryFindings
-// against this ledger - the zero value protects every lane-scoped pending
-// row unconditionally (needsProtection's "can't tell" default), which is
-// only inert because today's DB-only tests never seed lane-scoped rows in
-// the first place, not because the zero value is inherently a no-op
-// (flagged by code review: a future caller passing it against a ledger
-// that does have real lane-scoped rows would protect them forever). Issue
+// coverage is DiscoverAllMemory's own scan-coverage report, or nil when the
+// caller genuinely never runs GenerateMemoryFindings against this ledger
+// (issue #76: nil, not a zero-value *pointer*, is the real "no scan
+// attempted" sentinel - a non-nil pointer to a zero-value struct still
+// means "a real scan happened and found nothing," which records a root-scan
+// failure and starts a real streak in the ledger, the opposite of a no-op).
+// Passing nil skips both the recording and the protection loop entirely,
+// which is also why it is inert for today's DB-only tests: they have
+// nothing lane-scoped to protect in the first place, not because nil
+// happens to be harmless in general. Issue
 // #59, found by code review while shipping #40: a store whose memory
 // directory was transiently unreadable this pass produces no findings for
 // it, which WithdrawStalePending cannot tell apart from a store whose
