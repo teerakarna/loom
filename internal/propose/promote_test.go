@@ -50,6 +50,18 @@ func writeAgentFile(t *testing.T, home, name, content string) {
 	}
 }
 
+// writePlanFile mirrors writeAgentFile for <home>/.claude/plans.
+func writePlanFile(t *testing.T, home, name, content string) {
+	t.Helper()
+	path := filepath.Join(home, ".claude", "plans", name+".md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEvidenceStores(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -339,6 +351,62 @@ func TestDetectBrokenLinks_AgentAndPlanShadowedLinksAreFlagged(t *testing.T) {
 	}
 	if plan.Evidence["target_is_plan"] != true {
 		t.Errorf("plan Evidence = %+v, want target_is_plan = true", plan.Evidence)
+	}
+}
+
+// TestLinkTargetNames_FlatFileUsesOnDiskName is the flat-file-convention
+// counterpart to the skill subdirectory drift test: an agent stored as
+// "name.md" whose frontmatter has drifted from its own filename must still
+// return both names, reading OnDiskName rather than re-deriving it (found
+// by code review, before this shipped - the first version sniffed Path's
+// basename by hand instead of reusing what assetFromFile already computed).
+func TestLinkTargetNames_FlatFileUsesOnDiskName(t *testing.T) {
+	home := t.TempDir()
+	writeAgentFile(t, home, "deploy-bot", "---\nname: deploy-bot-v2\n---\nBody.")
+
+	agents, err := asset.DiscoverGlobalAgents(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("got %+v, want exactly one agent", agents)
+	}
+	got := linkTargetNames(agents[0])
+	want := []string{"deploy-bot-v2", "deploy-bot"}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// TestGenerateMemoryFindings_NameCollisionAcrossKindsPicksFirstRegistered
+// is the regression test for a code-review finding: a name existing as
+// more than one kind used to silently report whichever kind happened to
+// register last - an accident of call order, not a real answer. First
+// registration wins instead, so the precedence is the fixed order
+// GenerateMemoryFindings registers kinds in (skill, then agent, then
+// plan), confirmed here by giving the same name to both a skill and a
+// plan and checking the skill wins.
+func TestGenerateMemoryFindings_NameCollisionAcrossKindsPicksFirstRegistered(t *testing.T) {
+	home := t.TempDir()
+	writeSkillFile(t, home, "migration", "---\nname: migration\n---\nBody.")
+	writePlanFile(t, home, "migration", "---\nname: migration\n---\nBody.")
+	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[migration]] for context.")
+
+	got, _, err := GenerateMemoryFindings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range got {
+		if p.Kind == KindBrokenLink && p.Evidence["target_slug"] == "migration" {
+			found = true
+			if !strings.Contains(p.Summary, "which is a skill, not a memory") {
+				t.Errorf("Summary = %q, want the skill wording (registered first), not the plan wording", p.Summary)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("got %+v, want a broken_link proposal for migration", got)
 	}
 }
 

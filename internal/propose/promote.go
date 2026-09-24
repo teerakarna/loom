@@ -3,9 +3,7 @@ package propose
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/teerakarna/loom/internal/asset"
 )
@@ -81,25 +79,24 @@ func EvidenceStores(evidence string) []string {
 
 // linkTargetNames returns every name a [[link]] author might plausibly
 // reference for a: both the frontmatter name assetFromFile resolved and
-// the name actually on disk, which can drift apart (a real, documented
-// failure mode - found by code review on #66, before this shipped, citing
-// this project's own memory of six skills sitting with drifted frontmatter
-// for months unnoticed). The on-disk name is what a human actually
-// invokes, not necessarily whatever the frontmatter claims.
+// the name actually on disk (asset.Asset.OnDiskName), which can drift
+// apart (a real, documented failure mode - found by code review on #66,
+// before this shipped, citing this project's own memory of six skills
+// sitting with drifted frontmatter for months unnoticed). The on-disk name
+// is what a human actually invokes, not necessarily whatever the
+// frontmatter claims.
 //
-// The on-disk name depends on which of scanMarkdownDir's two shapes a's
-// Path is: the containing directory's name for the "name/SKILL.md"
-// convention, or the file's own basename for a flat "name.md" - unlike
-// skills (scanSkillDir splits the two shapes into different Kinds), an
-// agent or a plan can be either shape under the identical Kind, so the
-// shape has to be read off the path itself.
+// Reads OnDiskName rather than re-deriving it from Path (a first version
+// of this function sniffed the basename for a literal "SKILL.md" to tell
+// scanMarkdownDir's two shapes apart) - found by code review, before this
+// shipped: that duplicated a computation assetFromFile's own caller had
+// already done once and discarded, and would silently go stale if that
+// convention ever changed without linkTargetNames changing to match.
 func linkTargetNames(a asset.Asset) []string {
-	names := []string{a.Name}
-	base := filepath.Base(a.Path)
-	if base == "SKILL.md" {
-		return append(names, filepath.Base(filepath.Dir(a.Path)))
+	if a.OnDiskName == a.Name {
+		return []string{a.Name}
 	}
-	return append(names, strings.TrimSuffix(base, filepath.Ext(base)))
+	return []string{a.Name, a.OnDiskName}
 }
 
 // GenerateMemoryFindings scans every project's memory store for B7c's four
@@ -142,8 +139,12 @@ func GenerateMemoryFindings(home string) ([]Proposal, asset.MemoryScanCoverage, 
 	// skill-only case; agents and plans have the identical global-plus-
 	// per-project shape in asset.DefaultLocations, and only the global half
 	// is reliably enumerable the same way skills' is). A name colliding
-	// across two kinds is vanishingly unlikely and not worth resolving
-	// specially - whichever registers last wins.
+	// across two kinds is vanishingly unlikely, but "whichever happens to
+	// register last wins" is an accident of call order, not a real answer -
+	// first registration wins instead, so the precedence is the fixed,
+	// documented order the calls below are written in (skill, then agent,
+	// then plan), not implementation-order-dependent (found by code review,
+	// before this shipped).
 	knownOtherAssets := map[string]string{}
 	registerOtherAssets := func(kind string, discover func(string) ([]asset.Asset, error)) {
 		found, err := discover(home)
@@ -160,6 +161,9 @@ func GenerateMemoryFindings(home string) ([]Proposal, asset.MemoryScanCoverage, 
 				continue
 			}
 			for _, name := range linkTargetNames(a) {
+				if _, taken := knownOtherAssets[name]; taken {
+					continue
+				}
 				knownOtherAssets[name] = kind
 			}
 		}
@@ -232,6 +236,11 @@ func detectMemoryDuplicates(files []asset.MemoryFile) []Proposal {
 // brokenLinkKindNoun says how each "other asset" kind reads in a sentence
 // (issue #78, generalizing #66's skill-only case) - the article included,
 // since it is not guessable from the kind string alone.
+// A future "other asset" kind added to registerOtherAssets' call list needs
+// an entry here too, or brokenLinkText's lookup below silently falls back
+// to the raw kind string rather than failing loudly - nothing else
+// enforces that they stay matched (flagged by code review, not yet a bug
+// since every kind registerOtherAssets can produce has one).
 var brokenLinkKindNoun = map[string]string{
 	asset.KindSkill: "a skill",
 	asset.KindAgent: "an agent",
@@ -255,6 +264,13 @@ func brokenLinkText(filename, targetSlug any, isMemoryIndex bool, otherKind stri
 				"store was never meant to have one."
 	case otherKind != "":
 		noun := brokenLinkKindNoun[otherKind]
+		if noun == "" {
+			// A kind with no entry above - degrade to the raw kind string
+			// rather than an empty one ("which is , not a memory"), so a
+			// forgotten entry still reads as a defect worth reporting, not
+			// as a malformed sentence nobody would think to file a bug for.
+			noun = otherKind
+		}
 		return fmt.Sprintf("%v links to [[%v]], which is %s, not a memory", filename, targetSlug, noun),
 			fmt.Sprintf("A [[link]] resolves only against another memory file's frontmatter name in the "+
 				"same store - never a skill, agent, plan, or other asset kind, even one with a matching "+

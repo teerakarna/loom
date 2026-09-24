@@ -46,6 +46,15 @@ type Asset struct {
 	Path        string
 	Name        string
 	Description string
+	// OnDiskName is the name Discover found this asset under before any
+	// frontmatter override - the containing directory's name for the
+	// "name/SKILL.md" convention, or the file's own basename for a flat
+	// "name.md" (whichever scanSkillDir/scanMarkdownDir actually walked).
+	// Equal to Name whenever there is no frontmatter override; kept
+	// separately because a caller matching what a human would actually
+	// reference (e.g. propose.linkTargetNames) wants both, not just
+	// whichever assetFromFile happened to prefer.
+	OnDiskName string
 }
 
 // Locations is the set of directories and files Discover scans, resolved
@@ -274,7 +283,10 @@ func assetFromFile(path, fallbackName, kind string) Asset {
 	if desc == "" {
 		desc = firstHeading(path)
 	}
-	return Asset{Kind: kind, Path: path, Name: name, Description: truncate(desc, maxDescriptionRunes)}
+	return Asset{
+		Kind: kind, Path: path, Name: name, OnDiskName: fallbackName,
+		Description: truncate(desc, maxDescriptionRunes),
+	}
 }
 
 // truncate returns s unchanged if it's within max runes, or its first
