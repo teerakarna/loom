@@ -1,6 +1,7 @@
 package propose
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -313,6 +314,53 @@ func TestDetectBrokenLinks_CrossStoreTakesPriorityOverSkillMatch(t *testing.T) {
 	// comment on the same principle).
 	if _, present := got[0].Evidence["target_is_skill"]; present {
 		t.Errorf("Evidence = %+v, want target_is_skill absent - the cross-store case won", got[0].Evidence)
+	}
+}
+
+// TestBrokenLinkKindsStayInSync is the drift detector code review asked
+// for: the set of "other asset" kinds is spelled out independently in four
+// places (registerOtherAssets' calls, detectBrokenLinks' evidence-writing
+// switch, SummaryFor's evidence-reading switch, and brokenLinkKindNoun),
+// with nothing but a comment enforcing they stay matched. This walks the
+// one canonical list below through the real write path (detectBrokenLinks)
+// and the real read path (SummaryFor) together, so a kind added to one of
+// the four places but not the others fails a test, not just silently
+// degrades at runtime the way brokenLinkKindNoun's own fallback already
+// tolerates.
+//
+// Adding a fourth "other asset" kind means adding it here too - that is
+// the point: this list is itself one of the places that has to change,
+// deliberately, not a mechanism that discovers new kinds on its own.
+func TestBrokenLinkKindsStayInSync(t *testing.T) {
+	for _, kind := range []string{asset.KindSkill, asset.KindAgent, asset.KindPlan} {
+		t.Run(kind, func(t *testing.T) {
+			if brokenLinkKindNoun[kind] == "" {
+				t.Fatalf("brokenLinkKindNoun has no entry for %q", kind)
+			}
+
+			home := t.TempDir()
+			writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[thing]].")
+			files, _, err := asset.DiscoverAllMemory(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			written := detectBrokenLinks(home, files, map[string]string{"thing": kind})
+			if len(written) != 1 {
+				t.Fatalf("got %+v, want exactly one broken link", written)
+			}
+			p := written[0]
+			if !strings.Contains(p.Summary, brokenLinkKindNoun[kind]) {
+				t.Errorf("write side: Summary = %q, want it to contain %q", p.Summary, brokenLinkKindNoun[kind])
+			}
+
+			ev := map[string]any{"filename": "a", "target_slug": "thing"}
+			maps.Copy(ev, p.Evidence)
+			readBack := SummaryFor(KindBrokenLink, "store-a/a", ev)
+			if readBack != p.Summary {
+				t.Errorf("read side: SummaryFor = %q, want it to match the write side's own Summary %q",
+					readBack, p.Summary)
+			}
+		})
 	}
 }
 

@@ -1449,6 +1449,20 @@ Verified against the real binary: a memory file linking to a real agent and a re
 `~/.claude/agents`/`~/.claude/plans`, alongside a genuinely unwritten forward reference - both the
 agent and plan links flagged with kind-specific wording, the forward reference stayed silent.
 
+**A third round found no correctness bugs** - the two earlier rounds had already caught what a
+fresh pass would normally find first, confirmed independently re-derived and then verified already
+fixed. New `TestBrokenLinkKindsStayInSync`, from the round's one worthwhile suggestion: the "other
+asset" kind list is spelled out independently in four places (`registerOtherAssets`' calls,
+`detectBrokenLinks`' evidence-writing switch, `SummaryFor`'s evidence-reading switch,
+`brokenLinkKindNoun`), with nothing but a comment holding them together. The test walks one
+canonical kind list through both the write path and the read path and checks they agree, so a kind
+added to one of the four places but not the others fails a test rather than silently degrading at
+runtime the way `brokenLinkKindNoun`'s own fallback already tolerates. Two smaller suggestions from
+the same round (extracting a shared helper for `DiscoverGlobalAgents`/`DiscoverGlobalPlans`'s
+near-identical bodies; a filter check in `registerOtherAssets` that is dead code for two of its
+three callers) were weighed and left as-is - each is two one-line functions or one harmless,
+already-explained guard, not real risk.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a
