@@ -23,13 +23,39 @@ func writeMemoryFile(t *testing.T, home, store, filename, content string) {
 	}
 }
 
+func TestEvidenceStores(t *testing.T) {
+	cases := []struct {
+		name     string
+		evidence string
+		want     []string
+	}{
+		{"singular store", `{"store":"store-a","filename":"x"}`, []string{"store-a"}},
+		{"plural stores, duplicate-kind evidence", `{"stores":["store-a","store-b","store-c"]}`, []string{"store-a", "store-b", "store-c"}},
+		{"malformed json", `not json`, nil},
+		{"neither field present", `{"other":"field"}`, nil},
+	}
+	for _, c := range cases {
+		got := EvidenceStores(c.evidence)
+		if len(got) != len(c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+				break
+			}
+		}
+	}
+}
+
 func TestDetectMemoryDuplicates_ThreeStoresOnly(t *testing.T) {
 	home := t.TempDir()
 	// Two stores: not enough. Design doc's own threshold is three or more.
 	writeMemoryFile(t, home, "store-a", "fact.md", "---\nname: shared\n---\nSame everywhere.")
 	writeMemoryFile(t, home, "store-b", "fact.md", "---\nname: shared\n---\nSame everywhere.")
 
-	files, err := asset.DiscoverAllMemory(home)
+	files, _, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +65,7 @@ func TestDetectMemoryDuplicates_ThreeStoresOnly(t *testing.T) {
 
 	// A third store with the identical content crosses the threshold.
 	writeMemoryFile(t, home, "store-c", "fact.md", "---\nname: shared\n---\nSame everywhere.")
-	files, err = asset.DiscoverAllMemory(home)
+	files, _, err = asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +84,7 @@ func TestDetectBrokenLinks_ResolvesWithinStoreOnly(t *testing.T) {
 	// itself loads in.
 	writeMemoryFile(t, home, "store-b", "c.md", "---\nname: c\n---\nSee [[b]].")
 
-	files, err := asset.DiscoverAllMemory(home)
+	files, _, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +112,7 @@ func TestDetectBrokenLinks_MemoryIndexNeverReadsAsBroken(t *testing.T) {
 	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[MEMORY]] for the full index.")
 	writeMemoryFile(t, home, "store-a", "MEMORY.md", "- [A](a.md)")
 
-	files, err := asset.DiscoverAllMemory(home)
+	files, _, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +127,7 @@ func TestDetectBrokenLinks_MemoryIndexNeverReadsAsBroken(t *testing.T) {
 	// this uses a genuinely cross-store target to keep testing real rot).
 	writeMemoryFile(t, home, "store-a", "b.md", "---\nname: b\n---\nSee [[elsewhere]].")
 	writeMemoryFile(t, home, "store-c", "elsewhere.md", "---\nname: elsewhere\n---\nLives in a different store.")
-	files, err = asset.DiscoverAllMemory(home)
+	files, _, err = asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +157,7 @@ func TestDetectBrokenLinks_MemoryIndexIsBrokenWhenIndexMissing(t *testing.T) {
 	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[MEMORY]] for the full index.")
 	// Deliberately no MEMORY.md written in store-a.
 
-	files, err := asset.DiscoverAllMemory(home)
+	files, _, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +183,7 @@ func TestDetectBrokenLinks_ForwardReferenceIsNotADefect(t *testing.T) {
 	home := t.TempDir()
 	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[not-written-yet]] for context.")
 
-	files, err := asset.DiscoverAllMemory(home)
+	files, _, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +194,7 @@ func TestDetectBrokenLinks_ForwardReferenceIsNotADefect(t *testing.T) {
 	// The target shows up later, in a different store - now it's a real,
 	// actionable cross-store scoping problem, not a forward reference.
 	writeMemoryFile(t, home, "store-b", "not-written-yet.md", "---\nname: not-written-yet\n---\nNow it exists, elsewhere.")
-	files, err = asset.DiscoverAllMemory(home)
+	files, _, err = asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +210,7 @@ func TestDetectFilenameSlugDrift(t *testing.T) {
 	writeMemoryFile(t, home, "store-a", "matches.md", "---\nname: matches\n---\nNot drifted.")
 	writeMemoryFile(t, home, "store-a", "no_frontmatter.md", "# No frontmatter at all\n")
 
-	files, err := asset.DiscoverAllMemory(home)
+	files, _, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +226,7 @@ func TestDetectUnreachableAssets(t *testing.T) {
 	writeMemoryFile(t, home, "store-a", "orphan.md", "---\nname: orphan\n---\nNot in the index.")
 	writeMemoryFile(t, home, "store-a", "MEMORY.md", "- [Linked](linked.md)")
 
-	files, err := asset.DiscoverAllMemory(home)
+	files, _, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +240,7 @@ func TestDetectUnreachableAssets_NoIndexMeansEveryFileUnreachable(t *testing.T) 
 	home := t.TempDir()
 	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nNo MEMORY.md in this store at all.")
 
-	files, err := asset.DiscoverAllMemory(home)
+	files, _, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,12 +261,15 @@ func TestGenerateMemoryFindings_TouchesUserFiles(t *testing.T) {
 }
 
 func TestGenerateMemoryFindings_MissingHomeIsNotError(t *testing.T) {
-	got, err := GenerateMemoryFindings(filepath.Join(t.TempDir(), "does-not-exist"))
+	got, scanned, err := GenerateMemoryFindings(filepath.Join(t.TempDir(), "does-not-exist"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 0 {
 		t.Errorf("got %+v, want none", got)
+	}
+	if len(scanned.Present) != 0 || len(scanned.Scanned) != 0 {
+		t.Errorf("scanned = %+v, want a zero value - a missing home is not a scan failure", scanned)
 	}
 }
 
@@ -262,7 +291,7 @@ func TestDetectMemoryDuplicates_DeterministicOrder(t *testing.T) {
 		}
 	}
 
-	files, err := asset.DiscoverAllMemory(home)
+	files, _, err := asset.DiscoverAllMemory(home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,5 +310,213 @@ func TestDetectMemoryDuplicates_DeterministicOrder(t *testing.T) {
 				t.Fatalf("run %d: order changed at index %d: %q then %q", i, j, first[j].Subject, again[j].Subject)
 			}
 		}
+	}
+}
+
+// TestStoreProtectsPendingProposalsForAStoreNotScannedThisPass is the
+// regression test for issue #59, found by code review while shipping #40's
+// withdrawal mechanism. DiscoverAllMemory skips any store whose memory
+// directory is unreadable this pass, by design (constraint 7) - but before
+// this fix, that looked identical to WithdrawStalePending as the store's
+// findings having genuinely stopped being true, so every real, unchanged
+// proposal for that store got marked withdrawn on the one pass it couldn't
+// be read.
+func TestStoreProtectsPendingProposalsForAStoreNotScannedThisPass(t *testing.T) {
+	db := openDB(t)
+	home := t.TempDir()
+	writeMemoryFile(t, home, "store-a", "orphan.md", "---\nname: orphan\n---\nNo MEMORY.md links this.")
+
+	// First pass: store-a scans fine, the unreachable-asset finding raises.
+	findings, scanned, err := GenerateMemoryFindings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !scanned.Scanned["store-a"] {
+		t.Fatalf("scanned = %+v, want store-a scanned - its memory directory is readable this pass", scanned)
+	}
+	if _, err := Store(db, findings, scanned, now); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := db.ListProposals(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Kind != KindUnreachableAsset {
+		t.Fatalf("got %+v, want exactly one unreachable_asset proposal after the first pass", pending)
+	}
+
+	// Second pass: store-a's memory directory becomes unreadable - not
+	// gone, not fixed, transiently unreadable this one pass (same
+	// technique asset's own constraint-7 regression test uses: a file
+	// where a directory should be).
+	memDir := filepath.Join(home, ".claude", "projects", "store-a", "memory")
+	if err := os.RemoveAll(memDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(memDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	findings, scanned, err = GenerateMemoryFindings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("got %+v, want no findings - store-a could not be read this pass", findings)
+	}
+	if !scanned.Present["store-a"] {
+		t.Fatalf("scanned = %+v, want store-a still present as a project directory", scanned)
+	}
+	if scanned.Scanned["store-a"] {
+		t.Fatalf("scanned = %+v, want store-a not scanned this pass - its memory directory is unreadable", scanned)
+	}
+	if _, err := Store(db, findings, scanned, now); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err = db.ListProposals(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Errorf("got %+v, want the unreachable_asset proposal still pending - store-a was never actually "+
+			"rescanned this pass, so nothing said its finding stopped being true", pending)
+	}
+}
+
+// TestStoreStillWithdrawsAGenuinelyFixedFinding is the control case
+// alongside the regression test above: when a store IS fully scanned and
+// its finding really is gone, the proposal must still withdraw exactly as
+// #40 intended - the fix for #59 protects an unscanned store, not every
+// store indiscriminately.
+func TestStoreStillWithdrawsAGenuinelyFixedFinding(t *testing.T) {
+	db := openDB(t)
+	home := t.TempDir()
+	writeMemoryFile(t, home, "store-a", "orphan.md", "---\nname: orphan\n---\nNo MEMORY.md links this.")
+
+	findings, scanned, err := GenerateMemoryFindings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Store(db, findings, scanned, now); err != nil {
+		t.Fatal(err)
+	}
+	if pending, _ := db.ListProposals(true); len(pending) != 1 {
+		t.Fatalf("got %+v, want exactly one proposal after the first pass", pending)
+	}
+
+	// The fix: add the missing MEMORY.md entry. store-a scans fine and the
+	// finding is genuinely gone this time, not merely unreadable.
+	writeMemoryFile(t, home, "store-a", "MEMORY.md", "- [Orphan](orphan.md) - now linked")
+
+	findings, scanned, err = GenerateMemoryFindings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !scanned.Scanned["store-a"] {
+		t.Fatalf("scanned = %+v, want store-a scanned - it was readable this pass", scanned)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("got %+v, want none - the file is linked now", findings)
+	}
+	if _, err := Store(db, findings, scanned, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if pending, _ := db.ListProposals(true); len(pending) != 0 {
+		t.Errorf("got %+v, want none - store-a was fully scanned and the finding is genuinely gone", pending)
+	}
+}
+
+// TestStoreWithdrawsWhenAStoreIsPermanentlyDeleted is the regression test
+// for the second of two findings from a second code-review round on this
+// fix: the first version's protection had no way to tell "transiently
+// unreadable" apart from "gone for good", so a genuinely deleted store's
+// stale proposals could never withdraw again - stuck pending forever,
+// defeating #40's whole purpose in a new way.
+func TestStoreWithdrawsWhenAStoreIsPermanentlyDeleted(t *testing.T) {
+	db := openDB(t)
+	home := t.TempDir()
+	writeMemoryFile(t, home, "store-a", "orphan.md", "---\nname: orphan\n---\nNo MEMORY.md links this.")
+
+	findings, scanned, err := GenerateMemoryFindings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Store(db, findings, scanned, now); err != nil {
+		t.Fatal(err)
+	}
+	if pending, _ := db.ListProposals(true); len(pending) != 1 {
+		t.Fatalf("got %+v, want exactly one proposal after the first pass", pending)
+	}
+
+	// The whole project is gone, not just its memory/ subdirectory -
+	// removed, not merely unreadable.
+	if err := os.RemoveAll(filepath.Join(home, ".claude", "projects", "store-a")); err != nil {
+		t.Fatal(err)
+	}
+
+	findings, scanned, err = GenerateMemoryFindings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned.Present["store-a"] {
+		t.Fatalf("scanned = %+v, want store-a absent from Present - it no longer exists as a project", scanned)
+	}
+	if _, err := Store(db, findings, scanned, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if pending, _ := db.ListProposals(true); len(pending) != 0 {
+		t.Errorf("got %+v, want the proposal withdrawn - store-a is genuinely gone, not merely unreadable", pending)
+	}
+}
+
+// TestStoreProtectsEverythingWhenTheRootScanFails is the regression test
+// for the first of two findings from that same review round: the first
+// version only protected a single unreadable store, but treated a
+// missing/unreadable <home>/.claude/projects root itself as "confirmed
+// empty, nothing to protect" - which would mass-withdraw every real,
+// unchanged lane-scoped proposal across every store if the root itself
+// went missing for one pass (a wrong $HOME, a mount hiccup), reproducing
+// issue #59's exact failure mode one directory level up.
+func TestStoreProtectsEverythingWhenTheRootScanFails(t *testing.T) {
+	db := openDB(t)
+	home := t.TempDir()
+	writeMemoryFile(t, home, "store-a", "orphan.md", "---\nname: orphan\n---\nNo MEMORY.md links this.")
+
+	findings, scanned, err := GenerateMemoryFindings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Store(db, findings, scanned, now); err != nil {
+		t.Fatal(err)
+	}
+	if pending, _ := db.ListProposals(true); len(pending) != 1 {
+		t.Fatalf("got %+v, want exactly one proposal after the first pass", pending)
+	}
+
+	// The same ledger, but this one invocation resolves a different, empty
+	// root - the class of failure DiscoverAllMemory tolerates as "no
+	// stores" rather than an error (a wrong $HOME for one call, a mount
+	// hiccup, or a genuinely fresh machine all look identical to it).
+	wrongHome := t.TempDir()
+	findings, scanned, err = GenerateMemoryFindings(wrongHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scanned.Present != nil {
+		t.Fatalf("scanned = %+v, want a nil Present - the root itself was never enumerated", scanned)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("got %+v, want none - nothing exists under the wrong root", findings)
+	}
+	if _, err := Store(db, findings, scanned, now); err != nil {
+		t.Fatal(err)
+	}
+
+	if pending, _ := db.ListProposals(true); len(pending) != 1 {
+		t.Errorf("got %+v, want the proposal still pending - the root scan itself failed, so nothing said "+
+			"any store's finding actually stopped being true", pending)
 	}
 }

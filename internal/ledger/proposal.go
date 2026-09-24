@@ -127,8 +127,11 @@ type ProposalIdentity struct {
 // no longer produces them - the case UpsertProposal's dedupe rule leaves
 // silent (evidence gone, not changed, so nothing re-raises and nothing
 // removes it either). generated is every (kind, subject) the current run
-// actually produced; any row still status=pending but not in that set has
-// outlived its own evidence.
+// actually produced; any row in pending not in that set has outlived its
+// own evidence. pending is the caller's own status=pending listing, not
+// re-fetched here - the caller already has it (needed to build generated's
+// protection cases, issue #59) and re-querying it a second time in the same
+// pass was pure duplicated work (found by code review).
 //
 // Dismissed and applied rows are untouched - a proposal a human already
 // acted on is not this function's concern either way.
@@ -139,11 +142,7 @@ type ProposalIdentity struct {
 // the slot a now-stale one just gave up, in the same pass (issue #40's
 // second half: "the cap should count only proposals the generator still
 // stands behind").
-func (d *DB) WithdrawStalePending(generated map[ProposalIdentity]bool) error {
-	pending, err := d.ListProposals(true)
-	if err != nil {
-		return err
-	}
+func (d *DB) WithdrawStalePending(pending []ProposalRow, generated map[ProposalIdentity]bool) error {
 	var stale []int64
 	for _, p := range pending {
 		if !generated[ProposalIdentity{Kind: p.Kind, Subject: p.Subject}] {

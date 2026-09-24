@@ -1,6 +1,7 @@
 package propose
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -40,6 +41,42 @@ const (
 // pattern worth surfacing.
 const minDuplicateStores = 3
 
+// LaneScopedKinds are the four B7c memory-finding kinds - unambiguously
+// per-store, so per-lane (issue #68) and per-scan-coverage (issue #59).
+// Every other kind's evidence is not store-shaped at all. A future
+// per-store finding kind must be added here too, or it silently loses both
+// --lane filtering and needsProtection's transient-failure protection -
+// nothing else enforces that (flagged by code review, not yet a bug since
+// no fifth kind exists).
+var LaneScopedKinds = map[string]bool{
+	KindPromoteMemoryDuplicate: true,
+	KindBrokenLink:             true,
+	KindUnreachableAsset:       true,
+	KindFilenameSlugDrift:      true,
+}
+
+// EvidenceStores extracts the store(s) a lane-scoped proposal's evidence
+// claims to belong to - "store" for three of the four kinds, "stores" (a
+// list) for KindPromoteMemoryDuplicate, whose finding inherently spans
+// every store the duplicate appears in (found by code review, issue #68 -
+// checking "store" alone silently dropped every duplicate-kind proposal
+// from every --lane view, regardless of lane). Returns nil for anything
+// that fails to parse or names no store - callers decide what "unknown"
+// means for their own purpose.
+func EvidenceStores(evidence string) []string {
+	var ev struct {
+		Store  string   `json:"store"`
+		Stores []string `json:"stores"`
+	}
+	if err := json.Unmarshal([]byte(evidence), &ev); err != nil {
+		return nil
+	}
+	if ev.Store != "" {
+		return []string{ev.Store}
+	}
+	return ev.Stores
+}
+
 // GenerateMemoryFindings scans every project's memory store for B7c's four
 // structural promotion-rule checks and returns whatever proposals the
 // evidence supports, in a stable order - see detectMemoryDuplicates for why
@@ -57,10 +94,15 @@ const minDuplicateStores = 3
 // (kind, subject)-keyed, evidence-hash re-raise rule apply uniformly. No
 // content is retained: evidence carries paths, slugs and a content hash,
 // never file bodies.
-func GenerateMemoryFindings(home string) ([]Proposal, error) {
-	files, err := asset.DiscoverAllMemory(home)
+//
+// The second return value is DiscoverAllMemory's own scan coverage report,
+// passed straight through for Store to use protecting a skipped store's
+// pending proposals from a false withdrawal (issue #59) - this function has
+// nothing else to add to it, so it does not touch it, only forwards it.
+func GenerateMemoryFindings(home string) ([]Proposal, asset.MemoryScanCoverage, error) {
+	files, coverage, err := asset.DiscoverAllMemory(home)
 	if err != nil {
-		return nil, err
+		return nil, asset.MemoryScanCoverage{}, err
 	}
 
 	// Root-cause kinds before the symptom kind: a filename/slug drift is
@@ -72,7 +114,7 @@ func GenerateMemoryFindings(home string) ([]Proposal, error) {
 	out = append(out, detectFilenameSlugDrift(files)...)
 	out = append(out, detectUnreachableAssets(home, files)...)
 	out = append(out, detectBrokenLinks(home, files)...)
-	return out, nil
+	return out, coverage, nil
 }
 
 // detectMemoryDuplicates groups files by content hash and proposes

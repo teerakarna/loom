@@ -4,60 +4,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"time"
 
-	"github.com/teerakarna/loom/internal/asset"
 	"github.com/teerakarna/loom/internal/ingest"
 	"github.com/teerakarna/loom/internal/ledger"
 	"github.com/teerakarna/loom/internal/propose"
 )
 
-// laneScopedKinds are the four B7c memory-finding kinds - unambiguously
-// per-store, so per-lane, via each proposal's own Evidence["store"]
-// (issue #68). Every other kind's evidence is not store-shaped at all.
-var laneScopedKinds = map[string]bool{
-	propose.KindPromoteMemoryDuplicate: true,
-	propose.KindBrokenLink:             true,
-	propose.KindUnreachableAsset:       true,
-	propose.KindFilenameSlugDrift:      true,
-}
-
 // filterPendingByLane keeps every proposal whose kind isn't lane-scoped
 // (pin_model, revert_policy, retire_asset - shown regardless), plus any
-// lane-scoped proposal that touches lane.
-//
-// Two evidence shapes, not one: three of the four kinds carry a singular
-// "store" (the one store the finding is about), but
-// KindPromoteMemoryDuplicate's evidence is "stores", a list - the finding
-// is inherently about every store the duplicate spans, found by code
-// review, before this shipped. Checking "store" alone silently dropped
-// every duplicate-kind proposal from every --lane view, regardless of
-// lane, contradicting laneScopedKinds' own comment that all four are
-// unambiguously per-store.
+// lane-scoped proposal (propose.LaneScopedKinds) that touches lane.
 func filterPendingByLane(pending []ledger.ProposalRow, lane string) []ledger.ProposalRow {
 	out := make([]ledger.ProposalRow, 0, len(pending))
 	for _, p := range pending {
-		if !laneScopedKinds[p.Kind] {
+		if !propose.LaneScopedKinds[p.Kind] || slices.Contains(propose.EvidenceStores(p.Evidence), lane) {
 			out = append(out, p)
-			continue
-		}
-		var ev struct {
-			Store  string   `json:"store"`
-			Stores []string `json:"stores"`
-		}
-		if err := json.Unmarshal([]byte(p.Evidence), &ev); err != nil {
-			continue
-		}
-		if ev.Store == lane {
-			out = append(out, p)
-			continue
-		}
-		for _, s := range ev.Stores {
-			if s == lane {
-				out = append(out, p)
-				break
-			}
 		}
 	}
 	return out
@@ -131,7 +94,7 @@ func runPropose(args []string) error {
 	if err != nil {
 		return err
 	}
-	memoryFindings, err := propose.GenerateMemoryFindings(home)
+	memoryFindings, scannedStores, err := propose.GenerateMemoryFindings(home)
 	if err != nil {
 		return err
 	}
@@ -141,7 +104,7 @@ func runPropose(args []string) error {
 	// contain (issue #40), so passing it a lane-filtered subset would
 	// wrongly withdraw every other lane's still-valid proposals as a side
 	// effect of narrowing this one invocation's own display.
-	if _, err := propose.Store(db, generated, now); err != nil {
+	if _, err := propose.Store(db, generated, scannedStores, now); err != nil {
 		return err
 	}
 
@@ -185,7 +148,7 @@ func runPropose(args []string) error {
 		var ev map[string]any
 		_ = json.Unmarshal([]byte(p.Evidence), &ev)
 
-		fmt.Printf("  #%-3d %s\n", p.ID, summaryFor(p, ev))
+		fmt.Printf("  #%-3d %s\n", p.ID, propose.SummaryFor(p.Kind, p.Subject, ev))
 		if propose.TouchesUserFiles(p.Kind) {
 			fmt.Printf("       loom will NOT apply this: it touches your files. Review and act yourself.\n")
 		} else {
@@ -200,37 +163,6 @@ func runPropose(args []string) error {
 	fmt.Println("Dismiss with: loom propose dismiss <id>")
 	fmt.Println("A dismissal holds until the evidence behind it changes, not until an interval elapses.")
 	return nil
-}
-
-// summaryFor renders a one-line description from stored evidence. The summary
-// is rebuilt at display time rather than stored, so changing the wording never
-// requires rewriting rows.
-func summaryFor(p ledger.ProposalRow, ev map[string]any) string {
-	switch p.Kind {
-	case propose.KindRetireAsset:
-		return fmt.Sprintf("retire %v %q, unused for %v days",
-			ev["type"], ev["name"], ev["days_unused"])
-	case propose.KindPinModel:
-		return fmt.Sprintf("pin %v to %v, measured over %v runs",
-			ev["agent_type"], ev["observed_model"], ev["runs"])
-	case propose.KindRevertPolicy:
-		return fmt.Sprintf("revert %v: %v", ev["agent_type"], ev["reason"])
-	case propose.KindPromoteMemoryDuplicate:
-		return fmt.Sprintf("promote %q to a reference skill, identical across %v stores",
-			ev["filename"], ev["stores"])
-	case propose.KindBrokenLink:
-		if ev["target_slug"] == asset.MemoryIndexSlug {
-			return fmt.Sprintf("%v links to [[MEMORY]], but this store has no MEMORY.md", ev["filename"])
-		}
-		return fmt.Sprintf("%v links to [[%v]], which exists but not in this store",
-			ev["filename"], ev["target_slug"])
-	case propose.KindUnreachableAsset:
-		return fmt.Sprintf("%v exists but is not linked from its store's MEMORY.md", ev["filename"])
-	case propose.KindFilenameSlugDrift:
-		return fmt.Sprintf("%v's filename no longer matches its own name: %v", ev["filename"], ev["slug"])
-	default:
-		return fmt.Sprintf("%s: %s", p.Kind, p.Subject)
-	}
 }
 
 // compactEvidence prints the evidence without the noise of raw JSON, so a

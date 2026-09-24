@@ -1166,6 +1166,96 @@ diagnosis, with an explicit "if restarting doesn't fix it, this is a different, 
 same principle as constraint 11, never presenting a guess with the confidence of a measured
 finding, applied to the error message itself, not just to loom's own proposals.
 
+#### A store unreadable for one pass could wrongly withdraw its own real proposals - BUILT 2026-09-24
+
+Issue #59, found by code review while shipping #40's withdrawal mechanism (`WithdrawStalePending`,
+"a pending proposal is never withdrawn when its evidence stops holding"). `DiscoverAllMemory`
+silently skips any store whose `memory/` directory fails to read - a deliberate B7c decision,
+constraint 7, one project's permission problem must not take every other store's findings down
+with it. Before #40 that was harmless: a skipped store just meant one pass with no findings for
+it. After #40, a skipped store looked, from `WithdrawStalePending`'s point of view, identical to a
+store whose findings genuinely stopped being true - every real, unchanged `broken_link`/
+`unreachable_asset`/`filename_slug_drift`/`promote_memory_duplicate` proposal for that store got
+marked withdrawn on the one pass it couldn't be read, even though nothing about the underlying
+facts changed. Self-healing on the next successful pass (#40's own revival rule brings it back
+once the scan reproduces the identical finding), but a real, if narrow, flicker in between.
+
+Fixing it meant crossing a package boundary that did not have the vocabulary for it:
+`ledger.WithdrawStalePending` has no concept of "store", `internal/asset` has no concept of a
+proposal. Resolved without teaching either package about the other's concept. `DiscoverAllMemory`
+now returns a second value alongside its files, a new `MemoryScanCoverage` struct (`Present`, every
+store directory found this pass; `Scanned`, the subset whose `memory/` was actually readable).
+`GenerateMemoryFindings` forwards it untouched - it has nothing to add. `propose.Store` is the one
+place that already understood both sides (it holds a `*ledger.DB` and it already builds proposal
+evidence), so it does the store-awareness entirely on its own: new `LaneScopedKinds` (promoted from
+a var of the same name and shape already living in `cmd/loom/propose.go` for issue #68's `--lane`
+filter) and `EvidenceStores` (also generalizing that file's inline evidence-parsing struct, now
+shared by both the lane filter and this fix, removing a duplicate) identify which pending proposals
+are store-scoped and which store(s) each one's evidence names. Before withdrawing, any pending
+lane-scoped proposal the current pass did not reproduce goes through `needsProtection`, which
+decides whether to treat it as reproduced anyway. `ledger.WithdrawStalePending` itself is untouched
+- the crossing happens entirely on `propose`'s side, which is where both concepts it needs were
+already in scope.
+
+**A second `/code-review high` round on the first version found two more real gaps, both in
+`needsProtection`'s design, not implementation bugs in what it did do.** First: the first version
+only handled a single unreadable store, but treated the *root* `<home>/.claude/projects` itself
+going missing or unreadable for one pass as "confirmed empty, nothing to protect" - which would
+mass-withdraw every real, unchanged lane-scoped proposal across every store, reproducing issue
+#59's own failure mode one directory level up (a wrong `$HOME` for one invocation, a mount hiccup).
+Second, the opposite problem: with no way to tell "transiently unreadable" apart from "gone for
+good", a store deleted permanently would have its stale proposals protected forever instead of
+ever withdrawing - stuck pending, defeating #40's whole purpose in a new way. Both fixed together
+in `needsProtection`, using a distinction `MemoryScanCoverage` already carried but the first version
+didn't use: `Present == nil` (the root itself was never successfully enumerated this pass) protects
+every lane-scoped proposal, regardless of which store it names - nothing this pass found can be
+trusted as evidence of absence. Otherwise, a store present in `Present` but missing from `Scanned`
+is the real transient-failure case (protect); a store missing from `Present` entirely no longer
+exists as a project at all, which is a legitimate reason its own findings are gone too, not a scan
+failure (let it withdraw normally, self-healing exactly as #40 intended).
+
+Verified for real at every stage, not just by unit test: built the binary against a scratch `HOME`
+three separate times. First round: raised a genuine `unreachable_asset` finding, made the store's
+`memory/` directory unreadable (a file where a directory should be) and reran `loom propose` - the
+proposal stayed pending; fixed the store for real (added the missing `MEMORY.md` entry) and reran
+again - the proposal withdrew. Second round, after the review findings: deleted the whole store's
+project directory (not just `memory/`) - the proposal withdrew, confirming a genuinely gone store
+still self-heals. Third round: pointed `$HOME` at a directory with no `.claude/projects` at all,
+against the same ledger that had a real pending proposal from a previous run - the proposal stayed
+pending, confirming a root-level scan failure protects rather than mass-withdrawing.
+
+**A third `/code-review high` round on the second fix found nothing new that first round's own
+diagnosis hadn't already covered** - it independently re-derived the root-scan-failure gap while
+mid-review, then confirmed the shipped fix already closed it by reading the current code rather
+than trusting the commit message. Two lower-severity observations kept: `LaneScopedKinds`' comment
+now says explicitly that a future per-store finding kind must be added there too, since nothing
+else enforces it. The other, that `needsProtection`'s protection has no expiry - a persistently
+wrong `$HOME`, not just a one-pass blip, protects a proposal forever instead of ever letting it
+withdraw - is filed as [#76](https://github.com/teerakarna/loom/issues/76), deliberately deferred:
+the failure direction is the safe one (stuck pending, bounded by the cap, not wrongly discarding a
+real finding), and a real fix needs new ledger state (a staleness bound), not a line here.
+
+**A fourth review round found one more real, live bug, in a display path rather than the
+withdrawal logic every earlier round focused on.** `list_proposals`' Summary/Rationale text was
+built from a map keyed only by this pass's freshly generated proposals - correct before #59, since
+a pending row could never exist outside that set by construction (anything not reproduced was
+withdrawn). `needsProtection` broke that invariant on purpose: a protected row is pending precisely
+*because* it wasn't reproduced this pass, so the lookup missed and the row came back with a blank
+Summary and Rationale over MCP - during the exact failure window this whole fix exists to handle
+gracefully, just in the field the caller actually reads rather than the withdrawal decision itself.
+`cmd/loom`'s own CLI listing was unaffected (it already rebuilds its one-line summary from each
+row's own stored evidence, not from a generated-only map). Fixed by extracting that same logic -
+moved, not rewritten - into `propose.SummaryFor`, shared by both the CLI and the MCP handler, which
+now falls back to it (plus an honest, generic Rationale explicitly saying the row was not rescanned
+this pass) whenever the generated-set lookup misses. Three more findings from the same round -
+`needsProtection` conflating malformed evidence with a real coverage gap, `Store`'s protection path
+being tied to the concrete `asset.MemoryScanCoverage` type rather than an abstraction, and
+`EvidenceStores` short-circuiting on `Store` before checking `Stores` if evidence somehow carried
+both - are each real only for a finding kind or evidence shape that does not exist yet on any
+current caller; left as documentation (two doc-comment clarifications, on `Store` and
+`MemoryScanCoverage`) rather than new runtime code, consistent with not designing for a requirement
+nothing has yet.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/teerakarna/loom/internal/asset"
 	"github.com/teerakarna/loom/internal/ledger"
 	"github.com/teerakarna/loom/internal/policy"
 )
@@ -78,6 +79,44 @@ func TouchesUserFiles(kind string) bool {
 		return false
 	default:
 		return true
+	}
+}
+
+// SummaryFor renders a one-line description of a proposal from its stored
+// evidence alone - no fresh scan required, so it works equally well for a
+// proposal this pass just generated and one #59's needsProtection kept
+// pending without reproducing (found by code review: the MCP list_proposals
+// handler built its summary text only from this pass's freshly generated
+// set, so a protected-but-not-reproduced row came back with a blank Summary
+// exactly during the failure window #59 exists to handle gracefully).
+// Shared by cmd/loom's CLI listing and internal/mcp's list_proposals, so
+// there is one place that knows how to read each kind's evidence, not two
+// drifting copies.
+func SummaryFor(kind, subject string, ev map[string]any) string {
+	switch kind {
+	case KindRetireAsset:
+		return fmt.Sprintf("retire %v %q, unused for %v days",
+			ev["type"], ev["name"], ev["days_unused"])
+	case KindPinModel:
+		return fmt.Sprintf("pin %v to %v, measured over %v runs",
+			ev["agent_type"], ev["observed_model"], ev["runs"])
+	case KindRevertPolicy:
+		return fmt.Sprintf("revert %v: %v", ev["agent_type"], ev["reason"])
+	case KindPromoteMemoryDuplicate:
+		return fmt.Sprintf("promote %q to a reference skill, identical across %v stores",
+			ev["filename"], ev["stores"])
+	case KindBrokenLink:
+		if ev["target_slug"] == asset.MemoryIndexSlug {
+			return fmt.Sprintf("%v links to [[MEMORY]], but this store has no MEMORY.md", ev["filename"])
+		}
+		return fmt.Sprintf("%v links to [[%v]], which exists but not in this store",
+			ev["filename"], ev["target_slug"])
+	case KindUnreachableAsset:
+		return fmt.Sprintf("%v exists but is not linked from its store's MEMORY.md", ev["filename"])
+	case KindFilenameSlugDrift:
+		return fmt.Sprintf("%v's filename no longer matches its own name: %v", ev["filename"], ev["slug"])
+	default:
+		return fmt.Sprintf("%s: %s", kind, subject)
 	}
 }
 
@@ -491,14 +530,53 @@ func asFloat(v any) float64 {
 // stopped applying is not the same event as one a human dismissed. Doing
 // this before the upsert loop below, not after, is what lets a proposal
 // freed by a withdrawal fill the same pass's MaxPendingProposals slot.
-func Store(db *ledger.DB, ps []Proposal, now time.Time) (int, error) {
+//
+// coverage is DiscoverAllMemory's own scan-coverage report. Pass the zero
+// value only when the caller genuinely never runs GenerateMemoryFindings
+// against this ledger - the zero value protects every lane-scoped pending
+// row unconditionally (needsProtection's "can't tell" default), which is
+// only inert because today's DB-only tests never seed lane-scoped rows in
+// the first place, not because the zero value is inherently a no-op
+// (flagged by code review: a future caller passing it against a ledger
+// that does have real lane-scoped rows would protect them forever). Issue
+// #59, found by code review while shipping #40: a store whose memory
+// directory was transiently unreadable this pass produces no findings for
+// it, which WithdrawStalePending cannot tell apart from a store whose
+// findings genuinely stopped being true - every real, unchanged proposal
+// for that store would be marked withdrawn even though nothing about the
+// underlying facts changed. Before withdrawing, any pending lane-scoped
+// proposal ps did not reproduce is checked with needsProtection: if this
+// pass could not actually confirm the store it names is still absent of
+// findings, the proposal is treated as reproduced rather than stale -
+// protected, not withdrawn, until a pass that actually looks again says
+// otherwise. A second review round found two more gaps in the first
+// version of this fix, both closed in needsProtection itself: a root scan
+// failure (not just a single store) used to fall through to the old
+// unconditional withdrawal, silently reproducing #59 one directory level
+// up; and a store missing from coverage entirely (permanently deleted, not
+// transiently unreadable) used to be protected forever, the opposite
+// problem - stuck pending, never able to withdraw again.
+func Store(db *ledger.DB, ps []Proposal, coverage asset.MemoryScanCoverage, now time.Time) (int, error) {
 	ps = interleaveByKind(ps)
 
 	generated := make(map[ledger.ProposalIdentity]bool, len(ps))
 	for _, p := range ps {
 		generated[ledger.ProposalIdentity{Kind: p.Kind, Subject: p.Subject}] = true
 	}
-	if err := db.WithdrawStalePending(generated); err != nil {
+	pending, err := db.ListProposals(true)
+	if err != nil {
+		return 0, err
+	}
+	for _, p := range pending {
+		id := ledger.ProposalIdentity{Kind: p.Kind, Subject: p.Subject}
+		if generated[id] || !LaneScopedKinds[p.Kind] {
+			continue
+		}
+		if needsProtection(EvidenceStores(p.Evidence), coverage) {
+			generated[id] = true // protect: this pass could not confirm the store(s) behind it are truly absent
+		}
+	}
+	if err := db.WithdrawStalePending(pending, generated); err != nil {
 		return 0, err
 	}
 
@@ -521,6 +599,43 @@ func Store(db *ledger.DB, ps []Proposal, now time.Time) (int, error) {
 		}
 	}
 	return written, nil
+}
+
+// needsProtection reports whether a pending proposal naming stores should
+// be treated as reproduced rather than stale, even though this pass's
+// generated set does not contain it.
+//
+// coverage.Present == nil means the root <home>/.claude/projects directory
+// itself could not be enumerated this pass - missing, or a read error
+// DiscoverAllMemory still tolerates (constraint 7). Every store's absence
+// is untrustworthy then, not just the one(s) this proposal names, so
+// everything lane-scoped is protected (found by a second code-review pass
+// on the first version of this fix: the original only handled a single
+// unreadable store, not the root read failing the same way - which would
+// otherwise reproduce issue #59 one directory level up).
+//
+// Otherwise, protection fires only for a store present as a project
+// directory but not actually scanned this pass - a transient failure on
+// that one store. A store missing from Present entirely no longer exists
+// as a project at all: a deleted store is a legitimate reason its own
+// findings are gone too, so it is left to withdraw normally rather than
+// protected forever (the same review round's other finding - without this
+// distinction, a permanently deleted store's stale proposals could never
+// withdraw again, defeating #40's whole purpose in a new way).
+//
+// Empty stores - evidence that failed to parse, or named no store at all -
+// is treated the same as an untrustworthy root: can't tell, so protect
+// rather than guess.
+func needsProtection(stores []string, coverage asset.MemoryScanCoverage) bool {
+	if coverage.Present == nil || len(stores) == 0 {
+		return true
+	}
+	for _, s := range stores {
+		if coverage.Present[s] && !coverage.Scanned[s] {
+			return true
+		}
+	}
+	return false
 }
 
 // interleaveByKind reorders ps so proposals of different kinds round-robin
