@@ -25,7 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   way; a failure with no override stopped every later step in the merged job, unlike the independent
   jobs it replaced; the unpinned plugin-manifest install ran after the Go caches had accumulated
   instead of before; `scripts/ci.sh`'s exit code didn't distinguish a real failure from a missing
-  tool; and its local tool versions had no visibility into CI's pinned ones.
+  tool; and its local tool versions had no visibility into CI's pinned ones. A second review round
+  found three more, confirmed against the pinned action's actual source: `govulncheck-action`'s own
+  internal `setup-go` step had no override and ran unconditionally regardless of the first round's
+  fix, so Go was still being resolved and cached twice - fixed by dropping the action entirely and
+  running `govulncheck` directly against the Go this job already set up once. `Build` was missing the
+  `!cancelled()` condition every other step had, so an earlier failure could skip it while everything
+  after it kept running anyway - fixed. `scripts/ci.sh` used `set -e`, so a local build failure
+  silently stopped every later check from running at all - rewritten so every check runs and reports
+  independently, matching CI's own guarantee, verified directly against an intentionally broken build.
 
 - MCP surface widened back to four tools (#62, the last of the AMC trial's four findings, and the one
   that reverses an earlier decision): `get_cost_summary`, `get_context_occupancy` and `list_proposals`

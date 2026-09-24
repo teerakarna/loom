@@ -58,12 +58,20 @@ jobs:
           claude plugin validate ./plugin --strict
           claude plugin validate . --strict
 
+      # !cancelled() from here down too (not just the steps below that
+      # already had it) - found by a second code review pass: without it,
+      # a failure in the plugin-manifest step above would skip Build the
+      # normal way, while Vet/Test/lint/govulncheck (already !cancelled())
+      # kept running regardless - the one step the "let every check still
+      # run" rationale exists for was the one step it wasn't applied to.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: ${{ !cancelled() }}
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Build
+        if: ${{ !cancelled() }}
         run: go build ./...
 
       # if: ${{ !cancelled() }} on every step from here down (found by code
@@ -92,30 +100,23 @@ jobs:
         with:
           version: v2.13.2
 
-      # Two overrides against the action's own defaults, both found by code
-      # review reading the pinned action.yml/setup-go source directly, not
-      # assumed from the action's README:
-      #
-      # repo-checkout: false - the action's default (true) runs its own
-      # internal actions/checkout, which defaults persist-credentials to
-      # true and silently re-persists the token this job's own checkout
-      # above just disabled. Nothing to check out again anyway; the repo is
-      # already in the workspace from that earlier step.
-      #
-      # go-version-input: '' - the action's own go-version-input defaults to
-      # 'stable' and passes that straight to actions/setup-go as go-version,
-      # which setup-go's own resolution always prefers over go-version-file
-      # when both are set - so go-version-file below was silently ignored,
-      # scanning under whatever Go happens to be "stable" on the runner
-      # rather than the version go.mod pins. An explicit empty string here
-      # is falsy to setup-go's resolution, so it falls through to
-      # go-version-file instead.
-      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+      # Plain shell, not golang/govulncheck-action, found necessary by a
+      # second code review pass reading the action's own action.yml at the
+      # pinned SHA: overriding repo-checkout and go-version-input (an
+      # earlier version of this fix) stops the action's internal checkout
+      # and forces its Go version resolution to fall through correctly, but
+      # its internal actions/setup-go step has no such override and always
+      # runs regardless - so the job was still paying for Go to be resolved
+      # and its cache restored twice, the exact redundant cost this job's
+      # own "one Go setup" comment claimed did not exist. Installing and
+      # running govulncheck directly - which is all the action's own steps
+      # ultimately do past that point - uses the Go this job already set up
+      # above and genuinely leaves only the one setup in place.
+      - name: govulncheck
         if: ${{ !cancelled() }}
-        with:
-          repo-checkout: false
-          go-version-input: ''
-          go-version-file: go.mod
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
 
   secrets:
     runs-on: ubuntu-latest

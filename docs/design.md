@@ -1526,6 +1526,37 @@ whatever a real failure's own tool produces via `set -e`. Sixth: the script's lo
 into the gap - now printed, not enforced, since forcing an exact version match locally is heavier
 tooling than this script's scope warrants.
 
+**A second `/code-review high` round found three more real issues, all confirmed against the pinned
+action's actual source rather than assumed.** The first round's own fix for `govulncheck-action`
+(`repo-checkout: false`, `go-version-input: ''`) stopped the action's internal checkout and forced
+its version resolution through correctly, but the action's internal `actions/setup-go` step has no
+matching override and runs unconditionally regardless - the job was still paying to resolve Go and
+restore its cache a second time, the exact redundant cost the job's own "one Go setup" comment
+claimed did not exist. Fixed by dropping the action entirely: `golang/govulncheck-action`'s own steps
+past checkout and setup-go are just `go install golang.org/x/vuln/cmd/govulncheck@latest` followed by
+`govulncheck ./...`, so this job now runs those two lines directly against the Go it already set up
+once at the top - genuinely one setup, not a claim about one.
+
+Second: `Build` was the one step in the merged job without `if: ${{ !cancelled() }}` - an earlier
+step's failure (the plugin-manifest check, which now runs first) would skip it the normal way, while
+`Vet`/`Test`/lint/govulncheck (already carrying the condition) kept running regardless. The one step
+the "let every check still run" rationale was written to cover was the one step it was not applied
+to. Fixed by adding the same condition to `setup-go` and `Build` too, so everything from the
+plugin-manifest check onward runs independently of what came before it, the checkout step itself
+being the only genuine hard gate.
+
+Third: `scripts/ci.sh` claimed to mirror the workflow "step for step", which was true for the list of
+checks but not for two structural things - the plugin-manifest check's new position (first in CI, for
+a cache-isolation reason that does not apply to a developer's own persistent machine, so it stayed
+last locally) and, more substantively, `set -e` meant a local build failure stopped every later check
+from running at all, silently losing the exact multi-round-trip guarantee `!cancelled()` had just
+been added to CI to provide. Rewritten without `set -e`: every check now runs and reports regardless
+of an earlier one's outcome, with a new `EXIT_FAILED=1` distinct from `EXIT_INCOMPLETE=2` so the two
+failure classes stay distinguishable through the restructuring. Verified directly, not just read:
+built with an intentionally broken `main.go`, confirmed build/vet/test/lint/govulncheck all correctly
+reported failed while gitleaks and the plugin-manifest check still ran and passed independently, then
+restored the file via git and confirmed a clean run again.
+
 Branch protection's required status checks were updated to match (`ci`, `secrets`, replacing the
 five old names) - confirmed with the owner before changing it, both that the change should happen at
 all and that it should happen once the workflow itself was ready, not before.
