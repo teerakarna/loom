@@ -1235,6 +1235,27 @@ withdraw - is filed as [#76](https://github.com/teerakarna/loom/issues/76), deli
 the failure direction is the safe one (stuck pending, bounded by the cap, not wrongly discarding a
 real finding), and a real fix needs new ledger state (a staleness bound), not a line here.
 
+**A fourth review round found one more real, live bug, in a display path rather than the
+withdrawal logic every earlier round focused on.** `list_proposals`' Summary/Rationale text was
+built from a map keyed only by this pass's freshly generated proposals - correct before #59, since
+a pending row could never exist outside that set by construction (anything not reproduced was
+withdrawn). `needsProtection` broke that invariant on purpose: a protected row is pending precisely
+*because* it wasn't reproduced this pass, so the lookup missed and the row came back with a blank
+Summary and Rationale over MCP - during the exact failure window this whole fix exists to handle
+gracefully, just in the field the caller actually reads rather than the withdrawal decision itself.
+`cmd/loom`'s own CLI listing was unaffected (it already rebuilds its one-line summary from each
+row's own stored evidence, not from a generated-only map). Fixed by extracting that same logic -
+moved, not rewritten - into `propose.SummaryFor`, shared by both the CLI and the MCP handler, which
+now falls back to it (plus an honest, generic Rationale explicitly saying the row was not rescanned
+this pass) whenever the generated-set lookup misses. Three more findings from the same round -
+`needsProtection` conflating malformed evidence with a real coverage gap, `Store`'s protection path
+being tied to the concrete `asset.MemoryScanCoverage` type rather than an abstraction, and
+`EvidenceStores` short-circuiting on `Store` before checking `Stores` if evidence somehow carried
+both - are each real only for a finding kind or evidence shape that does not exist yet on any
+current caller; left as documentation (two doc-comment clarifications, on `Store` and
+`MemoryScanCoverage`) rather than new runtime code, consistent with not designing for a requirement
+nothing has yet.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

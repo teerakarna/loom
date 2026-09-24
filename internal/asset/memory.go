@@ -69,6 +69,13 @@ const MemoryIndexSlug = "MEMORY"
 // issue #59's second finding, from code review: treating those the same
 // meant a genuinely deleted store's stale proposals could never withdraw
 // again, stuck pending forever instead of self-healing on the next pass.
+// Only DiscoverAllMemory constructs a real one - Scanned is always a subset
+// of Present by construction there (flagged by code review: neither field
+// is compiler-enforced, so a hand-built value elsewhere must preserve that
+// itself), and Present == nil specifically (not merely empty) is the
+// sentinel meaning the root itself was never enumerated - see
+// propose.needsProtection, the only reader that cares about the
+// distinction.
 type MemoryScanCoverage struct {
 	// Present is every store directory found under <home>/.claude/projects
 	// this pass, whether or not its memory/ subdirectory could be read. A

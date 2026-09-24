@@ -349,6 +349,20 @@ func listProposalsHandler(db *ledger.DB, home string) gomcp.ToolHandlerFor[empty
 			}
 			if g, ok := text[r.Kind+"|"+r.Subject]; ok {
 				p.Summary, p.Rationale = g.Summary, g.Rationale
+			} else {
+				// This row is pending but #59's needsProtection kept it alive
+				// without this pass reproducing it (its store could not be
+				// confirmed absent of the finding) - not in generated, so the
+				// lookup above misses. Rebuilt from the row's own stored
+				// evidence instead of left blank (found by code review): the
+				// same function cmd/loom's CLI listing uses, so this always
+				// says something, just honestly labelled as unconfirmed this
+				// pass rather than repeating specific old guidance as if it
+				// were freshly checked.
+				p.Summary = propose.SummaryFor(r.Kind, r.Subject, ev)
+				p.Rationale = "Not rescanned this pass - the store this names could not be confirmed " +
+					"absent of the finding, so the proposal is kept rather than withdrawn. See Summary " +
+					"and Evidence above."
 			}
 			out.Proposals = append(out.Proposals, p)
 		}

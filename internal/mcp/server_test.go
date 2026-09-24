@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -399,5 +400,75 @@ func TestGetRecommendationExplainsStaleProcessOverMCP(t *testing.T) {
 	}
 	if !strings.Contains(got, "restart this session") {
 		t.Errorf("got %q, want it to explain the stale-process failure rather than the raw driver string", got)
+	}
+}
+
+// TestListProposalsFallsBackToStoredEvidenceWhenProtected is the regression
+// test for a bug the second round of #59's own code review found: a
+// pending proposal needsProtection kept alive without this pass
+// reproducing it is not in the handler's freshly-generated set, so the
+// Summary/Rationale lookup keyed from that set missed and returned blank
+// text - exactly during the failure window #59 exists to handle
+// gracefully, just in this display path rather than the withdrawal logic
+// #59 itself focused on.
+func TestListProposalsFallsBackToStoredEvidenceWhenProtected(t *testing.T) {
+	home := t.TempDir()
+	memDir := filepath.Join(home, ".claude", "projects", "store-a", "memory")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orphan := filepath.Join(memDir, "orphan.md")
+	if err := os.WriteFile(orphan, []byte("---\nname: orphan\n---\nNo MEMORY.md links this."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := ledger.Open(filepath.Join(t.TempDir(), "loom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	server := NewServer(db, home)
+	client := gomcp.NewClient(&gomcp.Implementation{Name: "test-client", Version: "v0.0.1"}, nil)
+	ctx := context.Background()
+	t1, t2 := gomcp.NewInMemoryTransports()
+	if _, err := server.Connect(ctx, t1, nil); err != nil {
+		t.Fatal(err)
+	}
+	session, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	// First call: the store scans fine, the finding raises with a real
+	// Summary/Rationale from this pass's own generated set.
+	out := callTool[ProposalsOutput](t, session, "list_proposals", map[string]any{})
+	if len(out.Proposals) != 1 || out.Proposals[0].Summary == "" || out.Proposals[0].Rationale == "" {
+		t.Fatalf("got %+v, want exactly one proposal with non-empty Summary/Rationale after the first call", out.Proposals)
+	}
+
+	// The store's memory/ directory becomes unreadable - transiently, not
+	// gone - so this pass's generated set will not reproduce the finding,
+	// but needsProtection keeps the proposal pending anyway.
+	if err := os.RemoveAll(memDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(memDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out = callTool[ProposalsOutput](t, session, "list_proposals", map[string]any{})
+	if len(out.Proposals) != 1 {
+		t.Fatalf("got %+v, want the proposal still pending", out.Proposals)
+	}
+	p := out.Proposals[0]
+	if p.Summary == "" {
+		t.Error("Summary is blank for a protected-but-not-reproduced proposal - the fallback did not fire")
+	}
+	if !strings.Contains(p.Summary, "orphan") {
+		t.Errorf("Summary = %q, want it built from the row's own stored evidence", p.Summary)
+	}
+	if !strings.Contains(p.Rationale, "Not rescanned this pass") {
+		t.Errorf("Rationale = %q, want an honest note that this pass could not confirm the finding", p.Rationale)
 	}
 }

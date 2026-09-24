@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/teerakarna/loom/internal/asset"
 	"github.com/teerakarna/loom/internal/ingest"
 	"github.com/teerakarna/loom/internal/ledger"
 	"github.com/teerakarna/loom/internal/propose"
@@ -149,7 +148,7 @@ func runPropose(args []string) error {
 		var ev map[string]any
 		_ = json.Unmarshal([]byte(p.Evidence), &ev)
 
-		fmt.Printf("  #%-3d %s\n", p.ID, summaryFor(p, ev))
+		fmt.Printf("  #%-3d %s\n", p.ID, propose.SummaryFor(p.Kind, p.Subject, ev))
 		if propose.TouchesUserFiles(p.Kind) {
 			fmt.Printf("       loom will NOT apply this: it touches your files. Review and act yourself.\n")
 		} else {
@@ -164,37 +163,6 @@ func runPropose(args []string) error {
 	fmt.Println("Dismiss with: loom propose dismiss <id>")
 	fmt.Println("A dismissal holds until the evidence behind it changes, not until an interval elapses.")
 	return nil
-}
-
-// summaryFor renders a one-line description from stored evidence. The summary
-// is rebuilt at display time rather than stored, so changing the wording never
-// requires rewriting rows.
-func summaryFor(p ledger.ProposalRow, ev map[string]any) string {
-	switch p.Kind {
-	case propose.KindRetireAsset:
-		return fmt.Sprintf("retire %v %q, unused for %v days",
-			ev["type"], ev["name"], ev["days_unused"])
-	case propose.KindPinModel:
-		return fmt.Sprintf("pin %v to %v, measured over %v runs",
-			ev["agent_type"], ev["observed_model"], ev["runs"])
-	case propose.KindRevertPolicy:
-		return fmt.Sprintf("revert %v: %v", ev["agent_type"], ev["reason"])
-	case propose.KindPromoteMemoryDuplicate:
-		return fmt.Sprintf("promote %q to a reference skill, identical across %v stores",
-			ev["filename"], ev["stores"])
-	case propose.KindBrokenLink:
-		if ev["target_slug"] == asset.MemoryIndexSlug {
-			return fmt.Sprintf("%v links to [[MEMORY]], but this store has no MEMORY.md", ev["filename"])
-		}
-		return fmt.Sprintf("%v links to [[%v]], which exists but not in this store",
-			ev["filename"], ev["target_slug"])
-	case propose.KindUnreachableAsset:
-		return fmt.Sprintf("%v exists but is not linked from its store's MEMORY.md", ev["filename"])
-	case propose.KindFilenameSlugDrift:
-		return fmt.Sprintf("%v's filename no longer matches its own name: %v", ev["filename"], ev["slug"])
-	default:
-		return fmt.Sprintf("%s: %s", p.Kind, p.Subject)
-	}
 }
 
 // compactEvidence prints the evidence without the noise of raw JSON, so a

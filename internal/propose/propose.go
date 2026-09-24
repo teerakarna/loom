@@ -82,6 +82,44 @@ func TouchesUserFiles(kind string) bool {
 	}
 }
 
+// SummaryFor renders a one-line description of a proposal from its stored
+// evidence alone - no fresh scan required, so it works equally well for a
+// proposal this pass just generated and one #59's needsProtection kept
+// pending without reproducing (found by code review: the MCP list_proposals
+// handler built its summary text only from this pass's freshly generated
+// set, so a protected-but-not-reproduced row came back with a blank Summary
+// exactly during the failure window #59 exists to handle gracefully).
+// Shared by cmd/loom's CLI listing and internal/mcp's list_proposals, so
+// there is one place that knows how to read each kind's evidence, not two
+// drifting copies.
+func SummaryFor(kind, subject string, ev map[string]any) string {
+	switch kind {
+	case KindRetireAsset:
+		return fmt.Sprintf("retire %v %q, unused for %v days",
+			ev["type"], ev["name"], ev["days_unused"])
+	case KindPinModel:
+		return fmt.Sprintf("pin %v to %v, measured over %v runs",
+			ev["agent_type"], ev["observed_model"], ev["runs"])
+	case KindRevertPolicy:
+		return fmt.Sprintf("revert %v: %v", ev["agent_type"], ev["reason"])
+	case KindPromoteMemoryDuplicate:
+		return fmt.Sprintf("promote %q to a reference skill, identical across %v stores",
+			ev["filename"], ev["stores"])
+	case KindBrokenLink:
+		if ev["target_slug"] == asset.MemoryIndexSlug {
+			return fmt.Sprintf("%v links to [[MEMORY]], but this store has no MEMORY.md", ev["filename"])
+		}
+		return fmt.Sprintf("%v links to [[%v]], which exists but not in this store",
+			ev["filename"], ev["target_slug"])
+	case KindUnreachableAsset:
+		return fmt.Sprintf("%v exists but is not linked from its store's MEMORY.md", ev["filename"])
+	case KindFilenameSlugDrift:
+		return fmt.Sprintf("%v's filename no longer matches its own name: %v", ev["filename"], ev["slug"])
+	default:
+		return fmt.Sprintf("%s: %s", kind, subject)
+	}
+}
+
 // StaleAfter is how long an asset must be unseen before retirement is even
 // suggested. Deliberately generous: a skill used twice a year is not dead, and
 // a proposal to delete it would be noise with a confident face on it.
@@ -493,10 +531,14 @@ func asFloat(v any) float64 {
 // this before the upsert loop below, not after, is what lets a proposal
 // freed by a withdrawal fill the same pass's MaxPendingProposals slot.
 //
-// coverage is DiscoverAllMemory's own scan-coverage report (the zero value
-// when the caller has no memory findings at all, e.g. tests exercising
-// Generate's DB-only kinds in isolation - nothing lane-scoped can appear in
-// ps or in the ledger then, so protection has nothing to act on). Issue
+// coverage is DiscoverAllMemory's own scan-coverage report. Pass the zero
+// value only when the caller genuinely never runs GenerateMemoryFindings
+// against this ledger - the zero value protects every lane-scoped pending
+// row unconditionally (needsProtection's "can't tell" default), which is
+// only inert because today's DB-only tests never seed lane-scoped rows in
+// the first place, not because the zero value is inherently a no-op
+// (flagged by code review: a future caller passing it against a ledger
+// that does have real lane-scoped rows would protect them forever). Issue
 // #59, found by code review while shipping #40: a store whose memory
 // directory was transiently unreadable this pass produces no findings for
 // it, which WithdrawStalePending cannot tell apart from a store whose

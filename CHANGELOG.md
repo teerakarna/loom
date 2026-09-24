@@ -213,7 +213,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fetched (also found by review). Verified against the real binary through all three scenarios: a
   store made unreadable (proposal stayed pending, then withdrew once genuinely fixed), a store deleted
   entirely (proposal withdrew), and `$HOME` pointed at a directory with no `.claude/projects` at all
-  (proposal stayed pending rather than mass-withdrawing).
+  (proposal stayed pending rather than mass-withdrawing). A fourth round found one more live bug: a
+  protected proposal's `Summary`/`Rationale` came back blank over MCP, since `list_proposals` built
+  that text from a map keyed only by this pass's freshly generated proposals - a protected row is
+  pending precisely because it wasn't reproduced, so the lookup always missed. Fixed by moving
+  `cmd/loom`'s existing per-kind summary logic (unaffected by the bug itself) into shared
+  `propose.SummaryFor`, with a new, honest Rationale fallback stating the row was not rescanned this
+  pass.
 
 - `broken_link` flagged a `[[link]]` to a slug that doesn't exist anywhere yet as a defect (#67), which
   Claude Code's own memory convention explicitly permits as a forward reference ("it marks something
