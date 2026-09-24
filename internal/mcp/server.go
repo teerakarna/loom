@@ -317,7 +317,7 @@ func listProposalsHandler(db *ledger.DB, home string) gomcp.ToolHandlerFor[empty
 			return nil, ProposalsOutput{}, explainIfStaleProcess(err)
 		}
 		generated = append(generated, memoryFindings...)
-		if _, err := propose.Store(db, generated, scannedStores, now); err != nil {
+		if _, err := propose.Store(db, generated, &scannedStores, now); err != nil {
 			return nil, ProposalsOutput{}, explainIfStaleProcess(err)
 		}
 

@@ -129,6 +129,20 @@ func SummaryFor(kind, subject string, ev map[string]any) string {
 // a proposal to delete it would be noise with a confident face on it.
 const StaleAfter = 90 * 24 * time.Hour
 
+// RootScanFailureTolerance is how long Store keeps protecting every
+// lane-scoped proposal from withdrawal while <home>/.claude/projects
+// itself cannot be enumerated, before giving up and falling back to normal
+// withdrawal (issue #76). A one-pass blip - a mount hiccup, a transient
+// race - should never cost a real finding, which is what needsProtection's
+// unconditional protection was built for; but a persistently wrong or
+// misconfigured $HOME (a stripped cron/systemd environment, say) should
+// not protect a stale proposal forever either, or it just sits occupying a
+// slot against MaxPendingProposals with nothing left backing it. A week is
+// long enough to rule out anything an ordinary laptop workflow produces (a
+// closed lid over a weekend) and short enough that a genuinely broken
+// environment does not sit silently for months.
+const RootScanFailureTolerance = 7 * 24 * time.Hour
+
 // Proposal is one generated suggestion, before storage.
 type Proposal struct {
 	Kind       string
@@ -560,7 +574,7 @@ func asFloat(v any) float64 {
 // up; and a store missing from coverage entirely (permanently deleted, not
 // transiently unreadable) used to be protected forever, the opposite
 // problem - stuck pending, never able to withdraw again.
-func Store(db *ledger.DB, ps []Proposal, coverage asset.MemoryScanCoverage, now time.Time) (int, error) {
+func Store(db *ledger.DB, ps []Proposal, coverage *asset.MemoryScanCoverage, now time.Time) (int, error) {
 	ps = interleaveByKind(ps)
 
 	generated := make(map[ledger.ProposalIdentity]bool, len(ps))
@@ -571,13 +585,28 @@ func Store(db *ledger.DB, ps []Proposal, coverage asset.MemoryScanCoverage, now 
 	if err != nil {
 		return 0, err
 	}
-	for _, p := range pending {
-		id := ledger.ProposalIdentity{Kind: p.Kind, Subject: p.Subject}
-		if generated[id] || !LaneScopedKinds[p.Kind] {
-			continue
+	if len(pending) > 0 && coverage != nil {
+		// Recorded here, not inside needsProtection: this is ledger state
+		// about the ledger's own scan history, not a per-proposal decision,
+		// and Store is the one place that already holds both db and
+		// coverage. Skipped when there is nothing pending to protect in the
+		// first place, and when coverage is nil (the caller never attempted
+		// a memory scan at all - recording a "failure" then would be
+		// recording a scan that never happened, not a real one that failed).
+		rootFailureExpired := false
+		if since, failing, err := db.RecordRootScanCoverage(coverage.Present != nil, now); err != nil {
+			return 0, err
+		} else if failing {
+			rootFailureExpired = now.Sub(since) >= RootScanFailureTolerance
 		}
-		if needsProtection(EvidenceStores(p.Evidence), coverage) {
-			generated[id] = true // protect: this pass could not confirm the store(s) behind it are truly absent
+		for _, p := range pending {
+			id := ledger.ProposalIdentity{Kind: p.Kind, Subject: p.Subject}
+			if generated[id] || !LaneScopedKinds[p.Kind] {
+				continue
+			}
+			if needsProtection(EvidenceStores(p.Evidence), *coverage, rootFailureExpired) {
+				generated[id] = true // protect: this pass could not confirm the store(s) behind it are truly absent
+			}
 		}
 	}
 	if err := db.WithdrawStalePending(pending, generated); err != nil {
@@ -630,8 +659,16 @@ func Store(db *ledger.DB, ps []Proposal, coverage asset.MemoryScanCoverage, now 
 // Empty stores - evidence that failed to parse, or named no store at all -
 // is treated the same as an untrustworthy root: can't tell, so protect
 // rather than guess.
-func needsProtection(stores []string, coverage asset.MemoryScanCoverage) bool {
-	if coverage.Present == nil || len(stores) == 0 {
+func needsProtection(stores []string, coverage asset.MemoryScanCoverage, rootFailureExpired bool) bool {
+	if coverage.Present == nil {
+		// Issue #76: protecting on a root-scan failure is meant for a
+		// one-pass blip, not a permanently or persistently wrong $HOME - once
+		// RootScanFailureTolerance is exceeded, stop protecting and let
+		// normal withdrawal decide, the same way a genuinely deleted store
+		// already does below.
+		return !rootFailureExpired
+	}
+	if len(stores) == 0 {
 		return true
 	}
 	for _, s := range stores {

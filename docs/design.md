@@ -1321,6 +1321,46 @@ matches an existing pattern this codebase already accepts elsewhere (`DiscoverAl
 scans unconditionally on every call), and both are proportionate to revisit only if and when #78 adds
 a second kind worth unifying against, not before.
 
+#### A root scan failure protected forever, not just for a blip - BUILT 2026-09-24
+
+Issue #76, filed from #59's third review round. `needsProtection` treats a root-scan failure
+(`<home>/.claude/projects` itself could not be enumerated this pass) as a reason to protect every
+lane-scoped pending proposal, correct for a one-pass blip. But nothing distinguished that from a
+persistently wrong or misconfigured `$HOME` - a cron job or systemd unit with a stripped
+environment, say - where the root never resolves correctly across many passes and every lane-scoped
+proposal stays protected forever, occupying a slot against `MaxPendingProposals` long after the
+underlying finding may have stopped being true. Deliberately lower severity than #59 itself: the
+failure direction is the safe one (stuck pending, not silently discarding a real finding), which is
+why this was filed and deferred rather than folded into #59's own already-large PR.
+
+New ledger state, the smallest shape that answers the actual question: not per-proposal (the
+condition that triggers this - the root itself unscannable - is inherently global, not about any one
+proposal), a singleton `memory_root_scan` table holding one nullable timestamp, `unscanned_since`.
+`ledger.RecordRootScanCoverage(scanned, now)` clears it the moment a pass succeeds (whatever
+happened before does not matter once the root works again) and, on a failure, sets it only the first
+time - a second, third, nth consecutive failure leaves the original timestamp alone, so `Store` can
+tell how long the streak has actually run, not just that it is currently failing. New
+`RootScanFailureTolerance = 7 * 24 * time.Hour` (a week - long enough to rule out a closed laptop
+lid over a weekend, short enough that a genuinely broken environment does not sit silently for
+months): once exceeded, `needsProtection` stops honoring the root-failure case and falls back to
+normal withdrawal, the same way a genuinely deleted store already does.
+
+`Store`'s `coverage` parameter became `*asset.MemoryScanCoverage` (a pointer, not a value) to close
+a real ambiguity this surfaced: the zero-value `MemoryScanCoverage{}` was already the sentinel for
+"the caller never even attempted a memory scan" (existing DB-only tests), but it is also exactly
+what a genuine root-scan failure produces - indistinguishable at the value level. Recording a
+"failure" every time a DB-only caller passed the old sentinel would have started a fake streak in
+the ledger for a scan that was never attempted. `nil` now means "no scan attempted, nothing to
+record or protect"; a non-nil pointer, even to a zero-value struct, means "a real scan happened,
+here is what it found" - unambiguous, and `Store` only calls `RecordRootScanCoverage` when it holds
+the latter.
+
+Verified against the real binary for the parts a real clock can exercise (the streak gets recorded
+and protection holds through the first failing pass), and against the ledger and `Store` directly
+for the timing that would take a week of real time to observe: a streak's tolerance window measured
+from its own start survives a reset; a proposal at 6 days 23 hours into a failing streak stays
+protected; at a week and one hour, it is withdrawn.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a
