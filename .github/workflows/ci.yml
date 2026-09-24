@@ -35,37 +35,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Build
-        run: go build ./...
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test
-        run: go test ./...
-
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.13.2
-
-      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
-        with:
-          go-version-file: go.mod
-
-      # Schema-checks the plugin and marketplace manifests with the first-party
-      # validator, which is the only thing that knows the current plugin format.
-      #
-      # Deliberately unpinned, unlike every action above. Pinning would freeze
-      # the schema this is checked against, and catching "the format moved and
-      # ours no longer conforms" is the entire reason the job exists. This step
-      # gets no secrets and the job's contents permission is read-only, which is
-      # what makes an unpinned global install an acceptable trade here rather
-      # than a general one.
+      # Runs first, before Go is even set up: schema-checks the plugin and
+      # marketplace manifests with the first-party validator, the only thing
+      # that knows the current plugin format. Deliberately unpinned, unlike
+      # every action in this job - pinning would freeze the schema this is
+      # checked against, and catching "the format moved and ours no longer
+      # conforms" is the entire reason the step exists. Running it before Go
+      # setup/build (found by code review, before this shipped) means an
+      # unpinned global npm install shares the runner with only a bare
+      # checkout, not the populated Go module and build caches later steps
+      # accumulate - permissions are the same either way (no secrets, this
+      # job's contents is read-only), but there is less on the runner worth
+      # reaching if the install itself were ever compromised.
       #
       # It checks shape only. It does not check that the command a manifest
       # points at exists, is executable, or matches the server being shipped -
@@ -76,6 +57,65 @@ jobs:
           npm install -g @anthropic-ai/claude-code
           claude plugin validate ./plugin --strict
           claude plugin validate . --strict
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      # if: ${{ !cancelled() }} on every step from here down (found by code
+      # review, before this shipped): merging four independent jobs into one
+      # means a failure with no override would stop every later step, unlike
+      # the four separate jobs this replaced, which all ran and reported
+      # regardless of each other's outcome. None of vet/test/lint/govulncheck
+      # depend on Build's own output (each is its own independent invocation
+      # over the source), so there is nothing unsafe about running them
+      # anyway - a compile error and an unrelated lint issue both surface in
+      # the same push again, not one hidden behind the other until a second
+      # round trip. !cancelled(), not always(): always() would also force
+      # these to run through a genuine job cancellation (the concurrency
+      # group above cancelling a superseded PR run), which is exactly the
+      # minutes that cancellation exists to stop spending.
+      - name: Vet
+        if: ${{ !cancelled() }}
+        run: go vet ./...
+
+      - name: Test
+        if: ${{ !cancelled() }}
+        run: go test ./...
+
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        if: ${{ !cancelled() }}
+        with:
+          version: v2.13.2
+
+      # Two overrides against the action's own defaults, both found by code
+      # review reading the pinned action.yml/setup-go source directly, not
+      # assumed from the action's README:
+      #
+      # repo-checkout: false - the action's default (true) runs its own
+      # internal actions/checkout, which defaults persist-credentials to
+      # true and silently re-persists the token this job's own checkout
+      # above just disabled. Nothing to check out again anyway; the repo is
+      # already in the workspace from that earlier step.
+      #
+      # go-version-input: '' - the action's own go-version-input defaults to
+      # 'stable' and passes that straight to actions/setup-go as go-version,
+      # which setup-go's own resolution always prefers over go-version-file
+      # when both are set - so go-version-file below was silently ignored,
+      # scanning under whatever Go happens to be "stable" on the runner
+      # rather than the version go.mod pins. An explicit empty string here
+      # is falsy to setup-go's resolution, so it falls through to
+      # go-version-file instead.
+      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        if: ${{ !cancelled() }}
+        with:
+          repo-checkout: false
+          go-version-input: ''
+          go-version-file: go.mod
 
   secrets:
     runs-on: ubuntu-latest

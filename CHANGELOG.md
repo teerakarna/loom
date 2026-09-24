@@ -16,7 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   itself was unaffected at the time, confirmed rather than assumed, but the practice applies
   regardless. Added a `concurrency` group cancelling a superseded PR run (never on `main`),
   `persist-credentials: false` on every checkout, and `scripts/ci.sh` to run the same gate locally.
-  Branch protection's required checks updated to match (`ci`, `secrets`).
+  Branch protection's required checks updated to match (`ci`, `secrets`). Trades billed minutes for
+  wall-clock time (parallel jobs became one sequential job), stated explicitly rather than left
+  implicit. `/code-review high` found six real issues in the first version, all fixed: the
+  govulncheck-action step's own internal checkout was silently re-persisting the token the job's
+  checkout had just disabled (confirmed against the action's actual pinned source), and its
+  `go-version-input` default was silently overriding the pinned Go version from `go.mod` the same
+  way; a failure with no override stopped every later step in the merged job, unlike the independent
+  jobs it replaced; the unpinned plugin-manifest install ran after the Go caches had accumulated
+  instead of before; `scripts/ci.sh`'s exit code didn't distinguish a real failure from a missing
+  tool; and its local tool versions had no visibility into CI's pinned ones.
 
 - MCP surface widened back to four tools (#62, the last of the AMC trial's four findings, and the one
   that reverses an earlier decision): `get_cost_summary`, `get_context_occupancy` and `list_proposals`

@@ -1492,6 +1492,40 @@ so there is nothing that needs it left in place.
 New `scripts/ci.sh` runs the same gate locally in one command, for the window Actions can't run at
 all and for ordinary pre-PR use - `CONTRIBUTING.md` and `CLAUDE.md` both point at it now.
 
+**The trade this merge actually makes, stated plainly rather than left implicit:** billed job-minutes
+for wall-clock time. Four independent parallel jobs finish in roughly the slowest one's duration;
+one sequential job finishes in roughly the sum of all of them, and a fast-to-detect problem (an
+unused import) now waits behind slower steps (the test suite) that used to report on their own
+runner at the same time. Worth paying deliberately, not by accident: fewer billed minutes, slower
+feedback on each individual push.
+
+**`/code-review high` found six real issues in the first version, all fixed.** Two were confirmed by
+reading the actual pinned actions' source, not assumed from documentation: `golang/govulncheck-action`
+defaults `repo-checkout` to `true`, which ran its own internal checkout with `persist-credentials`
+defaulting to `true` - silently re-persisting the token this job's own checkout had just disabled,
+undoing the hardening two steps later. And the action's `go-version-input` defaults to `'stable'`
+and always wins over `go-version-file` in `actions/setup-go`'s own resolution order, so
+`govulncheck` was silently scanning under whatever Go happened to be "stable" on the runner, not the
+version `go.mod` pins - true before this merge too, just newly visible once "one Go setup" became a
+claim this diff's own comment made. Fixed with `repo-checkout: false` and an explicit
+`go-version-input: ''` (falsy, so resolution falls through to `go-version-file`).
+
+Third: merging four independent jobs into one meant a failure with no override stopped every later
+step, unlike the four separate jobs this replaced, which all ran and reported regardless of each
+other's outcome - a compile error would have hidden an unrelated lint issue until a second push.
+Fixed with `if: ${{ !cancelled() }}` on vet/test/lint/govulncheck (not `always()`, which would also
+force them to run through a genuine cancellation from the concurrency group above - exactly the
+minutes that group exists to stop spending). Fourth: the unpinned plugin-manifest npm install ran as
+the last step of a job that had already accumulated the Go module and build caches, a real if modest
+blast-radius increase over its own previous isolated job - moved to run first, right after checkout,
+before Go is even set up. Fifth: `scripts/ci.sh`'s exit code didn't distinguish a real check failure
+from a tool simply not being installed, the one moment there is no real CI to cross-check against -
+now exits `2` specifically for "incomplete, install the missing tool," distinct from `0` and from
+whatever a real failure's own tool produces via `set -e`. Sixth: the script's local tool versions
+(golangci-lint, govulncheck, gitleaks) run unpinned against CI's pinned versions with no visibility
+into the gap - now printed, not enforced, since forcing an exact version match locally is heavier
+tooling than this script's scope warrants.
+
 Branch protection's required status checks were updated to match (`ci`, `secrets`, replacing the
 five old names) - confirmed with the owner before changing it, both that the change should happen at
 all and that it should happen once the workflow itself was ready, not before.
