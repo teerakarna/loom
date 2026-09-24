@@ -1183,31 +1183,46 @@ once the scan reproduces the identical finding), but a real, if narrow, flicker 
 Fixing it meant crossing a package boundary that did not have the vocabulary for it:
 `ledger.WithdrawStalePending` has no concept of "store", `internal/asset` has no concept of a
 proposal. Resolved without teaching either package about the other's concept. `DiscoverAllMemory`
-now returns a second value alongside its files: the set of stores whose `memory/` directory was
-actually readable this pass. `GenerateMemoryFindings` forwards it untouched - it has nothing to
-add. `propose.Store` is the one place that already understood both sides (it holds a `*ledger.DB`
-and it already builds proposal evidence), so it does the store-awareness entirely on its own: new
-`LaneScopedKinds` (promoted from a var of the same name and shape already living in
-`cmd/loom/propose.go` for issue #68's `--lane` filter) and `EvidenceStores` (also generalizing
-that file's inline evidence-parsing struct, now shared by both the lane filter and this fix,
-removing a duplicate) identify which pending proposals are store-scoped and which store(s) each
-one's evidence names. Before withdrawing, any pending lane-scoped proposal the current pass did
-not reproduce is checked against the scanned-stores set: if any store its evidence names was not
-actually scanned this pass, it is treated as reproduced rather than stale, protecting it until a
-pass that actually looks at that store again says otherwise. `ledger.WithdrawStalePending` itself
-is untouched - the crossing happens entirely on `propose`'s side of the boundary, which is where
-both concepts it needs were already in scope.
+now returns a second value alongside its files, a new `MemoryScanCoverage` struct (`Present`, every
+store directory found this pass; `Scanned`, the subset whose `memory/` was actually readable).
+`GenerateMemoryFindings` forwards it untouched - it has nothing to add. `propose.Store` is the one
+place that already understood both sides (it holds a `*ledger.DB` and it already builds proposal
+evidence), so it does the store-awareness entirely on its own: new `LaneScopedKinds` (promoted from
+a var of the same name and shape already living in `cmd/loom/propose.go` for issue #68's `--lane`
+filter) and `EvidenceStores` (also generalizing that file's inline evidence-parsing struct, now
+shared by both the lane filter and this fix, removing a duplicate) identify which pending proposals
+are store-scoped and which store(s) each one's evidence names. Before withdrawing, any pending
+lane-scoped proposal the current pass did not reproduce goes through `needsProtection`, which
+decides whether to treat it as reproduced anyway. `ledger.WithdrawStalePending` itself is untouched
+- the crossing happens entirely on `propose`'s side, which is where both concepts it needs were
+already in scope.
 
-`scannedStores` is `nil` for a caller with no memory findings (`Generate`'s DB-only kinds have
-nothing store-scoped to protect), which is also the signal `Store` uses to skip the extra
-`ListProposals` lookup entirely when there is nothing to protect - existing DB-only tests pass
-`nil` unchanged and see no behavior difference.
+**A second `/code-review high` round on the first version found two more real gaps, both in
+`needsProtection`'s design, not implementation bugs in what it did do.** First: the first version
+only handled a single unreadable store, but treated the *root* `<home>/.claude/projects` itself
+going missing or unreadable for one pass as "confirmed empty, nothing to protect" - which would
+mass-withdraw every real, unchanged lane-scoped proposal across every store, reproducing issue
+#59's own failure mode one directory level up (a wrong `$HOME` for one invocation, a mount hiccup).
+Second, the opposite problem: with no way to tell "transiently unreadable" apart from "gone for
+good", a store deleted permanently would have its stale proposals protected forever instead of
+ever withdrawing - stuck pending, defeating #40's whole purpose in a new way. Both fixed together
+in `needsProtection`, using a distinction `MemoryScanCoverage` already carried but the first version
+didn't use: `Present == nil` (the root itself was never successfully enumerated this pass) protects
+every lane-scoped proposal, regardless of which store it names - nothing this pass found can be
+trusted as evidence of absence. Otherwise, a store present in `Present` but missing from `Scanned`
+is the real transient-failure case (protect); a store missing from `Present` entirely no longer
+exists as a project at all, which is a legitimate reason its own findings are gone too, not a scan
+failure (let it withdraw normally, self-healing exactly as #40 intended).
 
-Verified for real, not just by unit test: built the binary against a scratch `HOME`, raised a
-genuine `unreachable_asset` finding, made the store's `memory/` directory unreadable (a file where
-a directory should be) and reran `loom propose` - the proposal stayed pending. Fixed the store for
-real (added the missing `MEMORY.md` entry) and reran again - the proposal withdrew, confirming the
-fix protects an unscanned store without breaking a genuine withdrawal.
+Verified for real at every stage, not just by unit test: built the binary against a scratch `HOME`
+three separate times. First round: raised a genuine `unreachable_asset` finding, made the store's
+`memory/` directory unreadable (a file where a directory should be) and reran `loom propose` - the
+proposal stayed pending; fixed the store for real (added the missing `MEMORY.md` entry) and reran
+again - the proposal withdrew. Second round, after the review findings: deleted the whole store's
+project directory (not just `memory/`) - the proposal withdrew, confirming a genuinely gone store
+still self-heals. Third round: pointed `$HOME` at a directory with no `.claude/projects` at all,
+against the same ledger that had a real pending proposal from a previous run - the proposal stayed
+pending, confirming a root-level scan failure protects rather than mass-withdrawing.
 
 ### B7 scope, agreed 2026-09-22
 

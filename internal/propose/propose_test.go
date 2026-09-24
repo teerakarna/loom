@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/teerakarna/loom/internal/asset"
 	"github.com/teerakarna/loom/internal/ledger"
 	"github.com/teerakarna/loom/internal/policy"
 )
@@ -315,7 +316,7 @@ func TestDismissalHoldsUntilEvidenceChanges(t *testing.T) {
 	}
 
 	ps, _ := Generate(db, now)
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -328,7 +329,7 @@ func TestDismissalHoldsUntilEvidenceChanges(t *testing.T) {
 
 	// Run again with nothing changed: must stay dismissed.
 	ps, _ = Generate(db, now)
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 	if pending, _ = db.ListProposals(true); len(pending) != 0 {
@@ -338,7 +339,7 @@ func TestDismissalHoldsUntilEvidenceChanges(t *testing.T) {
 	// Now the facts change: another month passes, so days_unseen differs.
 	later := now.Add(30 * 24 * time.Hour)
 	ps, _ = Generate(db, later)
-	if _, err := Store(db, ps, nil, later); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, later); err != nil {
 		t.Fatal(err)
 	}
 	if pending, _ = db.ListProposals(true); len(pending) != 1 {
@@ -360,7 +361,7 @@ func TestPendingCapBoundsTheQueue(t *testing.T) {
 	if len(ps) != ledger.MaxPendingProposals+5 {
 		t.Fatalf("generator produced %d, want %d", len(ps), ledger.MaxPendingProposals+5)
 	}
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -411,7 +412,7 @@ func TestStoreDoesNotLetOneKindStarveAnother(t *testing.T) {
 	ps = append(ps, Proposal{Kind: KindFilenameSlugDrift, Subject: "drift-0", Evidence: map[string]any{}})
 	ps = append(ps, Proposal{Kind: KindUnreachableAsset, Subject: "unreachable-0", Evidence: map[string]any{}})
 
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -458,7 +459,7 @@ func TestWithdrawnWhenEvidenceStopsHolding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -486,7 +487,7 @@ func TestWithdrawnWhenEvidenceStopsHolding(t *testing.T) {
 	if len(ps) != 0 {
 		t.Fatalf("setup: generator still produced %+v, want nothing - the asset is used now", ps)
 	}
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -508,7 +509,7 @@ func TestWithdrawnWhenEvidenceStopsHolding(t *testing.T) {
 		t.Fatal(err)
 	}
 	ps, _ = Generate(db, now)
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ = db.ListProposals(true)
@@ -519,7 +520,7 @@ func TestWithdrawnWhenEvidenceStopsHolding(t *testing.T) {
 		t.Fatal(err)
 	}
 	ps, _ = Generate(db, now)
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 	got, err = db.GetProposal(pending[0].ID)
@@ -546,7 +547,7 @@ func TestWithdrawalFreesTheCapForANewProposal(t *testing.T) {
 		}
 	}
 	ps, _ := Generate(db, now)
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -578,7 +579,7 @@ func TestWithdrawalFreesTheCapForANewProposal(t *testing.T) {
 	if len(ps) != ledger.MaxPendingProposals {
 		t.Fatalf("generator produced %d, want %d (old-0 dropped out, newcomer added)", len(ps), ledger.MaxPendingProposals)
 	}
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -606,7 +607,7 @@ func TestApplyRefusesWithdrawnProposal(t *testing.T) {
 		t.Fatal(err)
 	}
 	ps, _ := Generate(db, now)
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -623,7 +624,7 @@ func TestApplyRefusesWithdrawnProposal(t *testing.T) {
 		t.Fatal(err)
 	}
 	ps, _ = Generate(db, now)
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -641,7 +642,7 @@ func TestApplyRefusesAnythingTouchingUserFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	ps, _ := Generate(db, now)
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -661,7 +662,7 @@ func TestApplyPinsTheModelAndIsRevertible(t *testing.T) {
 	db := openDB(t)
 	seedAgentRuns(t, db, "Explore", policy.MinSampleSize, 0)
 	ps, _ := Generate(db, now)
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -720,7 +721,7 @@ func TestApplyRejectsUnknownAndRepeatIDs(t *testing.T) {
 
 	seedAgentRuns(t, db, "Explore", policy.MinSampleSize, 0)
 	ps, _ := Generate(db, now)
-	if _, err := Store(db, ps, nil, now); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, now); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -760,7 +761,7 @@ func applyAPin(t *testing.T, db *ledger.DB, agentType string, at time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Store(db, ps, nil, at); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, at); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -899,7 +900,7 @@ func TestApplyingARevertReopensTheQuestion(t *testing.T) {
 
 	later := now.Add(2 * time.Hour)
 	ps, _ := Generate(db, later)
-	if _, err := Store(db, ps, nil, later); err != nil {
+	if _, err := Store(db, ps, asset.MemoryScanCoverage{}, later); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ := db.ListProposals(true)
@@ -960,19 +961,30 @@ func TestHandSetPolicyIsNeverSecondGuessed(t *testing.T) {
 	}
 }
 
-func TestAllStoresScanned(t *testing.T) {
-	scanned := map[string]bool{"store-a": true, "store-b": true}
+func TestNeedsProtection(t *testing.T) {
+	// store-a: present and scanned this pass (fully confirmed).
+	// store-b: present as a project directory, but not scanned - the
+	// transient-failure case this whole fix exists for.
+	// store-c: not present at all - a deleted project, not a scan failure.
+	coverage := asset.MemoryScanCoverage{
+		Present: map[string]bool{"store-a": true, "store-b": true},
+		Scanned: map[string]bool{"store-a": true},
+	}
 	cases := []struct {
-		name   string
-		stores []string
-		want   bool
+		name     string
+		stores   []string
+		coverage asset.MemoryScanCoverage
+		want     bool
 	}{
-		{"every store scanned", []string{"store-a", "store-b"}, true},
-		{"one store not scanned", []string{"store-a", "store-c"}, false},
-		{"no stores at all - can't tell, treated as not fully scanned", nil, false},
+		{"store fully scanned - a real withdrawal, no protection", []string{"store-a"}, coverage, false},
+		{"store present but not scanned - transient failure, protect", []string{"store-b"}, coverage, true},
+		{"store not present at all - deleted, let it withdraw normally", []string{"store-c"}, coverage, false},
+		{"mixed - one gap anywhere protects the whole proposal", []string{"store-a", "store-b"}, coverage, true},
+		{"no stores at all - can't tell, protect", nil, coverage, true},
+		{"root scan itself failed - protect regardless of the store named", []string{"store-a"}, asset.MemoryScanCoverage{}, true},
 	}
 	for _, c := range cases {
-		if got := allStoresScanned(c.stores, scanned); got != c.want {
+		if got := needsProtection(c.stores, c.coverage); got != c.want {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
 	}

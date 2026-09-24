@@ -200,13 +200,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   could have every one of its real, unchanged proposals wrongly marked withdrawn (#59, found by code
   review while shipping #40's withdrawal mechanism) - `DiscoverAllMemory` skipping the store for that
   pass looked, to `WithdrawStalePending`, identical to the store's findings having genuinely stopped
-  being true. `DiscoverAllMemory` now also reports which stores it actually scanned; `propose.Store`
-  protects any pending lane-scoped proposal whose evidence names a store not in that set, treating it
-  as reproduced rather than stale until a pass that actually looks at that store again says otherwise.
-  New `propose.LaneScopedKinds`/`propose.EvidenceStores`, generalized from equivalent logic `loom
-  propose --lane` (#68) already had in `cmd/loom`, now shared by both. Verified against the real
-  binary: a genuine finding raised, the store made unreadable (proposal stayed pending), then fixed
-  for real (proposal withdrew).
+  being true. `DiscoverAllMemory` now also reports a `MemoryScanCoverage` (which store directories
+  were found, and which of those were actually readable); `propose.Store`'s new `needsProtection`
+  protects any pending lane-scoped proposal this pass could not confirm is truly gone, treating it as
+  reproduced rather than stale until a pass that actually looks again says otherwise. New
+  `propose.LaneScopedKinds`/`propose.EvidenceStores`, generalized from equivalent logic `loom propose
+  --lane` (#68) already had in `cmd/loom`, now shared by both. A second `/code-review high` round
+  found two more gaps in the first version, both fixed: a root-level scan failure (not just one
+  store) fell through to unconditional withdrawal, reproducing #59 one directory level up; and a
+  permanently deleted store's proposals were protected forever instead of ever withdrawing, the
+  opposite failure. `WithdrawStalePending` also no longer re-queries pending proposals `Store` already
+  fetched (also found by review). Verified against the real binary through all three scenarios: a
+  store made unreadable (proposal stayed pending, then withdrew once genuinely fixed), a store deleted
+  entirely (proposal withdrew), and `$HOME` pointed at a directory with no `.claude/projects` at all
+  (proposal stayed pending rather than mass-withdrawing).
 
 - `broken_link` flagged a `[[link]]` to a slug that doesn't exist anywhere yet as a defect (#67), which
   Claude Code's own memory convention explicitly permits as a forward reference ("it marks something

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/teerakarna/loom/internal/asset"
 	"github.com/teerakarna/loom/internal/ledger"
 	"github.com/teerakarna/loom/internal/policy"
 )
@@ -492,45 +493,48 @@ func asFloat(v any) float64 {
 // this before the upsert loop below, not after, is what lets a proposal
 // freed by a withdrawal fill the same pass's MaxPendingProposals slot.
 //
-// scannedStores is DiscoverAllMemory's own scanned-stores set (nil when the
-// caller has no memory findings at all, e.g. tests exercising Generate's
-// DB-only kinds in isolation - nothing lane-scoped can appear in ps then,
-// so there is nothing to protect). Issue #59, found by code review while
-// shipping #40: a store whose memory directory was transiently unreadable
-// this pass produces no findings for it, which WithdrawStalePending cannot
-// tell apart from a store whose findings genuinely stopped being true -
-// every real, unchanged proposal for that store would be marked withdrawn
-// even though nothing about the underlying facts changed. Before
-// withdrawing, any pending lane-scoped proposal ps did not reproduce is
-// checked against scannedStores: if any store its evidence names was not
-// actually scanned this pass, it is treated as reproduced rather than
-// stale - protected, not withdrawn, until a pass that actually looked at
-// that store again says otherwise. A proposal ps did reproduce is already
-// safe regardless, and one whose stores were all scanned this pass and
-// still isn't reproduced is a real withdrawal, exactly as before.
-func Store(db *ledger.DB, ps []Proposal, scannedStores map[string]bool, now time.Time) (int, error) {
+// coverage is DiscoverAllMemory's own scan-coverage report (the zero value
+// when the caller has no memory findings at all, e.g. tests exercising
+// Generate's DB-only kinds in isolation - nothing lane-scoped can appear in
+// ps or in the ledger then, so protection has nothing to act on). Issue
+// #59, found by code review while shipping #40: a store whose memory
+// directory was transiently unreadable this pass produces no findings for
+// it, which WithdrawStalePending cannot tell apart from a store whose
+// findings genuinely stopped being true - every real, unchanged proposal
+// for that store would be marked withdrawn even though nothing about the
+// underlying facts changed. Before withdrawing, any pending lane-scoped
+// proposal ps did not reproduce is checked with needsProtection: if this
+// pass could not actually confirm the store it names is still absent of
+// findings, the proposal is treated as reproduced rather than stale -
+// protected, not withdrawn, until a pass that actually looks again says
+// otherwise. A second review round found two more gaps in the first
+// version of this fix, both closed in needsProtection itself: a root scan
+// failure (not just a single store) used to fall through to the old
+// unconditional withdrawal, silently reproducing #59 one directory level
+// up; and a store missing from coverage entirely (permanently deleted, not
+// transiently unreadable) used to be protected forever, the opposite
+// problem - stuck pending, never able to withdraw again.
+func Store(db *ledger.DB, ps []Proposal, coverage asset.MemoryScanCoverage, now time.Time) (int, error) {
 	ps = interleaveByKind(ps)
 
 	generated := make(map[ledger.ProposalIdentity]bool, len(ps))
 	for _, p := range ps {
 		generated[ledger.ProposalIdentity{Kind: p.Kind, Subject: p.Subject}] = true
 	}
-	if scannedStores != nil {
-		pending, err := db.ListProposals(true)
-		if err != nil {
-			return 0, err
+	pending, err := db.ListProposals(true)
+	if err != nil {
+		return 0, err
+	}
+	for _, p := range pending {
+		id := ledger.ProposalIdentity{Kind: p.Kind, Subject: p.Subject}
+		if generated[id] || !LaneScopedKinds[p.Kind] {
+			continue
 		}
-		for _, p := range pending {
-			id := ledger.ProposalIdentity{Kind: p.Kind, Subject: p.Subject}
-			if generated[id] || !LaneScopedKinds[p.Kind] {
-				continue
-			}
-			if !allStoresScanned(EvidenceStores(p.Evidence), scannedStores) {
-				generated[id] = true // protect: this pass never actually looked at every store behind it
-			}
+		if needsProtection(EvidenceStores(p.Evidence), coverage) {
+			generated[id] = true // protect: this pass could not confirm the store(s) behind it are truly absent
 		}
 	}
-	if err := db.WithdrawStalePending(generated); err != nil {
+	if err := db.WithdrawStalePending(pending, generated); err != nil {
 		return 0, err
 	}
 
@@ -555,20 +559,41 @@ func Store(db *ledger.DB, ps []Proposal, scannedStores map[string]bool, now time
 	return written, nil
 }
 
-// allStoresScanned reports whether every store stores names is present in
-// scanned. Empty stores - evidence that failed to parse, or named no store
-// at all - returns false: Store's caller treats "can't tell" the same as
-// "not fully scanned", protecting rather than guessing.
-func allStoresScanned(stores []string, scanned map[string]bool) bool {
-	if len(stores) == 0 {
-		return false
+// needsProtection reports whether a pending proposal naming stores should
+// be treated as reproduced rather than stale, even though this pass's
+// generated set does not contain it.
+//
+// coverage.Present == nil means the root <home>/.claude/projects directory
+// itself could not be enumerated this pass - missing, or a read error
+// DiscoverAllMemory still tolerates (constraint 7). Every store's absence
+// is untrustworthy then, not just the one(s) this proposal names, so
+// everything lane-scoped is protected (found by a second code-review pass
+// on the first version of this fix: the original only handled a single
+// unreadable store, not the root read failing the same way - which would
+// otherwise reproduce issue #59 one directory level up).
+//
+// Otherwise, protection fires only for a store present as a project
+// directory but not actually scanned this pass - a transient failure on
+// that one store. A store missing from Present entirely no longer exists
+// as a project at all: a deleted store is a legitimate reason its own
+// findings are gone too, so it is left to withdraw normally rather than
+// protected forever (the same review round's other finding - without this
+// distinction, a permanently deleted store's stale proposals could never
+// withdraw again, defeating #40's whole purpose in a new way).
+//
+// Empty stores - evidence that failed to parse, or named no store at all -
+// is treated the same as an untrustworthy root: can't tell, so protect
+// rather than guess.
+func needsProtection(stores []string, coverage asset.MemoryScanCoverage) bool {
+	if coverage.Present == nil || len(stores) == 0 {
+		return true
 	}
 	for _, s := range stores {
-		if !scanned[s] {
-			return false
+		if coverage.Present[s] && !coverage.Scanned[s] {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // interleaveByKind reorders ps so proposals of different kinds round-robin

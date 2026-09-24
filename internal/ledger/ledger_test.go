@@ -250,7 +250,7 @@ func TestUpsertProposalRevivesAWithdrawnRowWithIdenticalEvidence(t *testing.T) {
 	pending, _ := db.ListProposals(true)
 	id := pending[0].ID
 
-	if err := db.WithdrawStalePending(map[ProposalIdentity]bool{}); err != nil {
+	if err := db.WithdrawStalePending(pending, map[ProposalIdentity]bool{}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := db.GetProposal(id)
@@ -312,7 +312,11 @@ func TestUpsertProposalRevivalRespectsThePendingCap(t *testing.T) {
 	if _, err := db.UpsertProposal(withdrawnRow, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.WithdrawStalePending(map[ProposalIdentity]bool{}); err != nil {
+	pending, err := db.ListProposals(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.WithdrawStalePending(pending, map[ProposalIdentity]bool{}); err != nil {
 		t.Fatal(err)
 	}
 

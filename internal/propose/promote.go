@@ -91,14 +91,14 @@ func EvidenceStores(evidence string) []string {
 // content is retained: evidence carries paths, slugs and a content hash,
 // never file bodies.
 //
-// The second return value is DiscoverAllMemory's own scanned-stores set,
+// The second return value is DiscoverAllMemory's own scan coverage report,
 // passed straight through for Store to use protecting a skipped store's
 // pending proposals from a false withdrawal (issue #59) - this function has
 // nothing else to add to it, so it does not touch it, only forwards it.
-func GenerateMemoryFindings(home string) ([]Proposal, map[string]bool, error) {
-	files, scanned, err := asset.DiscoverAllMemory(home)
+func GenerateMemoryFindings(home string) ([]Proposal, asset.MemoryScanCoverage, error) {
+	files, coverage, err := asset.DiscoverAllMemory(home)
 	if err != nil {
-		return nil, nil, err
+		return nil, asset.MemoryScanCoverage{}, err
 	}
 
 	// Root-cause kinds before the symptom kind: a filename/slug drift is
@@ -110,7 +110,7 @@ func GenerateMemoryFindings(home string) ([]Proposal, map[string]bool, error) {
 	out = append(out, detectFilenameSlugDrift(files)...)
 	out = append(out, detectUnreachableAssets(home, files)...)
 	out = append(out, detectBrokenLinks(home, files)...)
-	return out, scanned, nil
+	return out, coverage, nil
 }
 
 // detectMemoryDuplicates groups files by content hash and proposes

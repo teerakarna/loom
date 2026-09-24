@@ -63,26 +63,42 @@ const memoryIndexName = "MEMORY.md"
 // that will otherwise always read as missing.
 const MemoryIndexSlug = "MEMORY"
 
+// MemoryScanCoverage reports how far DiscoverAllMemory actually got on one
+// pass, for a caller that needs to tell a store transiently unreadable
+// this pass apart from one that no longer exists as a project at all -
+// issue #59's second finding, from code review: treating those the same
+// meant a genuinely deleted store's stale proposals could never withdraw
+// again, stuck pending forever instead of self-healing on the next pass.
+type MemoryScanCoverage struct {
+	// Present is every store directory found under <home>/.claude/projects
+	// this pass, whether or not its memory/ subdirectory could be read. A
+	// store missing from Present no longer exists as a project at all -
+	// deleted or renamed, not merely unreadable.
+	Present map[string]bool
+	// Scanned is the subset of Present whose memory/ directory was
+	// actually readable this pass.
+	Scanned map[string]bool
+}
+
 // DiscoverAllMemory walks every project's memory store under
 // <home>/.claude/projects/*/memory and returns every memory file found
 // except the index itself, hashed and parsed for B7c's structural checks,
-// plus the set of stores whose memory directory was actually readable this
-// pass. A missing or unreadable store is skipped, not an error - most
-// stores will exist, not all (design doc constraint 1), and this scans
-// dozens of stores at once, unlike Discover's single-project scan: one
-// store with a permission problem must not take proposal listing down for
-// every other store along with it (constraint 7, degrade never block -
-// found by code review, an earlier version propagated any error past
-// os.IsNotExist and let one bad store fail the whole scan).
+// plus how far this pass actually got into each store. A missing or
+// unreadable store is skipped, not an error - most stores will exist, not
+// all (design doc constraint 1), and this scans dozens of stores at once,
+// unlike Discover's single-project scan: one store with a permission
+// problem must not take proposal listing down for every other store along
+// with it (constraint 7, degrade never block - found by code review, an
+// earlier version propagated any error past os.IsNotExist and let one bad
+// store fail the whole scan).
 //
-// The scanned-stores set exists for a caller downstream of this function,
-// not for anything here: issue #59, found by code review while shipping
-// #40's withdrawal mechanism. A store skipped for one pass looks, from a
-// withdrawal check's point of view, identical to a store whose findings
-// genuinely stopped being true - propose.Store uses this to tell the two
-// apart and protect a store's pending proposals when this pass never
-// actually looked at it. Callers that don't care (a plain listing, a test
-// with no withdrawal step) can ignore the second return value.
+// The coverage report exists for a caller downstream of this function, not
+// for anything here (issue #59): propose.Store uses Present vs. Scanned to
+// tell "this pass never actually looked at the store" (protect its pending
+// proposals) apart from "this store no longer exists" (let them withdraw
+// normally - a deleted store is a legitimate reason its findings are gone
+// too, not a scan failure). Callers that don't care (a plain listing, a
+// test with no withdrawal step) can ignore the second return value.
 //
 // Two conventions are recognized side by side, mirroring scanMarkdownDir's
 // own two shapes for this exact kind (KindMemory) in the single-project
@@ -91,28 +107,29 @@ const MemoryIndexSlug = "MEMORY"
 // without this, a memory asset using the subdirectory convention was
 // invisible to every B7c check, including a false broken_link report
 // against a [[link]] whose target genuinely existed.
-func DiscoverAllMemory(home string) ([]MemoryFile, map[string]bool, error) {
+func DiscoverAllMemory(home string) ([]MemoryFile, MemoryScanCoverage, error) {
 	root := filepath.Join(home, ".claude", "projects")
 	stores, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
-		return nil, nil, nil
+		return nil, MemoryScanCoverage{}, nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, MemoryScanCoverage{}, err
 	}
 
 	var out []MemoryFile
-	scanned := map[string]bool{}
+	coverage := MemoryScanCoverage{Present: map[string]bool{}, Scanned: map[string]bool{}}
 	for _, s := range stores {
 		if !s.IsDir() {
 			continue
 		}
+		coverage.Present[s.Name()] = true
 		memDir := filepath.Join(root, s.Name(), "memory")
 		entries, err := os.ReadDir(memDir)
 		if err != nil {
 			continue // this store is unreadable; every other store still gets scanned
 		}
-		scanned[s.Name()] = true
+		coverage.Scanned[s.Name()] = true
 		for _, e := range entries {
 			if e.IsDir() {
 				path := filepath.Join(memDir, e.Name(), "SKILL.md")
@@ -133,7 +150,7 @@ func DiscoverAllMemory(home string) ([]MemoryFile, map[string]bool, error) {
 			}
 		}
 	}
-	return out, scanned, nil
+	return out, coverage, nil
 }
 
 // readMemoryFile reads path and builds a MemoryFile, or reports false if
