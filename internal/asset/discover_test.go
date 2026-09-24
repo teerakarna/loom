@@ -255,3 +255,59 @@ func TestDefaultLocationsUsesProjectSlugForMemory(t *testing.T) {
 		t.Errorf("MemoryDirs = %v, want [%s]", locs.MemoryDirs, want)
 	}
 }
+
+func TestDiscoverGlobalSkills(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".claude", "skills", "entity-team", "SKILL.md"),
+		"---\nname: entity-team\ndescription: manage entity team records\n---\nBody.")
+	// A flat reference file is real too - scanSkillDir's other shape.
+	writeFile(t, filepath.Join(home, ".claude", "skills", "some-notes.md"), "# Some Notes\n\nBody.")
+
+	got, err := DiscoverGlobalSkills(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %+v, want 2", got)
+	}
+	byName := map[string]Asset{}
+	for _, a := range got {
+		byName[a.Name] = a
+	}
+	if byName["entity-team"].Kind != KindSkill {
+		t.Errorf("entity-team Kind = %q, want %q", byName["entity-team"].Kind, KindSkill)
+	}
+	if byName["some-notes"].Kind != KindReference {
+		t.Errorf("some-notes Kind = %q, want %q", byName["some-notes"].Kind, KindReference)
+	}
+}
+
+func TestDiscoverGlobalSkills_MissingDirIsNotError(t *testing.T) {
+	got, err := DiscoverGlobalSkills(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("got %+v, want nil", got)
+	}
+}
+
+// TestDiscoverGlobalSkills_IgnoresCwdSkills is the regression test for the
+// scope this function deliberately does not cover: a project-local
+// .claude/skills directory is not under <home>/.claude/skills, so it must
+// not appear here - see the doc comment on why that scope isn't buildable
+// cross-project in the first place.
+func TestDiscoverGlobalSkills_IgnoresCwdSkills(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	writeFile(t, filepath.Join(cwd, ".claude", "skills", "project-only", "SKILL.md"),
+		"---\nname: project-only\n---\nBody.")
+
+	got, err := DiscoverGlobalSkills(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %+v, want none - a cwd-local skill is out of scope for the global scan", got)
+	}
+}

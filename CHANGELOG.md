@@ -221,6 +221,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `propose.SummaryFor`, with a new, honest Rationale fallback stating the row was not rescanned this
   pass.
 
+- `broken_link` stayed silent on a `[[link]]` to a real skill, indistinguishable from a permitted
+  forward reference to a not-yet-written memory (#66, split out from #65) - a `[[link]]` only ever
+  resolves against a memory's own frontmatter name, never a skill's, so a link naming a real skill
+  will never resolve as written, unlike a genuine forward reference. New
+  `asset.DiscoverGlobalSkills(home)` scans `~/.claude/skills` (the one skill location that is
+  reliably enumerable without a specific project's cwd); `detectBrokenLinks` now flags a link whose
+  target is a known skill, with rationale explaining what it actually is rather than staying silent.
+  Evidence carries a new `target_is_skill` field so `SummaryFor` (used by both the CLI and MCP's
+  display fallback) rebuilds the correct wording from stored evidence, not just the in-process
+  Proposal text - found by code review, before this shipped, verified against the real binary before
+  and after.
+
 - `broken_link` flagged a `[[link]]` to a slug that doesn't exist anywhere yet as a defect (#67), which
   Claude Code's own memory convention explicitly permits as a forward reference ("it marks something
   worth writing later, not an error"). Measured by hand across this machine's 16 real memory stores:

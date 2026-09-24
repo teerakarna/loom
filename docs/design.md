@@ -1256,6 +1256,39 @@ current caller; left as documentation (two doc-comment clarifications, on `Store
 `MemoryScanCoverage`) rather than new runtime code, consistent with not designing for a requirement
 nothing has yet.
 
+#### A link to a real skill read as silence, not a defect - BUILT 2026-09-24
+
+Issue #66, split out from #65 originally. `detectBrokenLinks` flags every `[[link]]` that doesn't
+resolve to a memory file's frontmatter name in the same store - but on a real corpus, `entity-team`,
+`entity-docs` and `sprint-management` all resolved that way while existing as real skills under
+`~/.claude/skills/`. Written before issue #67 shipped, though: re-verified against the current code
+before building anything, and #67's own fix (a target that exists nowhere at all is a permitted
+forward reference, not a defect) already stopped these three from being wrongly flagged as broken -
+confirmed by reproducing the exact shape in a scratch fixture and checking the real output, not by
+assuming the issue's original description still matched current behavior. What #67 left behind
+instead: total silence. A link to a real skill and a link to a note nobody has written yet now look
+identical - both permitted forward references - even though only one of them will ever resolve, since
+a `[[link]]` only ever resolves against a memory's own frontmatter name, never a skill's.
+
+New `asset.DiscoverGlobalSkills(home)`, a thin wrapper around the existing `scanSkillDir` - the one
+skill location that actually is cross-project-safe to enumerate without a specific cwd. The other
+`SkillDirs` entry, a project's own `.claude/skills`, has no such equivalent: a project's working
+directory is not reliably recoverable from its `~/.claude/projects/<slug>` state-storage path, since
+the slug's hyphen substitution is lossy - real, buildable scope stops at the global directory, not
+the wider "cross-project skill discovery" the issue's own "shape of a fix" speculated about before
+the code existed to check it against.
+
+`detectBrokenLinks` gained a third outcome, not just two: resolves locally (fine), exists in a
+different store (issue #67's original real finding, checked first since it is the more actionable
+one), exists nowhere as a memory but is a known skill (issue #66 - now flagged, with rationale that
+correctly says what the target actually is), or exists nowhere at all (issue #67's forward
+reference, still silent). Evidence carries a new `target_is_skill` field, not just an in-process
+string choice - found by code review before this shipped: `SummaryFor` rebuilds display text from
+stored evidence alone, with no access to which branch of `detectBrokenLinks` generated it, so
+without a stored field the CLI's own re-display of an already-flagged skill-shadow row would fall
+back to the wrong ("exists but not in this store") wording - reproduced directly against the real
+binary before the fix, confirmed correct after.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a
