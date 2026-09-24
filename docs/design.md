@@ -1521,10 +1521,12 @@ blast-radius increase over its own previous isolated job - moved to run first, r
 before Go is even set up. Fifth: `scripts/ci.sh`'s exit code didn't distinguish a real check failure
 from a tool simply not being installed, the one moment there is no real CI to cross-check against -
 now exits `2` specifically for "incomplete, install the missing tool," distinct from `0` and from
-whatever a real failure's own tool produces via `set -e`. Sixth: the script's local tool versions
-(golangci-lint, govulncheck, gitleaks) run unpinned against CI's pinned versions with no visibility
-into the gap - now printed, not enforced, since forcing an exact version match locally is heavier
-tooling than this script's scope warrants.
+whatever a real failure's own tool produces via `set -e`. Sixth: the script claimed its local tool
+versions ran unpinned "unlike CI, which pins each one" - true for `golangci-lint` (`version: v2.13.2`
+in `ci.yml`), false for `govulncheck`, which both sides have always installed at `@latest` with
+nothing to compare against (confirmed by reading `govulncheck-action`'s own source, same as the
+earlier findings above). Corrected to say which is actually true for which tool, rather than a
+printed-but-uncompared version implying a pin that was never there.
 
 **A second `/code-review high` round found three more real issues, all confirmed against the pinned
 action's actual source rather than assumed.** The first round's own fix for `govulncheck-action`
@@ -1556,6 +1558,30 @@ failure classes stay distinguishable through the restructuring. Verified directl
 built with an intentionally broken `main.go`, confirmed build/vet/test/lint/govulncheck all correctly
 reported failed while gitleaks and the plugin-manifest check still ran and passed independently, then
 restored the file via git and confirmed a clean run again.
+
+**A third round found two real design flaws in the mechanism the previous two rounds had just built,
+plus the version-pinning claim above.** First: `!cancelled()` alone, checked directly against a live
+`gh api` call showing branch protection's required checks had not actually updated yet, turned out to
+be the smaller of two problems that phrase covers - it is true whenever the job was not cancelled,
+which says nothing about whether `checkout` itself actually succeeded. A checkout failing for its own
+reason (a transient clone or auth error, not a cancellation) would leave every later step still
+attempting to run against a workspace that was never populated, one clean failure becoming up to six
+confusing ones - directly contradicting this doc's own earlier claim that checkout was "the only
+genuine hard gate." Fixed with an explicit `steps.checkout.outcome == 'success'` alongside
+`!cancelled()` on every step from `setup-go` onward, and a much louder comment at the top of that run
+of steps: the condition has already been missed twice within this same PR's own history (round one
+omitted it entirely; round two added it everywhere except `Build`), so the comment now says exactly
+that, addressed to whoever adds a seventh step here next.
+
+Second, a genuine GitHub Actions behavior neither of the first two rounds had reason to know about:
+a concurrency group cancels a still-*queued* run the moment a new run joins the same group,
+regardless of `cancel-in-progress` - that setting only protects an already-*running* run. Three
+pushes to `main` in quick succession (A running, B queued, C arrives) would silently drop B's queued
+run entirely, contradicting the concurrency block's own comment that every push to `main` "should run
+to completion and be individually visible." Fixed by keying the group on `github.run_id` (unique per
+run) for anything that is not a `pull_request`, so every push to `main` gets its own group of one and
+can never collide with or cancel another main push's run; only PR runs still share a group keyed by
+ref, which is the collision that group is actually meant to create.
 
 Branch protection's required status checks were updated to match (`ci`, `secrets`, replacing the
 five old names) - confirmed with the owner before changing it, both that the change should happen at

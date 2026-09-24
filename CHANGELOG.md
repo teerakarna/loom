@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after it kept running anyway - fixed. `scripts/ci.sh` used `set -e`, so a local build failure
   silently stopped every later check from running at all - rewritten so every check runs and reports
   independently, matching CI's own guarantee, verified directly against an intentionally broken build.
+  A third round found two more: `!cancelled()` alone doesn't check whether `checkout` itself actually
+  succeeded, only that the job wasn't cancelled - a genuine checkout failure would still let every
+  later step attempt to run against an empty workspace; fixed with an explicit
+  `steps.checkout.outcome == 'success'` alongside it. And GitHub cancels a still-queued concurrency-
+  group run the moment a new one joins the same group regardless of `cancel-in-progress`, so three
+  quick pushes to `main` could silently drop the middle one's run entirely; fixed by keying the group
+  on `github.run_id` for anything that isn't a `pull_request`, so every push to `main` gets its own
+  group of one.
 
 - MCP surface widened back to four tools (#62, the last of the AMC trial's four findings, and the one
   that reverses an earlier decision): `get_cost_summary`, `get_context_occupancy` and `list_proposals`

@@ -11,8 +11,22 @@ on:
 # completion and be individually visible. Runners are billed by the minute
 # per job, rounded up, so a superseded run left going to completion is pure
 # waste, not just slower feedback.
+#
+# github.run_id in the group key for anything that isn't a pull_request
+# (found by code review, before this shipped): GitHub cancels a run still
+# queued (not yet started) in a concurrency group the moment a new run
+# joins that same group, regardless of cancel-in-progress - that setting
+# only protects an already-RUNNING run. A plain ci-${{ github.ref }} key
+# shared by every push to main meant three pushes in quick succession
+# (A running, B queued, C arrives) would silently drop B's queued run
+# entirely when C took its place - the exact "individually visible"
+# guarantee the comment above promises, broken by the mechanism meant to
+# serve it. run_id is unique per run, so every push event gets its own
+# group of one and can never collide with another main push; only PR runs
+# actually share a group (keyed by ref, so a new push to the same PR
+# branch is what's meant to cancel the one before it).
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -32,6 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
         with:
           persist-credentials: false
 
@@ -58,45 +73,54 @@ jobs:
           claude plugin validate ./plugin --strict
           claude plugin validate . --strict
 
-      # !cancelled() from here down too (not just the steps below that
-      # already had it) - found by a second code review pass: without it,
-      # a failure in the plugin-manifest step above would skip Build the
-      # normal way, while Vet/Test/lint/govulncheck (already !cancelled())
-      # kept running regardless - the one step the "let every check still
-      # run" rationale exists for was the one step it wasn't applied to.
+      # Every step from here to the end of this job carries
+      # if: ${{ !cancelled() && steps.checkout.outcome == 'success' }} -
+      # already missed twice in this same file's own history (a first
+      # version omitted it entirely; a second added it everywhere except
+      # Build). If you add a step here, it needs this condition too, or the
+      # job silently reverts to default success() semantics for that one
+      # step and the guarantee below breaks again without anything in CI
+      # itself to catch it.
+      #
+      # !cancelled() alone (found by code review, before this shipped) is
+      # not enough: it is true whenever the job was not cancelled, which
+      # says nothing about whether an ordinary step actually succeeded - a
+      # checkout that fails for its own reason (a transient clone or auth
+      # error, not a cancellation) would leave every later step still
+      # attempting to run against a workspace that was never populated, one
+      # clean failure turning into up to six confusing ones. The explicit
+      # steps.checkout.outcome == 'success' check is the real hard gate;
+      # !cancelled() is what lets build/vet/test/lint/govulncheck fail
+      # independently of EACH OTHER once checkout has actually succeeded -
+      # not always(), which would also force them to run through a genuine
+      # job cancellation (the concurrency group above cancelling a
+      # superseded PR run), exactly the minutes that cancellation exists to
+      # stop spending. None of vet/test/lint/govulncheck depend on Build's
+      # own output (each is its own independent invocation over the
+      # source), so there is nothing unsafe about running them regardless
+      # of Build's own outcome - a compile error and an unrelated lint
+      # issue both surface in the same push, not one hidden behind the
+      # other until a second round trip.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Build
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: go build ./...
 
-      # if: ${{ !cancelled() }} on every step from here down (found by code
-      # review, before this shipped): merging four independent jobs into one
-      # means a failure with no override would stop every later step, unlike
-      # the four separate jobs this replaced, which all ran and reported
-      # regardless of each other's outcome. None of vet/test/lint/govulncheck
-      # depend on Build's own output (each is its own independent invocation
-      # over the source), so there is nothing unsafe about running them
-      # anyway - a compile error and an unrelated lint issue both surface in
-      # the same push again, not one hidden behind the other until a second
-      # round trip. !cancelled(), not always(): always() would also force
-      # these to run through a genuine job cancellation (the concurrency
-      # group above cancelling a superseded PR run), which is exactly the
-      # minutes that cancellation exists to stop spending.
       - name: Vet
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: go vet ./...
 
       - name: Test
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: go test ./...
 
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         with:
           version: v2.13.2
 
@@ -113,7 +137,7 @@ jobs:
       # ultimately do past that point - uses the Go this job already set up
       # above and genuinely leaves only the one setup in place.
       - name: govulncheck
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
