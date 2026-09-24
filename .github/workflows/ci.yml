@@ -44,6 +44,18 @@ jobs:
   # for a small cost saving that isn't worth it.
   ci:
     runs-on: ubuntu-latest
+    # A hang anywhere in this job (found by code review, before this
+    # shipped: go test blocking on an unreachable network call, say) used
+    # to still leave lint/govulncheck/plugin visible - they were separate
+    # jobs, so a stuck test job never stopped them from reporting. Merged
+    # into one job, a hang in an early step silences everything after it
+    # until GitHub's own 360-minute default job cap finally kills it. This
+    # bound does not restore independent reporting (that would mean
+    # un-merging the job, the opposite of what this PR does), only limits
+    # how long a hang can go unnoticed - 15 minutes is generous for what
+    # this job normally takes (well under five) and short enough that a
+    # genuine hang surfaces as a clear timeout, not an hours-long silence.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         id: checkout
@@ -73,14 +85,16 @@ jobs:
           claude plugin validate ./plugin --strict
           claude plugin validate . --strict
 
-      # Every step from here to the end of this job carries
-      # if: ${{ !cancelled() && steps.checkout.outcome == 'success' }} -
-      # already missed twice in this same file's own history (a first
-      # version omitted it entirely; a second added it everywhere except
-      # Build). If you add a step here, it needs this condition too, or the
-      # job silently reverts to default success() semantics for that one
-      # step and the guarantee below breaks again without anything in CI
-      # itself to catch it.
+      # Every step from here to the end of this job carries if: *gate
+      # (defined once below as &gate, aliased everywhere else) - already
+      # missed twice in this same file's own history before the anchor
+      # existed (a first version omitted the condition entirely; a second
+      # added it everywhere except Build), which is why it is an anchor now
+      # and not six copies of the same expression: a step with no if: *gate
+      # line is visibly missing something, where a step with a subtly wrong
+      # hand-copied condition was not. If you add a step here, it needs
+      # if: *gate too, or the job silently reverts to default success()
+      # semantics for that one step and the guarantee below breaks again.
       #
       # !cancelled() alone (found by code review, before this shipped) is
       # not enough: it is true whenever the job was not cancelled, which
@@ -102,25 +116,25 @@ jobs:
       # issue both surface in the same push, not one hidden behind the
       # other until a second round trip.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        if: &gate ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Build
-        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        if: *gate
         run: go build ./...
 
       - name: Vet
-        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        if: *gate
         run: go vet ./...
 
       - name: Test
-        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        if: *gate
         run: go test ./...
 
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        if: *gate
         with:
           version: v2.13.2
 
@@ -137,13 +151,14 @@ jobs:
       # ultimately do past that point - uses the Go this job already set up
       # above and genuinely leaves only the one setup in place.
       - name: govulncheck
-        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        if: *gate
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
   secrets:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       # gitleaks-action posts a PR comment when it finds a leak - needs write

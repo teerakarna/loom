@@ -1493,11 +1493,23 @@ New `scripts/ci.sh` runs the same gate locally in one command, for the window Ac
 all and for ordinary pre-PR use - `CONTRIBUTING.md` and `CLAUDE.md` both point at it now.
 
 **The trade this merge actually makes, stated plainly rather than left implicit:** billed job-minutes
-for wall-clock time. Four independent parallel jobs finish in roughly the slowest one's duration;
-one sequential job finishes in roughly the sum of all of them, and a fast-to-detect problem (an
-unused import) now waits behind slower steps (the test suite) that used to report on their own
-runner at the same time. Worth paying deliberately, not by accident: fewer billed minutes, slower
-feedback on each individual push.
+for wall-clock time, and for the GitHub PR checks UI's own granularity. Four independent parallel
+jobs finish in roughly the slowest one's duration; one sequential job finishes in roughly the sum of
+all of them, and a fast-to-detect problem (an unused import) now waits behind slower steps (the test
+suite) that used to report on their own runner at the same time. The checks list a reviewer sees also
+went from five independent pass/fail indicators to two - a PR that only fails lint now shows one red
+`ci` with no indication which of five steps broke without opening the log, where it used to show
+`lint` red and the other four green at a glance (found by code review, before this shipped - not
+fixed, since restoring it means restoring the five separate jobs, the opposite of this merge's whole
+point, but worth saying plainly rather than discovering by surprise the first time a check fails).
+Worth paying deliberately, not by accident: fewer billed minutes, slower feedback and coarser
+failure-attribution on each individual push.
+
+A further cost lever the same review round raised and this merge does not take: path-based gating
+(skipping the job entirely for a docs-only change, say `CHANGELOG.md` or this file). Not implemented
+here - genuinely a different, separate lever from anything the original handover asked about (job
+count, concurrency, OS-leg gating), and worth its own deliberate pass rather than folding into an
+already-large diff. A candidate for later, not a gap in this one.
 
 **`/code-review high` found six real issues in the first version, all fixed.** Two were confirmed by
 reading the actual pinned actions' source, not assumed from documentation: `golang/govulncheck-action`
@@ -1582,6 +1594,32 @@ to completion and be individually visible." Fixed by keying the group on `github
 run) for anything that is not a `pull_request`, so every push to `main` gets its own group of one and
 can never collide with or cancel another main push's run; only PR runs still share a group keyed by
 ref, which is the collision that group is actually meant to create.
+
+**A fourth round found two real gaps and, independently, settled a maintenance concern the third
+round had only documented.** No step in the merged job had a `timeout-minutes`: the four separate
+jobs it replaced meant a hang in `test` (an unreachable network call blocking forever, say) still
+left `lint`/`govulncheck`/`plugin` visible on their own runners; merged into one job, the same hang
+now silences everything after it until GitHub's own 360-minute default finally kills the job. Not
+fully fixable without un-merging - the point of this diff - but bounded: `timeout-minutes: 15` on
+`ci` (generous for a job that normally finishes in well under five), `10` on `secrets`.
+
+Second: the `if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}` condition, hand-copied
+onto six steps, is exactly the pattern that had already caused two real regressions earlier in this
+same file's history (round one omitted it; round two added it everywhere except `Build`) - the third
+round's own fix for `Build` was itself another hand-copy of the same six-way duplication, not a
+structural fix for the duplication itself. Replaced with a YAML anchor: `if: &gate ${{ ... }}` once,
+`if: *gate` everywhere else, verified to resolve identically on every step by parsing the file and
+printing each step's resolved condition. A future step with a missing gate is now a visibly absent
+`if: *gate` line, not a subtly wrong hand-typed expression - the actual defect class this pattern kept
+producing, closed structurally rather than documented harder a third time.
+
+Third, in `scripts/ci.sh`: the same "four near-identical blocks despite `run()`/`installed()` helpers
+existing" observation from the second round, raised again independently by the fourth - two separate
+review passes flagging the same duplication is a real signal, not a one-off nitpick. New
+`optional_check NAME TOOL HINT VERSION_CMD... -- CHECK_CMD...` collapses each of lint/govulncheck/
+gitleaks/plugin-manifests to a single call instead of a ~10-line block, verified against every
+scenario already covered: a clean run, a missing required tool, a missing optional tool, and a real
+check failure with later checks still running - all four confirmed identical to before the refactor.
 
 Branch protection's required status checks were updated to match (`ci`, `secrets`, replacing the
 five old names) - confirmed with the owner before changing it, both that the change should happen at

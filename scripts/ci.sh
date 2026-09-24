@@ -85,6 +85,38 @@ installed() {
 	return 1
 }
 
+# optional_check NAME TOOL INSTALL_HINT VERSION_CMD... -- CHECK_CMD... -
+# the one pattern all four optional tools below follow (installed?, if so
+# print its version and run the real check, if not explain how to get it),
+# written once instead of four copies with the tool name changed - found
+# necessary by code review, twice: adding a fifth optional tool used to
+# mean copying an entire ~10-line block by hand, and a fix to the pattern
+# itself (the version/real-check decoupling below, say) had to be
+# replicated in all four rather than changed once.
+optional_check() {
+	local name="$1" tool="$2" hint="$3"
+	shift 3
+	local version_cmd=()
+	while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+		version_cmd+=("$1")
+		shift
+	done
+	shift # drop the -- separator
+
+	echo "== $name =="
+	if ! installed "$tool"; then
+		echo "$tool not found - skipping (install: $hint)"
+		echo
+		return
+	fi
+	# Best-effort and untracked, same reason run() itself never prints a
+	# version: a --version flag failing for an unrelated reason must never
+	# be mistaken for the real check (which follows, still to come below)
+	# having failed.
+	"${version_cmd[@]}" || true
+	run "$name" "$@"
+}
+
 if ! installed go; then
 	echo "go not found - nothing here can run without it (install: https://go.dev/doc/install)"
 	exit "$EXIT_INCOMPLETE"
@@ -99,44 +131,17 @@ run vet go vet ./...
 echo "== test =="
 run test go test ./...
 
-if installed golangci-lint; then
-	echo "== lint =="
-	golangci-lint --version || true
-	run lint golangci-lint run ./...
-else
-	echo "== lint =="
-	echo "golangci-lint not found - skipping (install: https://golangci-lint.run/welcome/install/)"
-	echo
-fi
+optional_check lint golangci-lint "https://golangci-lint.run/welcome/install/" \
+	golangci-lint --version -- golangci-lint run ./...
 
-if installed govulncheck; then
-	echo "== govulncheck =="
-	govulncheck -version || true
-	run govulncheck govulncheck ./...
-else
-	echo "== govulncheck =="
-	echo "govulncheck not found - skipping (install: go install golang.org/x/vuln/cmd/govulncheck@latest)"
-	echo
-fi
+optional_check govulncheck govulncheck "go install golang.org/x/vuln/cmd/govulncheck@latest" \
+	govulncheck -version -- govulncheck ./...
 
-if installed gitleaks; then
-	echo "== gitleaks =="
-	gitleaks version || true
-	run gitleaks gitleaks detect --source . --no-banner
-else
-	echo "== gitleaks =="
-	echo "gitleaks not found - skipping (install: https://github.com/gitleaks/gitleaks#installing)"
-	echo
-fi
+optional_check gitleaks gitleaks "https://github.com/gitleaks/gitleaks#installing" \
+	gitleaks version -- gitleaks detect --source . --no-banner
 
-if installed claude; then
-	echo "== plugin manifests =="
-	run "plugin manifests" bash -c 'claude plugin validate ./plugin --strict && claude plugin validate . --strict'
-else
-	echo "== plugin manifests =="
-	echo "claude CLI not found - skipping (install: npm install -g @anthropic-ai/claude-code)"
-	echo
-fi
+optional_check "plugin manifests" claude "npm install -g @anthropic-ai/claude-code" \
+	claude --version -- bash -c 'claude plugin validate ./plugin --strict && claude plugin validate . --strict'
 
 if [ "${#missing[@]}" -gt 0 ]; then
 	echo "Skipped (not installed): ${missing[*]}"

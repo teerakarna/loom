@@ -41,7 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   group run the moment a new one joins the same group regardless of `cancel-in-progress`, so three
   quick pushes to `main` could silently drop the middle one's run entirely; fixed by keying the group
   on `github.run_id` for anything that isn't a `pull_request`, so every push to `main` gets its own
-  group of one.
+  group of one. A fourth round added `timeout-minutes` (15 on `ci`, 10 on `secrets`) - a hang used to
+  still leave the four separate jobs it replaced visible on their own runners, and now silences
+  everything after it until GitHub's own 360-minute default - and replaced the hand-copied
+  `!cancelled()`/checkout-outcome condition on six steps with a YAML anchor, so a future step missing
+  it is a visibly absent `if:` line rather than a subtly wrong one. Also collapsed `scripts/ci.sh`'s
+  four near-identical optional-tool blocks into one `optional_check` helper, raised independently by
+  two separate review rounds.
 
 - MCP surface widened back to four tools (#62, the last of the AMC trial's four findings, and the one
   that reverses an earlier decision): `get_cost_summary`, `get_context_occupancy` and `list_proposals`
