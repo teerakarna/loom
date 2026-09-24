@@ -6,65 +6,74 @@ on:
   push:
     branches: [main]
 
+# A new push to a PR cancels whatever CI run was still going for that same
+# ref - never for main, where every push is a merge that should run to
+# completion and be individually visible. Runners are billed by the minute
+# per job, rounded up, so a superseded run left going to completion is pure
+# waste, not just slower feedback.
+#
+# github.run_id in the group key for anything that isn't a pull_request
+# (found by code review, before this shipped): GitHub cancels a run still
+# queued (not yet started) in a concurrency group the moment a new run
+# joins that same group, regardless of cancel-in-progress - that setting
+# only protects an already-RUNNING run. A plain ci-${{ github.ref }} key
+# shared by every push to main meant three pushes in quick succession
+# (A running, B queued, C arrives) would silently drop B's queued run
+# entirely when C took its place - the exact "individually visible"
+# guarantee the comment above promises, broken by the mechanism meant to
+# serve it. run_id is unique per run, so every push event gets its own
+# group of one and can never collide with another main push; only PR runs
+# actually share a group (keyed by ref, so a new push to the same PR
+# branch is what's meant to cancel the one before it).
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
-  test:
+  # build, vet, test, lint, govulncheck and the plugin manifest check were
+  # five separate ubuntu jobs. Each one bills at least a full minute
+  # regardless of how little it actually runs, so five jobs is a five-minute
+  # floor before any of them do real work. Merged into one: same checks, one
+  # runner, one checkout, one Go setup. secrets stays split out on purpose -
+  # it needs pull-requests: write (gitleaks posts a PR comment on a find)
+  # and a full-history checkout, and giving every other step here that same
+  # write permission just to save one more job would trade least privilege
+  # for a small cost saving that isn't worth it.
+  ci:
     runs-on: ubuntu-latest
+    # A hang anywhere in this job (found by code review, before this
+    # shipped: go test blocking on an unreachable network call, say) used
+    # to still leave lint/govulncheck/plugin visible - they were separate
+    # jobs, so a stuck test job never stopped them from reporting. Merged
+    # into one job, a hang in an early step silences everything after it
+    # until GitHub's own 360-minute default job cap finally kills it. This
+    # bound does not restore independent reporting (that would mean
+    # un-merging the job, the opposite of what this PR does), only limits
+    # how long a hang can go unnoticed - 15 minutes is generous for what
+    # this job normally takes (well under five) and short enough that a
+    # genuine hang surfaces as a clear timeout, not an hours-long silence.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: checkout
         with:
-          go-version-file: go.mod
-          cache: true
+          persist-credentials: false
 
-      - name: Build
-        run: go build ./...
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test
-        run: go test ./...
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.13.2
-
-  govulncheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
-        with:
-          go-version-file: go.mod
-
-  plugin:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # Schema-checks the plugin and marketplace manifests with the first-party
-      # validator, which is the only thing that knows the current plugin format.
-      #
-      # Deliberately unpinned, unlike every action above. Pinning would freeze
-      # the schema this is checked against, and catching "the format moved and
-      # ours no longer conforms" is the entire reason the job exists. The job
-      # gets no secrets and read-only contents, which is what makes an unpinned
-      # global install an acceptable trade here rather than a general one.
+      # Runs first, before Go is even set up: schema-checks the plugin and
+      # marketplace manifests with the first-party validator, the only thing
+      # that knows the current plugin format. Deliberately unpinned, unlike
+      # every action in this job - pinning would freeze the schema this is
+      # checked against, and catching "the format moved and ours no longer
+      # conforms" is the entire reason the step exists. Running it before Go
+      # setup/build (found by code review, before this shipped) means an
+      # unpinned global npm install shares the runner with only a bare
+      # checkout, not the populated Go module and build caches later steps
+      # accumulate - permissions are the same either way (no secrets, this
+      # job's contents is read-only), but there is less on the runner worth
+      # reaching if the install itself were ever compromised.
       #
       # It checks shape only. It does not check that the command a manifest
       # points at exists, is executable, or matches the server being shipped -
@@ -76,19 +85,92 @@ jobs:
           claude plugin validate ./plugin --strict
           claude plugin validate . --strict
 
+      # Every step from here to the end of this job carries if: *gate
+      # (defined once below as &gate, aliased everywhere else) - already
+      # missed twice in this same file's own history before the anchor
+      # existed (a first version omitted the condition entirely; a second
+      # added it everywhere except Build), which is why it is an anchor now
+      # and not six copies of the same expression: a step with no if: *gate
+      # line is visibly missing something, where a step with a subtly wrong
+      # hand-copied condition was not. If you add a step here, it needs
+      # if: *gate too, or the job silently reverts to default success()
+      # semantics for that one step and the guarantee below breaks again.
+      #
+      # !cancelled() alone (found by code review, before this shipped) is
+      # not enough: it is true whenever the job was not cancelled, which
+      # says nothing about whether an ordinary step actually succeeded - a
+      # checkout that fails for its own reason (a transient clone or auth
+      # error, not a cancellation) would leave every later step still
+      # attempting to run against a workspace that was never populated, one
+      # clean failure turning into up to six confusing ones. The explicit
+      # steps.checkout.outcome == 'success' check is the real hard gate;
+      # !cancelled() is what lets build/vet/test/lint/govulncheck fail
+      # independently of EACH OTHER once checkout has actually succeeded -
+      # not always(), which would also force them to run through a genuine
+      # job cancellation (the concurrency group above cancelling a
+      # superseded PR run), exactly the minutes that cancellation exists to
+      # stop spending. None of vet/test/lint/govulncheck depend on Build's
+      # own output (each is its own independent invocation over the
+      # source), so there is nothing unsafe about running them regardless
+      # of Build's own outcome - a compile error and an unrelated lint
+      # issue both surface in the same push, not one hidden behind the
+      # other until a second round trip.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: &gate ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        if: *gate
+        run: go build ./...
+
+      - name: Vet
+        if: *gate
+        run: go vet ./...
+
+      - name: Test
+        if: *gate
+        run: go test ./...
+
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        if: *gate
+        with:
+          version: v2.13.2
+
+      # Plain shell, not golang/govulncheck-action, found necessary by a
+      # second code review pass reading the action's own action.yml at the
+      # pinned SHA: overriding repo-checkout and go-version-input (an
+      # earlier version of this fix) stops the action's internal checkout
+      # and forces its Go version resolution to fall through correctly, but
+      # its internal actions/setup-go step has no such override and always
+      # runs regardless - so the job was still paying for Go to be resolved
+      # and its cache restored twice, the exact redundant cost this job's
+      # own "one Go setup" comment claimed did not exist. Installing and
+      # running govulncheck directly - which is all the action's own steps
+      # ultimately do past that point - uses the Go this job already set up
+      # above and genuinely leaves only the one setup in place.
+      - name: govulncheck
+        if: *gate
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
   secrets:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
-      # gitleaks-action posts a PR comment when it finds a leak — needs write
+      # gitleaks-action posts a PR comment when it finds a leak - needs write
       # even though the rest of this workflow is read-only.
       pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0 # gitleaks scans full git history, not just the working tree
 
-      # No GITLEAKS_LICENSE needed — free for personal-account repos, only
+      # No GITLEAKS_LICENSE needed - free for personal-account repos, only
       # organizations require a license key. docs/design.md, "Publishability
       # rules": this must be green before the repo goes public.
       - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0

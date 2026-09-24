@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CI reduced from five billed jobs to two: `test`/`lint`/`govulncheck`/`plugin` merged into one `ci`
+  job (Actions bills every job at least a full minute regardless of how little it runs), `secrets`
+  kept split out for its own permission scope (`pull-requests: write`, full-history checkout).
+  Prompted by a cross-session handover during a billing-driven Actions outage on another repo - loom
+  itself was unaffected at the time, confirmed rather than assumed, but the practice applies
+  regardless. Added a `concurrency` group cancelling a superseded PR run (never on `main`),
+  `persist-credentials: false` on every checkout, and `scripts/ci.sh` to run the same gate locally.
+  Branch protection's required checks updated to match (`ci`, `secrets`). Trades billed minutes for
+  wall-clock time (parallel jobs became one sequential job), stated explicitly rather than left
+  implicit. `/code-review high` found six real issues in the first version, all fixed: the
+  govulncheck-action step's own internal checkout was silently re-persisting the token the job's
+  checkout had just disabled (confirmed against the action's actual pinned source), and its
+  `go-version-input` default was silently overriding the pinned Go version from `go.mod` the same
+  way; a failure with no override stopped every later step in the merged job, unlike the independent
+  jobs it replaced; the unpinned plugin-manifest install ran after the Go caches had accumulated
+  instead of before; `scripts/ci.sh`'s exit code didn't distinguish a real failure from a missing
+  tool; and its local tool versions had no visibility into CI's pinned ones. A second review round
+  found three more, confirmed against the pinned action's actual source: `govulncheck-action`'s own
+  internal `setup-go` step had no override and ran unconditionally regardless of the first round's
+  fix, so Go was still being resolved and cached twice - fixed by dropping the action entirely and
+  running `govulncheck` directly against the Go this job already set up once. `Build` was missing the
+  `!cancelled()` condition every other step had, so an earlier failure could skip it while everything
+  after it kept running anyway - fixed. `scripts/ci.sh` used `set -e`, so a local build failure
+  silently stopped every later check from running at all - rewritten so every check runs and reports
+  independently, matching CI's own guarantee, verified directly against an intentionally broken build.
+  A third round found two more: `!cancelled()` alone doesn't check whether `checkout` itself actually
+  succeeded, only that the job wasn't cancelled - a genuine checkout failure would still let every
+  later step attempt to run against an empty workspace; fixed with an explicit
+  `steps.checkout.outcome == 'success'` alongside it. And GitHub cancels a still-queued concurrency-
+  group run the moment a new one joins the same group regardless of `cancel-in-progress`, so three
+  quick pushes to `main` could silently drop the middle one's run entirely; fixed by keying the group
+  on `github.run_id` for anything that isn't a `pull_request`, so every push to `main` gets its own
+  group of one. A fourth round added `timeout-minutes` (15 on `ci`, 10 on `secrets`) - a hang used to
+  still leave the four separate jobs it replaced visible on their own runners, and now silences
+  everything after it until GitHub's own 360-minute default - and replaced the hand-copied
+  `!cancelled()`/checkout-outcome condition on six steps with a YAML anchor, so a future step missing
+  it is a visibly absent `if:` line rather than a subtly wrong one. Also collapsed `scripts/ci.sh`'s
+  four near-identical optional-tool blocks into one `optional_check` helper, raised independently by
+  two separate review rounds. A fifth round found `scripts/ci.sh` claimed to install `govulncheck`
+  itself, which it never did (corrected); guarded an array expansion that would abort the whole
+  script on older bash if a future optional check omitted a version command; and collapsed
+  `build`/`vet`/`test`'s own hand-copied blocks into a matching `required_check` helper. Also
+  documented one more instance of the billed-minutes-for-latency trade this merge makes: GitHub's
+  "re-run failed jobs" now re-runs the whole merged job instead of just the one check that failed.
+
 - MCP surface widened back to four tools (#62, the last of the AMC trial's four findings, and the one
   that reverses an earlier decision): `get_cost_summary`, `get_context_occupancy` and `list_proposals`
   restored alongside `get_recommendation`. The narrowing this reverses was explicitly labelled

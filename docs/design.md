@@ -1463,6 +1463,193 @@ near-identical bodies; a filter check in `registerOtherAssets` that is dead code
 three callers) were weighed and left as-is - each is two one-line functions or one harmless,
 already-explained guard, not real risk.
 
+#### CI cost hygiene - BUILT 2026-09-24
+
+A cross-session handover, relayed while a payment failure had dropped the account to GitHub's free
+Actions allowance and blocked another repo's workflow entirely: loom's own CI was running fine at
+the time (confirmed by checking, not assumed from the handover's premise), but the underlying
+practice is worth having regardless of whether loom is the repo actually blocked.
+
+`ci.yml` had five separate ubuntu jobs (`test`, `lint`, `govulncheck`, `plugin`, `secrets`). Actions
+bills every job at least a full minute regardless of how little it runs, so five jobs was a
+five-minute floor before any of them did real work. Merged `test`/`lint`/`govulncheck`/`plugin` into
+one `ci` job - same checks, one runner, one checkout, one Go setup. `secrets` stays split out
+deliberately: it needs `pull-requests: write` (gitleaks posts a PR comment on a find) and a
+full-history checkout, and widening every other step's permissions just to save one more job would
+trade least privilege for a small saving not worth it. No macOS/Windows legs exist in this workflow,
+so the handover's third suggestion (gate expensive OS legs to push-only) did not apply here.
+
+Added a `concurrency` group so a new push to a PR cancels whatever run was still going for that same
+ref - never for `main`, where every push is a merge that should run to completion and be
+individually visible. A superseded run left going to completion is pure waste under per-minute
+billing, not just slower feedback.
+
+Also added `persist-credentials: false` on every checkout (the handover's artipacked note): by
+default `actions/checkout` leaves the job's token in the local git config after checkout, readable or
+exfiltratable by any later step or a compromised dependency in one; nothing in this workflow pushes,
+so there is nothing that needs it left in place.
+
+New `scripts/ci.sh` runs the same gate locally in one command, for the window Actions can't run at
+all and for ordinary pre-PR use - `CONTRIBUTING.md` and `CLAUDE.md` both point at it now.
+
+**The trade this merge actually makes, stated plainly rather than left implicit:** billed job-minutes
+for wall-clock time, and for the GitHub PR checks UI's own granularity. Four independent parallel
+jobs finish in roughly the slowest one's duration; one sequential job finishes in roughly the sum of
+all of them, and a fast-to-detect problem (an unused import) now waits behind slower steps (the test
+suite) that used to report on their own runner at the same time. The checks list a reviewer sees also
+went from five independent pass/fail indicators to two - a PR that only fails lint now shows one red
+`ci` with no indication which of five steps broke without opening the log, where it used to show
+`lint` red and the other four green at a glance (found by code review, before this shipped - not
+fixed, since restoring it means restoring the five separate jobs, the opposite of this merge's whole
+point, but worth saying plainly rather than discovering by surprise the first time a check fails). A
+fifth review round added one more instance of the same trade: GitHub's own "re-run failed jobs"
+button used to re-run only the one job that actually failed (roughly a minute); now it re-runs the
+whole merged `ci` job every time, which can offset this PR's own per-push savings on any PR needing
+more than one retry. Worth paying deliberately, not by accident: fewer billed minutes on a clean run,
+slower feedback, coarser failure-attribution, and a costlier retry on one that is not.
+
+A further cost lever the same review round raised and this merge does not take: path-based gating
+(skipping the job entirely for a docs-only change, say `CHANGELOG.md` or this file). Not implemented
+here - genuinely a different, separate lever from anything the original handover asked about (job
+count, concurrency, OS-leg gating), and worth its own deliberate pass rather than folding into an
+already-large diff. A candidate for later, not a gap in this one.
+
+**`/code-review high` found six real issues in the first version, all fixed.** Two were confirmed by
+reading the actual pinned actions' source, not assumed from documentation: `golang/govulncheck-action`
+defaults `repo-checkout` to `true`, which ran its own internal checkout with `persist-credentials`
+defaulting to `true` - silently re-persisting the token this job's own checkout had just disabled,
+undoing the hardening two steps later. And the action's `go-version-input` defaults to `'stable'`
+and always wins over `go-version-file` in `actions/setup-go`'s own resolution order, so
+`govulncheck` was silently scanning under whatever Go happened to be "stable" on the runner, not the
+version `go.mod` pins - true before this merge too, just newly visible once "one Go setup" became a
+claim this diff's own comment made. Fixed with `repo-checkout: false` and an explicit
+`go-version-input: ''` (falsy, so resolution falls through to `go-version-file`).
+
+Third: merging four independent jobs into one meant a failure with no override stopped every later
+step, unlike the four separate jobs this replaced, which all ran and reported regardless of each
+other's outcome - a compile error would have hidden an unrelated lint issue until a second push.
+Fixed with `if: ${{ !cancelled() }}` on vet/test/lint/govulncheck (not `always()`, which would also
+force them to run through a genuine cancellation from the concurrency group above - exactly the
+minutes that group exists to stop spending). Fourth: the unpinned plugin-manifest npm install ran as
+the last step of a job that had already accumulated the Go module and build caches, a real if modest
+blast-radius increase over its own previous isolated job - moved to run first, right after checkout,
+before Go is even set up. Fifth: `scripts/ci.sh`'s exit code didn't distinguish a real check failure
+from a tool simply not being installed, the one moment there is no real CI to cross-check against -
+now exits `2` specifically for "incomplete, install the missing tool," distinct from `0` and from
+whatever a real failure's own tool produces via `set -e`. Sixth: the script claimed its local tool
+versions ran unpinned "unlike CI, which pins each one" - true for `golangci-lint` (`version: v2.13.2`
+in `ci.yml`), false for `govulncheck`, which both sides have always installed at `@latest` with
+nothing to compare against (confirmed by reading `govulncheck-action`'s own source, same as the
+earlier findings above). Corrected to say which is actually true for which tool, rather than a
+printed-but-uncompared version implying a pin that was never there.
+
+**A second `/code-review high` round found three more real issues, all confirmed against the pinned
+action's actual source rather than assumed.** The first round's own fix for `govulncheck-action`
+(`repo-checkout: false`, `go-version-input: ''`) stopped the action's internal checkout and forced
+its version resolution through correctly, but the action's internal `actions/setup-go` step has no
+matching override and runs unconditionally regardless - the job was still paying to resolve Go and
+restore its cache a second time, the exact redundant cost the job's own "one Go setup" comment
+claimed did not exist. Fixed by dropping the action entirely: `golang/govulncheck-action`'s own steps
+past checkout and setup-go are just `go install golang.org/x/vuln/cmd/govulncheck@latest` followed by
+`govulncheck ./...`, so this job now runs those two lines directly against the Go it already set up
+once at the top - genuinely one setup, not a claim about one.
+
+Second: `Build` was the one step in the merged job without `if: ${{ !cancelled() }}` - an earlier
+step's failure (the plugin-manifest check, which now runs first) would skip it the normal way, while
+`Vet`/`Test`/lint/govulncheck (already carrying the condition) kept running regardless. The one step
+the "let every check still run" rationale was written to cover was the one step it was not applied
+to. Fixed by adding the same condition to `setup-go` and `Build` too, so everything from the
+plugin-manifest check onward runs independently of what came before it, the checkout step itself
+being the only genuine hard gate.
+
+Third: `scripts/ci.sh` claimed to mirror the workflow "step for step", which was true for the list of
+checks but not for two structural things - the plugin-manifest check's new position (first in CI, for
+a cache-isolation reason that does not apply to a developer's own persistent machine, so it stayed
+last locally) and, more substantively, `set -e` meant a local build failure stopped every later check
+from running at all, silently losing the exact multi-round-trip guarantee `!cancelled()` had just
+been added to CI to provide. Rewritten without `set -e`: every check now runs and reports regardless
+of an earlier one's outcome, with a new `EXIT_FAILED=1` distinct from `EXIT_INCOMPLETE=2` so the two
+failure classes stay distinguishable through the restructuring. Verified directly, not just read:
+built with an intentionally broken `main.go`, confirmed build/vet/test/lint/govulncheck all correctly
+reported failed while gitleaks and the plugin-manifest check still ran and passed independently, then
+restored the file via git and confirmed a clean run again.
+
+**A third round found two real design flaws in the mechanism the previous two rounds had just built,
+plus the version-pinning claim above.** First: `!cancelled()` alone, checked directly against a live
+`gh api` call showing branch protection's required checks had not actually updated yet, turned out to
+be the smaller of two problems that phrase covers - it is true whenever the job was not cancelled,
+which says nothing about whether `checkout` itself actually succeeded. A checkout failing for its own
+reason (a transient clone or auth error, not a cancellation) would leave every later step still
+attempting to run against a workspace that was never populated, one clean failure becoming up to six
+confusing ones - directly contradicting this doc's own earlier claim that checkout was "the only
+genuine hard gate." Fixed with an explicit `steps.checkout.outcome == 'success'` alongside
+`!cancelled()` on every step from `setup-go` onward, and a much louder comment at the top of that run
+of steps: the condition has already been missed twice within this same PR's own history (round one
+omitted it entirely; round two added it everywhere except `Build`), so the comment now says exactly
+that, addressed to whoever adds a seventh step here next.
+
+Second, a genuine GitHub Actions behavior neither of the first two rounds had reason to know about:
+a concurrency group cancels a still-*queued* run the moment a new run joins the same group,
+regardless of `cancel-in-progress` - that setting only protects an already-*running* run. Three
+pushes to `main` in quick succession (A running, B queued, C arrives) would silently drop B's queued
+run entirely, contradicting the concurrency block's own comment that every push to `main` "should run
+to completion and be individually visible." Fixed by keying the group on `github.run_id` (unique per
+run) for anything that is not a `pull_request`, so every push to `main` gets its own group of one and
+can never collide with or cancel another main push's run; only PR runs still share a group keyed by
+ref, which is the collision that group is actually meant to create.
+
+**A fourth round found two real gaps and, independently, settled a maintenance concern the third
+round had only documented.** No step in the merged job had a `timeout-minutes`: the four separate
+jobs it replaced meant a hang in `test` (an unreachable network call blocking forever, say) still
+left `lint`/`govulncheck`/`plugin` visible on their own runners; merged into one job, the same hang
+now silences everything after it until GitHub's own 360-minute default finally kills the job. Not
+fully fixable without un-merging - the point of this diff - but bounded: `timeout-minutes: 15` on
+`ci` (generous for a job that normally finishes in well under five), `10` on `secrets`.
+
+Second: the `if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}` condition, hand-copied
+onto six steps, is exactly the pattern that had already caused two real regressions earlier in this
+same file's history (round one omitted it; round two added it everywhere except `Build`) - the third
+round's own fix for `Build` was itself another hand-copy of the same six-way duplication, not a
+structural fix for the duplication itself. Replaced with a YAML anchor: `if: &gate ${{ ... }}` once,
+`if: *gate` everywhere else, verified to resolve identically on every step by parsing the file and
+printing each step's resolved condition. A future step with a missing gate is now a visibly absent
+`if: *gate` line, not a subtly wrong hand-typed expression - the actual defect class this pattern kept
+producing, closed structurally rather than documented harder a third time.
+
+Third, in `scripts/ci.sh`: the same "four near-identical blocks despite `run()`/`installed()` helpers
+existing" observation from the second round, raised again independently by the fourth - two separate
+review passes flagging the same duplication is a real signal, not a one-off nitpick. New
+`optional_check NAME TOOL HINT VERSION_CMD... -- CHECK_CMD...` collapses each of lint/govulncheck/
+gitleaks/plugin-manifests to a single call instead of a ~10-line block, verified against every
+scenario already covered: a clean run, a missing required tool, a missing optional tool, and a real
+check failure with later checks still running - all four confirmed identical to before the refactor.
+
+**A fifth round found three more real, smaller issues in `scripts/ci.sh`, plus the re-run-granularity
+trade above.** A comment claimed the script installs `govulncheck` at `@latest` the way `ci.yml`
+does - it never did, only checks whether the tool is already on `PATH` and skips with a hint if not;
+corrected. `optional_check`'s version-print expanded `"${version_cmd[@]}"` without checking it was
+non-empty first - harmless today (all four calls supply one), but expanding an empty array under
+`set -u` throws an unbound-variable error on bash older than 4.4 (macOS's own default `/bin/bash` is
+3.2), which would abort the whole script for a future call that omits a version command - exactly the
+"one step kills everything after it" failure this file was rewritten to stop doing. Guarded with a
+length check first. And `build`/`vet`/`test` were still three hand-copied two-line blocks, the same
+shape `optional_check` exists to collapse for the other four checks - new `required_check` (no
+`installed()` branching needed, `go` is already checked once before any of these run) for the same
+reason.
+
+Two more from the same round weighed and left as-is: running this script via `sh scripts/ci.sh`
+(bypassing the shebang, which already declares bash) fails differently and lands on exit 2, which
+could look like "incomplete" rather than an obvious crash - out of the documented invocation pattern
+(`./scripts/ci.sh`, matching how `CONTRIBUTING.md`/`CLAUDE.md` describe it), not fixed. And the script
+hand-duplicates a couple of literal command strings from `ci.yml` (the `govulncheck` install line, the
+plugin-validate invocation) with no shared source between YAML and shell - already stated plainly in
+the file's own header as an accepted limitation of having two separate execution contexts, not a new
+finding needing a different answer.
+
+Branch protection's required status checks were updated to match (`ci`, `secrets`, replacing the
+five old names) - confirmed with the owner before changing it, both that the change should happen at
+all and that it should happen once the workflow itself was ready, not before.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a
