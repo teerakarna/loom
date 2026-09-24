@@ -1224,6 +1224,17 @@ still self-heals. Third round: pointed `$HOME` at a directory with no `.claude/p
 against the same ledger that had a real pending proposal from a previous run - the proposal stayed
 pending, confirming a root-level scan failure protects rather than mass-withdrawing.
 
+**A third `/code-review high` round on the second fix found nothing new that first round's own
+diagnosis hadn't already covered** - it independently re-derived the root-scan-failure gap while
+mid-review, then confirmed the shipped fix already closed it by reading the current code rather
+than trusting the commit message. Two lower-severity observations kept: `LaneScopedKinds`' comment
+now says explicitly that a future per-store finding kind must be added there too, since nothing
+else enforces it. The other, that `needsProtection`'s protection has no expiry - a persistently
+wrong `$HOME`, not just a one-pass blip, protects a proposal forever instead of ever letting it
+withdraw - is filed as [#76](https://github.com/teerakarna/loom/issues/76), deliberately deferred:
+the failure direction is the safe one (stuck pending, bounded by the cap, not wrongly discarding a
+real finding), and a real fix needs new ledger state (a staleness bound), not a line here.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

@@ -43,7 +43,11 @@ const minDuplicateStores = 3
 
 // LaneScopedKinds are the four B7c memory-finding kinds - unambiguously
 // per-store, so per-lane (issue #68) and per-scan-coverage (issue #59).
-// Every other kind's evidence is not store-shaped at all.
+// Every other kind's evidence is not store-shaped at all. A future
+// per-store finding kind must be added here too, or it silently loses both
+// --lane filtering and needsProtection's transient-failure protection -
+// nothing else enforces that (flagged by code review, not yet a bug since
+// no fifth kind exists).
 var LaneScopedKinds = map[string]bool{
 	KindPromoteMemoryDuplicate: true,
 	KindBrokenLink:             true,
