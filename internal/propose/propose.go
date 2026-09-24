@@ -106,11 +106,15 @@ func SummaryFor(kind, subject string, ev map[string]any) string {
 		return fmt.Sprintf("promote %q to a reference skill, identical across %v stores",
 			ev["filename"], ev["stores"])
 	case KindBrokenLink:
-		if ev["target_slug"] == asset.MemoryIndexSlug {
+		switch {
+		case ev["target_slug"] == asset.MemoryIndexSlug:
 			return fmt.Sprintf("%v links to [[MEMORY]], but this store has no MEMORY.md", ev["filename"])
+		case ev["target_is_skill"] == true:
+			return fmt.Sprintf("%v links to [[%v]], which is a skill, not a memory", ev["filename"], ev["target_slug"])
+		default:
+			return fmt.Sprintf("%v links to [[%v]], which exists but not in this store",
+				ev["filename"], ev["target_slug"])
 		}
-		return fmt.Sprintf("%v links to [[%v]], which exists but not in this store",
-			ev["filename"], ev["target_slug"])
 	case KindUnreachableAsset:
 		return fmt.Sprintf("%v exists but is not linked from its store's MEMORY.md", ev["filename"])
 	case KindFilenameSlugDrift:

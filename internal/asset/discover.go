@@ -138,6 +138,26 @@ func Discover(locs Locations) ([]Asset, error) {
 	return out, nil
 }
 
+// DiscoverGlobalSkills returns the name of every skill and reference file
+// under <home>/.claude/skills/ - the one skill location that is not
+// per-project (DefaultLocations' other SkillDirs entry, cwd's own
+// .claude/skills, has no cross-project equivalent: a project's working
+// directory is not reliably recoverable from its ~/.claude/projects/<slug>
+// state-storage path, since projectSlug's hyphen substitution is lossy).
+//
+// Built for issue #66: a memory file's [[link]] to a name that exists
+// nowhere as a memory is treated as a permitted forward reference (issue
+// #67), but on a real corpus some of those names were never going to
+// become a memory at all - they were already real skills, like
+// `[[entity-team]]` naming a skill directory, not a not-yet-written note.
+// A [[link]] only ever resolves against a memory's own frontmatter name,
+// never a skill's, so this can't fix the reference - it exists so
+// propose.detectBrokenLinks can at least say what the target actually is,
+// instead of staying silent as if nothing is known about it.
+func DiscoverGlobalSkills(home string) ([]Asset, error) {
+	return scanSkillDir(filepath.Join(home, ".claude", "skills"))
+}
+
 // scanSkillDir finds skills in dir, the one location where the two shapes
 // scanMarkdownDir treats interchangeably actually mean different things
 // (issue #42). A subdirectory with its own SKILL.md is a real, loadable

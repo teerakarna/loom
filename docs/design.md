@@ -1256,6 +1256,71 @@ current caller; left as documentation (two doc-comment clarifications, on `Store
 `MemoryScanCoverage`) rather than new runtime code, consistent with not designing for a requirement
 nothing has yet.
 
+#### A link to a real skill read as silence, not a defect - BUILT 2026-09-24
+
+Issue #66, split out from #65 originally. `detectBrokenLinks` flags every `[[link]]` that doesn't
+resolve to a memory file's frontmatter name in the same store - but on a real corpus, `entity-team`,
+`entity-docs` and `sprint-management` all resolved that way while existing as real skills under
+`~/.claude/skills/`. Written before issue #67 shipped, though: re-verified against the current code
+before building anything, and #67's own fix (a target that exists nowhere at all is a permitted
+forward reference, not a defect) already stopped these three from being wrongly flagged as broken -
+confirmed by reproducing the exact shape in a scratch fixture and checking the real output, not by
+assuming the issue's original description still matched current behavior. What #67 left behind
+instead: total silence. A link to a real skill and a link to a note nobody has written yet now look
+identical - both permitted forward references - even though only one of them will ever resolve, since
+a `[[link]]` only ever resolves against a memory's own frontmatter name, never a skill's.
+
+New `asset.DiscoverGlobalSkills(home)`, a thin wrapper around the existing `scanSkillDir` - the one
+skill location that actually is cross-project-safe to enumerate without a specific cwd. The other
+`SkillDirs` entry, a project's own `.claude/skills`, has no such equivalent: a project's working
+directory is not reliably recoverable from its `~/.claude/projects/<slug>` state-storage path, since
+the slug's hyphen substitution is lossy - real, buildable scope stops at the global directory, not
+the wider "cross-project skill discovery" the issue's own "shape of a fix" speculated about before
+the code existed to check it against.
+
+`detectBrokenLinks` gained a third outcome, not just two: resolves locally (fine), exists in a
+different store (issue #67's original real finding, checked first since it is the more actionable
+one), exists nowhere as a memory but is a known skill (issue #66 - now flagged, with rationale that
+correctly says what the target actually is), or exists nowhere at all (issue #67's forward
+reference, still silent). Evidence carries a new `target_is_skill` field, not just an in-process
+string choice - found by code review before this shipped: `SummaryFor` rebuilds display text from
+stored evidence alone, with no access to which branch of `detectBrokenLinks` generated it, so
+without a stored field the CLI's own re-display of an already-flagged skill-shadow row would fall
+back to the wrong ("exists but not in this store") wording - reproduced directly against the real
+binary before the fix, confirmed correct after.
+
+**`/code-review high` on the first version found one severe finding and three real, smaller ones.**
+The severe one: `target_is_skill` was written into every `KindBrokenLink` evidence map
+unconditionally, true or false - which changed `Proposal.Hash()` for every plain cross-store finding
+too, not just skill-shadow ones, and `UpsertProposal` resets a row's status to pending on any hash
+change regardless of its prior status. On the first pass after that version shipped, every previously
+dismissed or applied cross-store `broken_link` proposal on any real ledger would have silently
+reverted to pending - the same regression class #77 fixed, reintroduced by this PR's own new field.
+Fixed by only setting the key when true, never a literal `false`; confirmed against the real binary,
+not just a unit test: dismissed a genuine cross-store finding, let an entirely unrelated skill appear
+on disk, reran `loom propose` - the dismissal held.
+
+Two more, both in how `knownSkills` gets built. First: keyed only by `assetFromFile`'s resolved
+`Name` (frontmatter preferred, else the directory name) - but a `[[link]]` author references what
+they actually invoke the skill as, the directory name, which can drift from its own frontmatter (a
+real, documented failure mode on this exact codebase's history - `~/.claude/CLAUDE.md` itself notes
+six skills sitting with broken frontmatter for months unnoticed). Fixed by registering both names.
+Second: `DiscoverGlobalSkills` returns `KindReference` assets too (a flat `.md` file, never actually
+loadable as a skill), and the first version labelled a link to one "a skill" anyway - factually
+wrong. Fixed by filtering to `KindSkill` only.
+
+One deferred rather than fixed here: the identical silence gap exists for agents and plans, which
+have the same global-plus-per-project shape as skills in `asset.DefaultLocations` - filed as
+[#78](https://github.com/teerakarna/loom/issues/78), since no real corpus evidence exists yet for
+that shape the way #66 itself had for skills, and building it speculatively would be exactly the
+kind of guess constraint 11 warns against. The same round also noted the three-way classification
+logic is now duplicated in structurally different shapes between `detectBrokenLinks` and
+`SummaryFor`, and that the skills-directory scan runs unconditionally on every
+`GenerateMemoryFindings` call even when nothing needs it - both real, both left as-is: the first
+matches an existing pattern this codebase already accepts elsewhere (`DiscoverAllMemory` itself
+scans unconditionally on every call), and both are proportionate to revisit only if and when #78 adds
+a second kind worth unifying against, not before.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a
