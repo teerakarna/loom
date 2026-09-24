@@ -1119,6 +1119,41 @@ Explore` against a scratch ledger with a hand-set policy printed that policy's m
 guess; the `devicefarm` compound match, the weak-signal-does-not-escalate fix, the score-clamp fix,
 and the tie-rationale fix all confirmed against real or reproduced query text.
 
+#### A raw driver error was the only signal a resident MCP process had drifted - BUILT 2026-09-24
+
+Issue #74, from a candor-rooted session on 2026-09-24 that hit `list_proposals` and
+`get_recommendation` failing identically: `SQL logic error: no such table: artifacts (1)`, while
+`query_ledger` against the same ledger, same session, worked fine.
+
+The handover that carried this finding guessed a missing migration. That was wrong. Confirmed
+instead by `ps` and `lsof` against every `loom serve` process resident on the machine: each one
+held an old binary inode open, from before the artifact-to-asset rename, while `~/go/bin/loom` on
+disk had since moved to a newer inode via ordinary rebuilds elsewhere. The plugin's `loom-mcp`
+wrapper script (see "MCP server shape, narrowed further") resolves the `loom` binary once, at
+server spawn, then `exec`s it for the life of the process - so a session whose server started
+before a rebuild keeps running the pre-rename code indefinitely, querying a table
+`migrateAssetRename` had already dropped from the shared ledger. `query_ledger` never touches
+that table, which is exactly why it kept working and the drift stayed invisible for as long as
+the process lived.
+
+Current source was never wrong. Nothing about the failure said so, though: a caller got a raw
+SQLite string with no hint that the resident server, not the ledger, was the thing out of date.
+A startup schema check would not have caught this either - the process was correct when it
+started and drifted only afterward, under a binary rebuild it had no way to observe. The fix that
+actually reaches the failure: `explainIfStaleProcess` in `internal/mcp/server.go` recognizes a
+`no such table` error at the point every handler returns one and wraps it with what is actually
+wrong and what to do about it ("restart this session so the server relaunches against the
+current binary"), rather than leaving the caller to diagnose a raw driver string. Applied
+uniformly across all four handlers that touch the ledger, not just the two issue #74 named,
+since the same staleness can in principle affect any table a future rename or schema change
+touches - narrowing the fix to only the two tools that happened to fail this time would leave the
+other two equally blind the next time it's a different table.
+
+Verified end to end, not just by constructing the wrapped error directly: a test opens a second
+connection to the same SQLite file a live test server is already using, drops the `assets` table
+out from under it, and confirms the real MCP call path - not just the helper function in
+isolation - returns the actionable message.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

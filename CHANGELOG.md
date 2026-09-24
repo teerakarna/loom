@@ -182,6 +182,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `list_proposals`, `get_recommendation`, `get_cost_summary` and `get_context_occupancy` surfaced a
+  raw `SQL logic error: no such table` string instead of an actionable message when the resident MCP
+  server process had drifted from the ledger schema (#74, from a candor-rooted session on 2026-09-24).
+  Root cause confirmed by `ps`/`lsof`, not guessed: every `loom serve` process on the machine held an
+  old binary inode open, predating the artifact-to-asset rename, while `~/go/bin/loom` on disk had
+  since moved on via ordinary rebuilds elsewhere - the plugin's wrapper script resolves the binary once
+  at spawn and `exec`s it for the process's life, so a resident session keeps running stale code with
+  no signal it has drifted. `query_ledger` never touches the affected table, which is why it kept
+  working and masked the problem. Current source was already correct; new `explainIfStaleProcess`
+  recognizes the error class at the point each handler returns it and tells the caller to restart the
+  session, rather than leaving them to diagnose a driver string.
+
 - `broken_link` flagged a `[[link]]` to a slug that doesn't exist anywhere yet as a defect (#67), which
   Claude Code's own memory convention explicitly permits as a forward reference ("it marks something
   worth writing later, not an error"). Measured by hand across this machine's 16 real memory stores:
