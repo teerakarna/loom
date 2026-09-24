@@ -7,7 +7,8 @@ current status. This file adds what's specific to working here as an agent.
 ## Before every merge
 
 - `go build ./...`, `go vet ./...`, `go test ./...`, `golangci-lint run ./...`, `govulncheck ./...`
-  all clean, locally, before pushing - not just relying on CI to catch it.
+  all clean, locally, before pushing - not just relying on CI to catch it. `scripts/ci.sh` runs the
+  whole thing (plus gitleaks and the plugin manifest check) in one command.
 - Run `/code-review high` on the diff before opening a PR (see CONTRIBUTING.md's own example of
   what green CI alone missed). Re-run it after fixing what it finds, not just once: on this repo, a
   second or third pass has repeatedly found a real bug the previous pass's own fix introduced, not

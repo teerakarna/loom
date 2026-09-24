@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- CI reduced from five billed jobs to two: `test`/`lint`/`govulncheck`/`plugin` merged into one `ci`
+  job (Actions bills every job at least a full minute regardless of how little it runs), `secrets`
+  kept split out for its own permission scope (`pull-requests: write`, full-history checkout).
+  Prompted by a cross-session handover during a billing-driven Actions outage on another repo - loom
+  itself was unaffected at the time, confirmed rather than assumed, but the practice applies
+  regardless. Added a `concurrency` group cancelling a superseded PR run (never on `main`),
+  `persist-credentials: false` on every checkout, and `scripts/ci.sh` to run the same gate locally.
+  Branch protection's required checks updated to match (`ci`, `secrets`).
+
 - MCP surface widened back to four tools (#62, the last of the AMC trial's four findings, and the one
   that reverses an earlier decision): `get_cost_summary`, `get_context_occupancy` and `list_proposals`
   restored alongside `get_recommendation`. The narrowing this reverses was explicitly labelled

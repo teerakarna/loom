@@ -6,14 +6,34 @@ on:
   push:
     branches: [main]
 
+# A new push to a PR cancels whatever CI run was still going for that same
+# ref - never for main, where every push is a merge that should run to
+# completion and be individually visible. Runners are billed by the minute
+# per job, rounded up, so a superseded run left going to completion is pure
+# waste, not just slower feedback.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
-  test:
+  # build, vet, test, lint, govulncheck and the plugin manifest check were
+  # five separate ubuntu jobs. Each one bills at least a full minute
+  # regardless of how little it actually runs, so five jobs is a five-minute
+  # floor before any of them do real work. Merged into one: same checks, one
+  # runner, one checkout, one Go setup. secrets stays split out on purpose -
+  # it needs pull-requests: write (gitleaks posts a PR comment on a find)
+  # and a full-history checkout, and giving every other step here that same
+  # write permission just to save one more job would trade least privilege
+  # for a small cost saving that isn't worth it.
+  ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -29,42 +49,23 @@ jobs:
       - name: Test
         run: go test ./...
 
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.13.2
 
-  govulncheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
       - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
           go-version-file: go.mod
-
-  plugin:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Schema-checks the plugin and marketplace manifests with the first-party
       # validator, which is the only thing that knows the current plugin format.
       #
       # Deliberately unpinned, unlike every action above. Pinning would freeze
       # the schema this is checked against, and catching "the format moved and
-      # ours no longer conforms" is the entire reason the job exists. The job
-      # gets no secrets and read-only contents, which is what makes an unpinned
-      # global install an acceptable trade here rather than a general one.
+      # ours no longer conforms" is the entire reason the job exists. This step
+      # gets no secrets and the job's contents permission is read-only, which is
+      # what makes an unpinned global install an acceptable trade here rather
+      # than a general one.
       #
       # It checks shape only. It does not check that the command a manifest
       # points at exists, is executable, or matches the server being shipped -
@@ -80,15 +81,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # gitleaks-action posts a PR comment when it finds a leak — needs write
+      # gitleaks-action posts a PR comment when it finds a leak - needs write
       # even though the rest of this workflow is read-only.
       pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0 # gitleaks scans full git history, not just the working tree
 
-      # No GITLEAKS_LICENSE needed — free for personal-account repos, only
+      # No GITLEAKS_LICENSE needed - free for personal-account repos, only
       # organizations require a license key. docs/design.md, "Publishability
       # rules": this must be green before the repo goes public.
       - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0

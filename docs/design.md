@@ -1463,6 +1463,39 @@ near-identical bodies; a filter check in `registerOtherAssets` that is dead code
 three callers) were weighed and left as-is - each is two one-line functions or one harmless,
 already-explained guard, not real risk.
 
+#### CI cost hygiene - BUILT 2026-09-24
+
+A cross-session handover, relayed while a payment failure had dropped the account to GitHub's free
+Actions allowance and blocked another repo's workflow entirely: loom's own CI was running fine at
+the time (confirmed by checking, not assumed from the handover's premise), but the underlying
+practice is worth having regardless of whether loom is the repo actually blocked.
+
+`ci.yml` had five separate ubuntu jobs (`test`, `lint`, `govulncheck`, `plugin`, `secrets`). Actions
+bills every job at least a full minute regardless of how little it runs, so five jobs was a
+five-minute floor before any of them did real work. Merged `test`/`lint`/`govulncheck`/`plugin` into
+one `ci` job - same checks, one runner, one checkout, one Go setup. `secrets` stays split out
+deliberately: it needs `pull-requests: write` (gitleaks posts a PR comment on a find) and a
+full-history checkout, and widening every other step's permissions just to save one more job would
+trade least privilege for a small saving not worth it. No macOS/Windows legs exist in this workflow,
+so the handover's third suggestion (gate expensive OS legs to push-only) did not apply here.
+
+Added a `concurrency` group so a new push to a PR cancels whatever run was still going for that same
+ref - never for `main`, where every push is a merge that should run to completion and be
+individually visible. A superseded run left going to completion is pure waste under per-minute
+billing, not just slower feedback.
+
+Also added `persist-credentials: false` on every checkout (the handover's artipacked note): by
+default `actions/checkout` leaves the job's token in the local git config after checkout, readable or
+exfiltratable by any later step or a compromised dependency in one; nothing in this workflow pushes,
+so there is nothing that needs it left in place.
+
+New `scripts/ci.sh` runs the same gate locally in one command, for the window Actions can't run at
+all and for ordinary pre-PR use - `CONTRIBUTING.md` and `CLAUDE.md` both point at it now.
+
+Branch protection's required status checks were updated to match (`ci`, `secrets`, replacing the
+five old names) - confirmed with the owner before changing it, both that the change should happen at
+all and that it should happen once the workflow itself was ready, not before.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

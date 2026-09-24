@@ -12,7 +12,9 @@ kept somewhere else.
 
 - Go (see `go.mod` for the minimum version).
 - `go build ./...`, `go vet ./...`, `go test ./...`, and `golangci-lint run ./...` before opening
-  a PR. All four run in CI and must be clean.
+  a PR. All four run in CI and must be clean. `scripts/ci.sh` runs the same gate in one command
+  (plus `govulncheck`, `gitleaks` and the plugin manifest check CI also runs), for ordinary local
+  use or for the window CI itself can't run at all (a billing suspension, an outage).
 - Run `/code-review` on the diff before opening a PR, sized to the change - low effort for a docs
   fix, high for a new table or schema change. Green CI is necessary, not sufficient: it was still
   green the day `tool_usage` and `asset_usage` shipped double-counting every call a resumed
@@ -28,8 +30,10 @@ kept somewhere else.
 
 `main` is protected. A change reaches it through a pull request, never a direct push, and:
 
-- **Five checks must be green**: `test`, `lint`, `govulncheck`, `plugin`, `secrets`. The branch
-  must also be up to date with `main` before merging.
+- **Two checks must be green**: `ci` (build, vet, test, lint, govulncheck, plugin manifests - one
+  job, since each separate job bills at least a full minute regardless of how little it runs) and
+  `secrets` (kept split out for its own permission scope). The branch must also be up to date with
+  `main` before merging.
 - **Commits must be signed.** An unsigned commit anywhere in the branch's history blocks the merge,
   including one made by a CI job that commits back to the branch. Squashing does not wash it out,
   and the error GitHub reports for this is generic, so check signatures first if a PR with green
