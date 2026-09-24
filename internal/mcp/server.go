@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -126,7 +128,7 @@ func getRecommendationHandler(db *ledger.DB) gomcp.ToolHandlerFor[Recommendation
 	return func(_ context.Context, _ *gomcp.CallToolRequest, in RecommendationInput) (*gomcp.CallToolResult, RecommendationOutput, error) {
 		assets, err := db.ListAssets()
 		if err != nil {
-			return nil, RecommendationOutput{}, err
+			return nil, RecommendationOutput{}, explainIfStaleProcess(err)
 		}
 		active := activeOnly(assets)
 
@@ -134,7 +136,7 @@ func getRecommendationHandler(db *ledger.DB) gomcp.ToolHandlerFor[Recommendation
 		if in.AgentType != "" {
 			policy, err = db.GetPolicy(in.AgentType)
 			if err != nil {
-				return nil, RecommendationOutput{}, err
+				return nil, RecommendationOutput{}, explainIfStaleProcess(err)
 			}
 		}
 		rec := selector.Recommend(selector.TaskDescriptor{Text: in.Text}, active, policy)
@@ -199,7 +201,7 @@ func getCostSummaryHandler(db *ledger.DB) gomcp.ToolHandlerFor[emptyInput, CostS
 	return func(_ context.Context, _ *gomcp.CallToolRequest, _ emptyInput) (*gomcp.CallToolResult, CostSummaryOutput, error) {
 		s, err := db.Report()
 		if err != nil {
-			return nil, CostSummaryOutput{}, err
+			return nil, CostSummaryOutput{}, explainIfStaleProcess(err)
 		}
 		out := CostSummaryOutput{
 			TotalRuns: s.TotalRuns, SessionRuns: s.SessionRuns, AgentRuns: s.AgentRuns,
@@ -245,7 +247,7 @@ func getContextOccupancyHandler(db *ledger.DB) gomcp.ToolHandlerFor[emptyInput, 
 	return func(_ context.Context, _ *gomcp.CallToolRequest, _ emptyInput) (*gomcp.CallToolResult, ContextOccupancyOutput, error) {
 		occ, err := db.Occupancy()
 		if err != nil {
-			return nil, ContextOccupancyOutput{}, err
+			return nil, ContextOccupancyOutput{}, explainIfStaleProcess(err)
 		}
 		out := ContextOccupancyOutput{
 			CompactionCount: occ.CompactionCount, CompactionDroppedTokens: occ.CompactionDroppedTokens,
@@ -303,7 +305,7 @@ func listProposalsHandler(db *ledger.DB, home string) gomcp.ToolHandlerFor[empty
 		now := time.Now()
 		generated, err := propose.Generate(db, now)
 		if err != nil {
-			return nil, ProposalsOutput{}, err
+			return nil, ProposalsOutput{}, explainIfStaleProcess(err)
 		}
 		// home is resolved once at server construction, not here - resolving
 		// it per-call made this handler reach into whatever process happened
@@ -312,11 +314,11 @@ func listProposalsHandler(db *ledger.DB, home string) gomcp.ToolHandlerFor[empty
 		// suite itself, not by review).
 		memoryFindings, err := propose.GenerateMemoryFindings(home)
 		if err != nil {
-			return nil, ProposalsOutput{}, err
+			return nil, ProposalsOutput{}, explainIfStaleProcess(err)
 		}
 		generated = append(generated, memoryFindings...)
 		if _, err := propose.Store(db, generated, now); err != nil {
-			return nil, ProposalsOutput{}, err
+			return nil, ProposalsOutput{}, explainIfStaleProcess(err)
 		}
 
 		// Summary and rationale are regenerated rather than stored, so wording
@@ -329,7 +331,7 @@ func listProposalsHandler(db *ledger.DB, home string) gomcp.ToolHandlerFor[empty
 
 		rows, err := db.ListProposals(true)
 		if err != nil {
-			return nil, ProposalsOutput{}, err
+			return nil, ProposalsOutput{}, explainIfStaleProcess(err)
 		}
 		// Initialised, not nil: an empty list must serialise as [] rather than
 		// null, or a client iterating the result fails on "no proposals".
@@ -352,4 +354,32 @@ func listProposalsHandler(db *ledger.DB, home string) gomcp.ToolHandlerFor[empty
 		}
 		return nil, out, nil
 	}
+}
+
+// explainIfStaleProcess turns a raw sqlite schema-mismatch error into one
+// that names a likely, checkable cause. The plugin's loom-mcp wrapper
+// script resolves the loom binary once, at server spawn, then execs it for
+// the life of the process (see docs/design.md) - so a session whose MCP
+// server started before a rebuild elsewhere keeps running old code
+// indefinitely, with no signal that it has drifted from the ledger schema
+// a newer invocation has since migrated. A raw sqlite string gives the
+// caller no way to tell "your ledger is broken" from "your server process
+// is stale" apart - see issue #74, found and confirmed exactly this way.
+//
+// Both "no such table" and "no such column" are covered, not just the one
+// this issue happened to hit - a rename or a dropped column produces the
+// same stale-process symptom as a dropped table. The message is worded as
+// a likely cause, not an assertion: a schema error can also mean a real
+// bug in freshly written code that never touched an old binary at all, and
+// a bare string match on the driver message has no way to tell those
+// apart (found by /code-review high on the first version of this fix).
+func explainIfStaleProcess(err error) error {
+	if err == nil {
+		return err
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "no such table") || strings.Contains(msg, "no such column") {
+		return fmt.Errorf("%w - this usually means loom's running MCP server process predates a rebuild of its own ledger schema; restart this session so the server relaunches against the current binary. If restarting doesn't fix it, this is a different, real bug", err)
+	}
+	return err
 }

@@ -2,13 +2,17 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	_ "modernc.org/sqlite"
 
 	"github.com/teerakarna/loom/internal/ingest"
 	"github.com/teerakarna/loom/internal/ledger"
@@ -308,5 +312,92 @@ func TestGetRecommendationUsesAgentTypePolicyOverMCP(t *testing.T) {
 	})
 	if out.Model != "haiku" || out.Effort != "low" {
 		t.Errorf("got model=%s effort=%s over MCP, want the policy's haiku/low, not a cold-start guess", out.Model, out.Effort)
+	}
+}
+
+func TestExplainIfStaleProcessWrapsNoSuchTable(t *testing.T) {
+	raw := errors.New("SQL logic error: no such table: assets (1)")
+	got := explainIfStaleProcess(raw)
+	if got == nil || !strings.Contains(got.Error(), "restart this session") {
+		t.Errorf("got %v, want a wrapped error mentioning restarting the session", got)
+	}
+	if !errors.Is(got, raw) {
+		t.Errorf("wrapped error does not unwrap back to the original driver error")
+	}
+}
+
+func TestExplainIfStaleProcessWrapsNoSuchColumn(t *testing.T) {
+	// A renamed/dropped column produces the same stale-process symptom as a
+	// renamed/dropped table - a bare match on "no such table" alone missed
+	// this case (found by /code-review high on the first version of this fix).
+	raw := errors.New("SQL logic error: no such column: subject (1)")
+	got := explainIfStaleProcess(raw)
+	if got == nil || !strings.Contains(got.Error(), "restart this session") {
+		t.Errorf("got %v, want a wrapped error mentioning restarting the session", got)
+	}
+}
+
+func TestExplainIfStaleProcessLeavesOtherErrorsAlone(t *testing.T) {
+	raw := errors.New("disk I/O error")
+	if got := explainIfStaleProcess(raw); !errors.Is(got, raw) {
+		t.Errorf("got %v, want the original error unchanged for a non-schema failure", got)
+	}
+	if explainIfStaleProcess(nil) != nil {
+		t.Error("got a non-nil error wrapping nil")
+	}
+}
+
+// TestGetRecommendationExplainsStaleProcessOverMCP is the end-to-end
+// counterpart: a real "no such table" error from the actual driver, hit
+// through the real MCP call path, surfaces the actionable message rather
+// than the raw SQLite string. Simulates the stale-process failure mode from
+// issue #74 by dropping the assets table out from under a live server - the
+// same shape of drift a resident process sees when the shared ledger's
+// schema moves on without it.
+func TestGetRecommendationExplainsStaleProcessOverMCP(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "loom.db")
+	db, err := ledger.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	if _, err := raw.Exec(`DROP TABLE assets`); err != nil {
+		t.Fatal(err)
+	}
+
+	server := NewServer(db, t.TempDir())
+	client := gomcp.NewClient(&gomcp.Implementation{Name: "test-client", Version: "v0.0.1"}, nil)
+	ctx := context.Background()
+	t1, t2 := gomcp.NewInMemoryTransports()
+	if _, err := server.Connect(ctx, t1, nil); err != nil {
+		t.Fatal(err)
+	}
+	session, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+
+	res, err := session.CallTool(ctx, &gomcp.CallToolParams{Name: "get_recommendation", Arguments: map[string]any{"text": "anything"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError {
+		t.Fatalf("got IsError = false, want the dropped table to surface as a tool error: %+v", res.Content)
+	}
+	var got string
+	for _, c := range res.Content {
+		if tc, ok := c.(*gomcp.TextContent); ok {
+			got += tc.Text
+		}
+	}
+	if !strings.Contains(got, "restart this session") {
+		t.Errorf("got %q, want it to explain the stale-process failure rather than the raw driver string", got)
 	}
 }
