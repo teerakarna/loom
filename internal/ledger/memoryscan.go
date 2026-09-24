@@ -2,7 +2,6 @@ package ledger
 
 import (
 	"database/sql"
-	"errors"
 	"time"
 )
 
@@ -28,26 +27,27 @@ func (d *DB) RecordRootScanCoverage(scanned bool, now time.Time) (time.Time, boo
 		return time.Time{}, false, err
 	}
 
+	// One atomic statement, not a separate SELECT-then-write: two Store
+	// calls racing right as a streak starts (the CLI and the MCP server, or
+	// two overlapping MCP calls, against the same ledger) could otherwise
+	// both see no existing row and each write their own now, and whichever
+	// finished last would silently overwrite the true first-failure time
+	// the tolerance window is measured from (found by code review, before
+	// this shipped). COALESCE keeps the existing value across every
+	// consecutive failure and only takes the new one the first time.
 	var existing sql.NullString
-	err := d.sql.QueryRow(`SELECT unscanned_since FROM memory_root_scan WHERE id = 1`).Scan(&existing)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return time.Time{}, false, err
-	}
-	if existing.Valid && existing.String != "" {
-		since, err := parseTime(existing.String)
-		if err != nil {
-			return time.Time{}, false, err
-		}
-		return since, true, nil
-	}
-
-	// First failure since a working pass (or the row never existed yet) -
-	// this pass is the streak's start.
-	if _, err := d.sql.Exec(`
+	err := d.sql.QueryRow(`
 		INSERT INTO memory_root_scan (id, unscanned_since) VALUES (1, ?)
-		ON CONFLICT(id) DO UPDATE SET unscanned_since = excluded.unscanned_since`,
-		formatTime(now)); err != nil {
+		ON CONFLICT(id) DO UPDATE SET
+			unscanned_since = COALESCE(memory_root_scan.unscanned_since, excluded.unscanned_since)
+		RETURNING unscanned_since`,
+		formatTime(now)).Scan(&existing)
+	if err != nil {
 		return time.Time{}, false, err
 	}
-	return now, true, nil
+	since, err := parseTime(existing.String)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return since, true, nil
 }

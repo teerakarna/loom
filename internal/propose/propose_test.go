@@ -1091,6 +1091,72 @@ func TestStoreRootProtectionStreakResetsAfterAWorkingPass(t *testing.T) {
 	}
 }
 
+// TestStoreRootProtectionStreakClearsWithNothingPending is the regression
+// test for a code-review finding on the first version of this fix: Store
+// only recorded root-scan coverage when something was actually pending,
+// so a successful scan with nothing pending never cleared an in-progress
+// streak. A later, unrelated proposal appearing under a fresh failure
+// would then silently inherit the stale, already-expired streak start
+// from long before and lose its own one-pass grace period immediately -
+// reproducing the exact bug this whole fix exists to prevent.
+func TestStoreRootProtectionStreakClearsWithNothingPending(t *testing.T) {
+	db := openDB(t)
+	start := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	row1 := ledger.ProposalRow{
+		Kind: KindUnreachableAsset, Subject: "store-a/orphan",
+		Evidence: `{"store":"store-a","filename":"orphan"}`, EvidenceHash: "h1", SampleSize: 1,
+	}
+	if _, err := db.UpsertProposal(row1, start); err != nil {
+		t.Fatal(err)
+	}
+
+	failing := &asset.MemoryScanCoverage{}
+	if _, err := Store(db, nil, failing, start); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := db.ListProposals(true)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("got %+v (%v), want the proposal protected on the first failing pass", pending, err)
+	}
+	if err := db.DismissProposal(pending[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// The root scans fine for a while, well past what would have been the
+	// original streak's tolerance window, with nothing pending the whole
+	// time - Store must still notice and clear the streak.
+	working := &asset.MemoryScanCoverage{Present: map[string]bool{}, Scanned: map[string]bool{}}
+	for i := 1; i <= 3; i++ {
+		at := start.Add(RootScanFailureTolerance + time.Duration(i)*24*time.Hour)
+		if _, err := Store(db, nil, working, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A new, unrelated proposal appears under a fresh failure, well past
+	// the original (now-irrelevant) streak's expiry point.
+	row2 := ledger.ProposalRow{
+		Kind: KindUnreachableAsset, Subject: "store-b/other",
+		Evidence: `{"store":"store-b","filename":"other"}`, EvidenceHash: "h2", SampleSize: 1,
+	}
+	newFailureAt := start.Add(RootScanFailureTolerance + 4*24*time.Hour)
+	if _, err := db.UpsertProposal(row2, newFailureAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Store(db, nil, failing, newFailureAt); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err = db.ListProposals(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Subject != "store-b/other" {
+		t.Errorf("got %+v, want store-b/other protected on its own first failing pass, not withdrawn on "+
+			"an inherited, already-expired streak from long before", pending)
+	}
+}
+
 // TestSummaryFor covers every kind, since it moved here (from cmd/loom's
 // own summaryFor) so internal/mcp's list_proposals could reuse it - found
 // necessary by code review: a protected-but-not-reproduced row (#59) had

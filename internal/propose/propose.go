@@ -585,14 +585,22 @@ func Store(db *ledger.DB, ps []Proposal, coverage *asset.MemoryScanCoverage, now
 	if err != nil {
 		return 0, err
 	}
-	if len(pending) > 0 && coverage != nil {
+	if coverage != nil {
 		// Recorded here, not inside needsProtection: this is ledger state
 		// about the ledger's own scan history, not a per-proposal decision,
 		// and Store is the one place that already holds both db and
-		// coverage. Skipped when there is nothing pending to protect in the
-		// first place, and when coverage is nil (the caller never attempted
-		// a memory scan at all - recording a "failure" then would be
-		// recording a scan that never happened, not a real one that failed).
+		// coverage. Skipped only when coverage is nil (the caller never
+		// attempted a memory scan at all - recording a "failure" then would
+		// be recording a scan that never happened, not a real one that
+		// failed) - never gated on whether anything happens to be pending
+		// right now: a successful scan with nothing pending must still clear
+		// an in-progress streak, or a later, unrelated failure would
+		// silently inherit a stale streak start from long before and skip
+		// its own one-pass grace period entirely (found by code review,
+		// before this shipped, reproduced directly: dismiss the only
+		// pending proposal mid-streak, let several successful scans pass
+		// with nothing pending, then a new proposal appears under a fresh
+		// failure - without this fix it loses protection immediately).
 		rootFailureExpired := false
 		if since, failing, err := db.RecordRootScanCoverage(coverage.Present != nil, now); err != nil {
 			return 0, err

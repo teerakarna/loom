@@ -194,7 +194,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tests) but is also exactly what a genuine root-scan failure produces - `nil` now means the former,
   a non-nil pointer the latter, so a DB-only caller never starts a fake failure streak. Verified
   against the real binary for what a real clock can exercise, and directly against the timing logic
-  for the week-long boundary a real clock cannot.
+  for the week-long boundary a real clock cannot. `/code-review high` found two real gaps in the
+  first version, both fixed: recording the streak was wrongly gated on something being pending, so a
+  successful scan with nothing pending never cleared it, letting a later unrelated proposal inherit a
+  stale, already-expired streak; and the streak's write was a separate `SELECT` then update, a real
+  race between two `Store` calls close together, now one atomic `INSERT ... ON CONFLICT ...
+  RETURNING`.
 
 - `list_proposals`, `get_recommendation`, `get_cost_summary` and `get_context_occupancy` surfaced a
   raw `SQL logic error: no such table` string instead of an actionable message when the resident MCP

@@ -1361,6 +1361,22 @@ for the timing that would take a week of real time to observe: a streak's tolera
 from its own start survives a reset; a proposal at 6 days 23 hours into a failing streak stays
 protected; at a week and one hour, it is withdrawn.
 
+**`/code-review high` on the first version found two real gaps.** First: `Store` only recorded root-
+scan coverage when something happened to be pending, gated as a query-avoidance optimization - but
+that meant a successful scan with nothing pending never cleared an in-progress streak either. A
+later, unrelated proposal appearing under a fresh failure would silently inherit the stale,
+already-expired streak start from long before and lose its own one-pass grace period immediately -
+the exact bug this whole fix exists to prevent, reproduced by the reviewer directly. Fixed by
+recording coverage whenever a real scan happened, regardless of what is currently pending; the
+per-proposal loop underneath still costs nothing extra when nothing is pending; only the recording
+itself was ever wrongly gated. Second: `RecordRootScanCoverage`'s failure path did a `SELECT` then a
+separate write - a genuine race between two `Store` calls close together (the CLI and the MCP server
+against the same ledger, or two overlapping MCP calls) could each see no existing streak and each
+write their own timestamp, with whichever finished last silently overwriting the true first-failure
+time. Fixed with one atomic `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` statement, `COALESCE`
+keeping the existing value across every consecutive failure and only taking the new one the first
+time - no separate read, nothing to race.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a
