@@ -1289,6 +1289,38 @@ without a stored field the CLI's own re-display of an already-flagged skill-shad
 back to the wrong ("exists but not in this store") wording - reproduced directly against the real
 binary before the fix, confirmed correct after.
 
+**`/code-review high` on the first version found one severe finding and three real, smaller ones.**
+The severe one: `target_is_skill` was written into every `KindBrokenLink` evidence map
+unconditionally, true or false - which changed `Proposal.Hash()` for every plain cross-store finding
+too, not just skill-shadow ones, and `UpsertProposal` resets a row's status to pending on any hash
+change regardless of its prior status. On the first pass after that version shipped, every previously
+dismissed or applied cross-store `broken_link` proposal on any real ledger would have silently
+reverted to pending - the same regression class #77 fixed, reintroduced by this PR's own new field.
+Fixed by only setting the key when true, never a literal `false`; confirmed against the real binary,
+not just a unit test: dismissed a genuine cross-store finding, let an entirely unrelated skill appear
+on disk, reran `loom propose` - the dismissal held.
+
+Two more, both in how `knownSkills` gets built. First: keyed only by `assetFromFile`'s resolved
+`Name` (frontmatter preferred, else the directory name) - but a `[[link]]` author references what
+they actually invoke the skill as, the directory name, which can drift from its own frontmatter (a
+real, documented failure mode on this exact codebase's history - `~/.claude/CLAUDE.md` itself notes
+six skills sitting with broken frontmatter for months unnoticed). Fixed by registering both names.
+Second: `DiscoverGlobalSkills` returns `KindReference` assets too (a flat `.md` file, never actually
+loadable as a skill), and the first version labelled a link to one "a skill" anyway - factually
+wrong. Fixed by filtering to `KindSkill` only.
+
+One deferred rather than fixed here: the identical silence gap exists for agents and plans, which
+have the same global-plus-per-project shape as skills in `asset.DefaultLocations` - filed as
+[#78](https://github.com/teerakarna/loom/issues/78), since no real corpus evidence exists yet for
+that shape the way #66 itself had for skills, and building it speculatively would be exactly the
+kind of guess constraint 11 warns against. The same round also noted the three-way classification
+logic is now duplicated in structurally different shapes between `detectBrokenLinks` and
+`SummaryFor`, and that the skills-directory scan runs unconditionally on every
+`GenerateMemoryFindings` call even when nothing needs it - both real, both left as-is: the first
+matches an existing pattern this codebase already accepts elsewhere (`DiscoverAllMemory` itself
+scans unconditionally on every call), and both are proportionate to revisit only if and when #78 adds
+a second kind worth unifying against, not before.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a

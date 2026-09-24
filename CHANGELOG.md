@@ -228,10 +228,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `asset.DiscoverGlobalSkills(home)` scans `~/.claude/skills` (the one skill location that is
   reliably enumerable without a specific project's cwd); `detectBrokenLinks` now flags a link whose
   target is a known skill, with rationale explaining what it actually is rather than staying silent.
-  Evidence carries a new `target_is_skill` field so `SummaryFor` (used by both the CLI and MCP's
-  display fallback) rebuilds the correct wording from stored evidence, not just the in-process
-  Proposal text - found by code review, before this shipped, verified against the real binary before
-  and after.
+  Evidence carries a new `target_is_skill` field, set only when true (never a literal `false`) so a
+  plain cross-store finding's evidence hash stays unchanged - an unconditional field would have
+  changed it for every existing cross-store `broken_link` proposal, silently reverting any previously
+  dismissed or applied one to pending on the next pass (the same regression class #77 fixed, caught
+  by `/code-review high` before this shipped, confirmed fixed against the real binary: dismissed a
+  finding, added an unrelated skill, reran - the dismissal held). `SummaryFor` (used by both the CLI
+  and MCP's display fallback) reads that field to rebuild the correct wording from stored evidence,
+  not just the in-process Proposal text. `knownSkills` matches both a skill's frontmatter name and its
+  directory name (a `[[link]]` author references what they invoke it as, which can drift from its own
+  frontmatter), and only `KindSkill`, not `KindReference` (a flat file, never actually loadable as a
+  skill) - both also found by review. The identical gap for agents and plans is deferred as
+  [#78](https://github.com/teerakarna/loom/issues/78), pending real corpus evidence.
 
 - `broken_link` flagged a `[[link]]` to a slug that doesn't exist anywhere yet as a defect (#67), which
   Claude Code's own memory convention explicitly permits as a forward reference ("it marks something

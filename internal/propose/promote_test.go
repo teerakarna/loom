@@ -280,8 +280,13 @@ func TestDetectBrokenLinks_CrossStoreTakesPriorityOverSkillMatch(t *testing.T) {
 	if !strings.Contains(got[0].Summary, "exists but not in this store") {
 		t.Errorf("Summary = %q, want the cross-store wording to win", got[0].Summary)
 	}
-	if got[0].Evidence["target_is_skill"] != false {
-		t.Errorf("Evidence = %+v, want target_is_skill = false - the cross-store case won", got[0].Evidence)
+	// Absent, not a literal false - an unconditional key on every
+	// cross-store finding would change its evidence hash for every
+	// existing row the moment this shipped, silently reviving any
+	// previously dismissed or applied one (see propose.go, Store's doc
+	// comment on the same principle).
+	if _, present := got[0].Evidence["target_is_skill"]; present {
+		t.Errorf("Evidence = %+v, want target_is_skill absent - the cross-store case won", got[0].Evidence)
 	}
 }
 
@@ -309,6 +314,104 @@ func TestGenerateMemoryFindings_WiresGlobalSkillsIntoBrokenLinkCheck(t *testing.
 	}
 	if !found {
 		t.Errorf("got %+v, want a broken_link proposal for entity-team", got)
+	}
+}
+
+// TestDetectBrokenLinks_MatchesDirectoryNameOverDriftedFrontmatter is the
+// regression test for a code-review finding on the first version of this
+// fix: knownSkills was keyed only by assetFromFile's resolved Name
+// (frontmatter preferred, else directory basename), but a [[link]] author
+// references what they actually invoke the skill as - the directory name -
+// which can drift from its own frontmatter (a real, documented failure
+// mode on this exact codebase's history). Without matching the directory
+// name too, a drifted skill would fall through to the silent
+// forward-reference branch, reproducing the exact silence issue #66 exists
+// to fix, for the specific drift case most likely to occur.
+func TestDetectBrokenLinks_MatchesDirectoryNameOverDriftedFrontmatter(t *testing.T) {
+	home := t.TempDir()
+	// Directory is "entity-team", but its own frontmatter has drifted to
+	// something else - the link names the directory, not the frontmatter.
+	writeSkillFile(t, home, "entity-team", "---\nname: entity-team-v2\n---\nBody.")
+	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[entity-team]] for how the team works.")
+
+	got, _, err := GenerateMemoryFindings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range got {
+		if p.Kind == KindBrokenLink && p.Evidence["target_slug"] == "entity-team" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("got %+v, want entity-team still flagged via its directory name despite drifted frontmatter", got)
+	}
+}
+
+// TestDetectBrokenLinks_ReferenceFileIsNotCalledASkill is the regression
+// test for a code-review finding: a flat .md file directly under
+// ~/.claude/skills/ is never loadable as a skill (scanSkillDir's own doc
+// comment, KindReference) - calling one "a skill" in the rationale text
+// would be factually wrong. A link naming a reference file's name must
+// fall through to the ordinary silent forward-reference case, not the
+// skill-shadow wording.
+func TestDetectBrokenLinks_ReferenceFileIsNotCalledASkill(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".claude", "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", "skills", "some-notes.md"), []byte("# Some Notes\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[some-notes]] for background.")
+
+	got, _, err := GenerateMemoryFindings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range got {
+		if p.Kind == KindBrokenLink && p.Evidence["target_slug"] == "some-notes" {
+			t.Errorf("got a broken_link proposal for a reference file: %+v, want silence (permitted forward reference)", p)
+		}
+	}
+}
+
+// TestDetectBrokenLinks_EvidenceHashStableForCrossStoreFindings is the
+// regression test for the most severe finding from code review on the
+// first version of this fix: target_is_skill was added to every
+// KindBrokenLink Evidence map unconditionally (true or false), which
+// changes Proposal.Hash() for every plain cross-store finding too, not
+// just skill-shadow ones. UpsertProposal resets status to pending on any
+// evidence-hash change regardless of the row's prior status (dismissed or
+// applied included) - so on the first pass after that version shipped,
+// every previously dismissed or applied cross-store broken_link proposal
+// on any real ledger would have silently reverted to pending, discarding
+// the user's earlier decision. Confirmed by hashing the two proposals a
+// before/after-this-fix corpus would produce for the identical cross-store
+// finding and checking they match.
+func TestDetectBrokenLinks_EvidenceHashStableForCrossStoreFindings(t *testing.T) {
+	home := t.TempDir()
+	writeMemoryFile(t, home, "store-a", "a.md", "---\nname: a\n---\nSee [[shared-name]].")
+	writeMemoryFile(t, home, "store-b", "shared-name.md", "---\nname: shared-name\n---\nA real memory, elsewhere.")
+
+	files, _, err := asset.DiscoverAllMemory(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One run with a populated knownSkills set that happens not to match
+	// this link's target, one with none at all - both are the same
+	// cross-store finding and must hash identically, or a ledger that
+	// picks up a new, unrelated skill on disk would revive every existing
+	// dismissed/applied broken_link proposal alongside it.
+	withSkills := detectBrokenLinks(home, files, map[string]bool{"unrelated-skill": true})
+	withoutSkills := detectBrokenLinks(home, files, nil)
+	if len(withSkills) != 1 || len(withoutSkills) != 1 {
+		t.Fatalf("got %d and %d proposals, want exactly one each", len(withSkills), len(withoutSkills))
+	}
+	if withSkills[0].Hash() != withoutSkills[0].Hash() {
+		t.Errorf("Hash() differs (%q vs %q) for the identical cross-store finding - an unrelated skill on "+
+			"disk must not change this proposal's evidence hash", withSkills[0].Hash(), withoutSkills[0].Hash())
 	}
 }
 
