@@ -102,9 +102,12 @@ func runStatus(args []string) error {
 	}
 	// No claim about the file here. This bucket is keyed on the path alone, so
 	// the row is prunable whether the file is still on disk or not, and saying
-	// "file still there" would be asserting a disk state nothing checked.
+	// "file still there" would be asserting a disk state nothing checked. It does
+	// not name the two reasons either: "not a transcript" was accurate while the
+	// journal was the only one, and became a false statement about a relative row
+	// the moment that was added.
 	if fresh.prunable > 0 {
-		fmt.Printf("  in ledger, not transcript %d  (`loom report` deletes these rows)\n", fresh.prunable)
+		fmt.Printf("  in ledger, unmatchable    %d  (`loom report` deletes these rows)\n", fresh.prunable)
 	}
 	if fresh.outsideRoot > 0 {
 		fmt.Printf("  in ledger, outside root   %d  (nothing to do; the root is an argument)\n", fresh.outsideRoot)
@@ -114,9 +117,13 @@ func runStatus(args []string) error {
 	// when none of them fired, so the only honest line is a description of the
 	// conditions that got it here. Claiming "not a path this version walks"
 	// without calling the predicate that decides it is the same overreach the
-	// three rounds before this one kept producing.
+	// three rounds before this one kept producing - and so was the version of this
+	// line that said "readable, not outside the root": stat succeeding does not
+	// mean the file can be opened, and outsideRoot answers false for "cannot tell"
+	// as well as for "inside", so neither word was checked. Both are now stated as
+	// what was actually established.
 	if fresh.unexplained > 0 {
-		fmt.Printf("  in ledger, unexplained    %d  (readable, not outside the root, and not walked - worth reporting)\n", fresh.unexplained)
+		fmt.Printf("  in ledger, unexplained    %d  (exists, not known to be outside the root, and not walked - worth reporting)\n", fresh.unexplained)
 	}
 	fmt.Println()
 
@@ -218,12 +225,17 @@ func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 		//
 		// Every other walk failure is different in kind and must not take the
 		// same path. WalkDir reports a directory removed mid-walk as an ENOENT
-		// too, and there `paths` is partial: continuing would classify live,
-		// current transcripts as unexpected, and the old code went further and
-		// returned zeroes for everything - printing "0 transcripts on disk, 0
-		// ingested" against a ledger holding hundreds of rows, which reads as
-		// confirmed-empty rather than as a failed scan. So distinguish the two
-		// by asking about the root itself, and fail loudly for the rest.
+		// too, and there `paths` is partial or empty while the files are still
+		// there: treating that as a new install reports live, current
+		// transcripts as gone from disk. Which is why the question asked is
+		// about the root and not about the error - an ENOENT alone cannot tell
+		// the two apart.
+		//
+		// The version before this returned the zero struct here without
+		// classifying anything, so a missing root printed "0 transcripts on
+		// disk, 0 ingested" against a ledger holding hundreds of rows. Absence
+		// read as confirmed-empty is the failure this project has already had
+		// once, in the memory store.
 		if !rootIsAbsent(root) {
 			return f, err
 		}
@@ -318,12 +330,18 @@ func rootIsAbsent(root string) bool {
 	return os.IsNotExist(err)
 }
 
-// outsideRoot reports whether p lies demonstrably outside root. A comparison
-// that cannot be resolved at all (different volumes, one side relative) is not
-// an out-of-root answer and must not be reported as one: it is "cannot tell",
-// so it falls through to the remainder bucket, which says so. Answering true
-// here instead is how the relative-root bug printed "nothing to do; the root is
-// an argument" about a current transcript.
+// outsideRoot reports whether p lies demonstrably outside root. A comparison that
+// cannot be resolved at all is not an out-of-root answer and must not be reported
+// as one: it is "cannot tell", so it falls through to the remainder bucket, which
+// says so. Answering true here instead is how the relative-root bug printed
+// "nothing to do; the root is an argument" about a current transcript.
+//
+// The reachable unresolvable case is one side being relative, and those are now
+// pruned before this is called. An earlier version of this comment also offered
+// differing volumes as an example, which is a counterexample to its own rule: two
+// volumes cannot be Rel'd precisely because one is definitively outside the other.
+// Nothing here runs on a platform with volume names, so the case is left out
+// rather than half-handled.
 func outsideRoot(root, p string) bool {
 	rel, err := filepath.Rel(root, p)
 	if err != nil {

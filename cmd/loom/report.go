@@ -100,13 +100,15 @@ func runReport(args []string) error {
 // reference an agent whose own file is discovered in any order during the
 // walk.
 func ingestAll(db *ledger.DB, root string) error {
-	// Before the walk, deliberately. The prune reads the ledger and touches no
-	// file, so making it wait behind a walk that can fail means the one remedy
-	// `loom status` names for a prunable row does not run in the states where
-	// the walk errors - including a projects root that does not exist, where
-	// status prints "`loom report` deletes these rows" and report exits on an
-	// lstat before reaching this line.
-	if err := pruneWorkflowJournals(db); err != nil {
+	// Before the walk, deliberately, and for two reasons now. The prune reads the
+	// ledger and touches no file, so making it wait behind a walk that can fail
+	// means the one remedy `loom status` names for a prunable row does not run in
+	// the states where the walk errors - including a projects root that does not
+	// exist, where status prints "`loom report` deletes these rows" and report
+	// exits on an lstat before reaching this line. And a relative row must go
+	// before the walk can insert its absolute replacement, or the ledger ends up
+	// holding both.
+	if err := pruneUnmatchableRows(db); err != nil {
 		return err
 	}
 
@@ -351,15 +353,31 @@ func printGroup(s ledger.Summary, heading string, n int, row func(int) (string, 
 	}
 }
 
-// pruneWorkflowJournals drops rows the ingester should never have written: a
-// ledger built before ingest.IsTranscript existed holds one run per workflow
-// orchestration journal, with no model, no tokens and no tool calls. Nothing
-// else removes them - reports, status and the MCP cost summary all count
-// `runs` unfiltered, so they keep inflating the totals for as long as the
-// ledger lives.
+// pruneUnmatchableRows drops rows no walk can ever match again, so the ledger
+// stops carrying numbers nothing can explain. Two kinds qualify, both written by
+// earlier versions of this program:
 //
-// Deliberately keyed on the one known-bad filename rather than on
-// !IsTranscript, even though that reads as the more general fix. The
+// A workflow orchestration journal. A ledger built before ingest.IsTranscript
+// existed holds one run per `subagents/workflows/<id>/journal.jsonl`, with no
+// model, no tokens and no tool calls. Nothing else removes them - reports, status
+// and the MCP cost summary all count `runs` unfiltered, so they keep inflating
+// the totals for as long as the ledger lives.
+//
+// A relative path. `loom report <relative root>` used to store whatever it walked,
+// and paths are compared as text everywhere, so now that both entry points
+// absolutise, such a row can never match a walked file again: it reads as unseen
+// and unexplained at once, and the next report inserts a second row for the same
+// file under its absolute name. The row cannot be repaired instead of deleted -
+// the working directory it was relative to is not recorded anywhere, and
+// resolving it against whatever the cwd happens to be now is precisely the
+// inference this command spent several rounds removing. Deleting is nearly free
+// when the file is still under the root, since the walk immediately below
+// re-ingests it in full. It does lose history in one case, a relative row whose
+// file has since gone from disk, and that is accepted deliberately: the choice
+// there is between a figure no comparison can reach and no figure at all.
+//
+// The journal case is deliberately keyed on the one known-bad filename rather
+// than on !IsTranscript, even though that reads as the more general fix. The
 // complement of a whitelist has unbounded blast radius: if the host ever
 // changes the subagent naming convention, or a ledger carries rows from a host
 // that used a different one, every subagent run under subagents/ would be
@@ -370,7 +388,7 @@ func printGroup(s ledger.Summary, heading string, n int, row func(int) (string, 
 //
 // Keyed on the path shape rather than on cost, too: a genuinely zero-cost run
 // (a subagent that produced no assistant turn) is real data and must survive.
-func pruneWorkflowJournals(db *ledger.DB) error {
+func pruneUnmatchableRows(db *ledger.DB) error {
 	known, err := db.KnownRuns()
 	if err != nil {
 		return err
@@ -401,7 +419,7 @@ func pruneWorkflowJournals(db *ledger.DB) error {
 	// SQLITE_BUSY - and also offered a duplicate candidate path as the cause,
 	// which runs.path being UNIQUE makes impossible. Both wrong.)
 	for _, p := range deleted {
-		fmt.Fprintf(os.Stderr, "loom: pruned non-transcript ledger row %s\n", p)
+		fmt.Fprintf(os.Stderr, "loom: pruned unmatchable ledger row %s\n", p)
 	}
 	return nil
 }
@@ -413,6 +431,15 @@ func pruneWorkflowJournals(db *ledger.DB) error {
 // hypothetical - status's first version inferred "not a transcript" from "Walk
 // did not return it", which counted every row outside a narrowed root as
 // prunable and pointed them at a remedy that would never touch them.
+//
+// The relative test comes first because it is the one that must not be reached
+// through a stat: a relative path resolves against whatever the working directory
+// happens to be, so classifying it any later makes the answer depend on where the
+// command was run from. See pruneUnmatchableRows for why such a row is deleted
+// rather than repaired.
 func isPrunableLedgerPath(path string) bool {
+	if !filepath.IsAbs(path) {
+		return true
+	}
 	return filepath.Base(path) == "journal.jsonl" && !ingest.IsTranscript(path)
 }

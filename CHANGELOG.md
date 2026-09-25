@@ -128,16 +128,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against a narrowed root. It now counts five states apart. Four are keyed on a positive signal of
   their own: prunable (the same predicate `loom report` prunes on), genuinely absent, present but
   unreadable, and demonstrably outside the root being asked about. The fifth is the remainder, and is
-  labelled as one - "readable, not outside the root, and not walked" - rather than given a cause
-  nothing checked, because a row of that shape (a non-transcript `.jsonl` beside a workflow's
+  labelled as one - "exists, not known to be outside the root, and not walked" - rather than given a
+  cause nothing checked, because a row of that shape (a non-transcript `.jsonl` beside a workflow's
   subagents) is real and never clears. A file the walk did return but could not stat is counted too,
   so the freshness totals add up. A projects root that does not exist is still a normal state for a
-  new install, but any other walk failure is now an error rather than a silent set of zeroes that
-  read as an empty ledger. Both commands also normalise the root to an absolute path: ledger paths
-  are stored as walked and compared textually, so `loom report .claude/projects` followed by
-  `loom status ~/.claude/projects` reported one ingested, unchanged file as both "never ingested"
-  and "in ledger, outside root". The prune now runs before the walk rather than after, so the one
-  remedy `loom status` names for a prunable row still runs when the walk itself fails.
+  new install; any other walk failure no longer passes silently, and instead of returning zeroes that
+  read as an empty ledger, `loom status` says the scan failed, omits the freshness counts, and prints
+  the rest of its output (`loom report` still exits non-zero on the same condition, since its walk is
+  the whole job).
+- Both commands normalise the root to an absolute path, and `loom report` now prunes ledger rows that
+  are already stored relative. Ledger paths are stored as walked and compared textually, so
+  `loom report .claude/projects` followed by `loom status ~/.claude/projects` reported one ingested,
+  unchanged file as both "never ingested" and "in ledger, outside root". Absolutising fixes the paths
+  going in and does nothing for the ones already stored: such a row can never match a walked file
+  again under any root, so the next report inserts a second row for the same file and the ledger
+  double-counts its cost for as long as it lives. The row is deleted rather than repaired - the
+  working directory it was written against is not recorded anywhere, so there is nothing to resolve it
+  against - and the walk immediately re-ingests it in full whenever the file is still under the root.
+  The prune also runs before the walk now rather than after, both so a relative row is gone before its
+  absolute replacement is inserted, and so the one remedy `loom status` names for these rows still
+  runs when the walk itself fails.
 
 ### Added
 
