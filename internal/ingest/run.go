@@ -250,9 +250,20 @@ func applyEvent(rs *RunSummary, ev Event) {
 	rs.FileTouches = append(rs.FileTouches, ev.FileTouches...)
 }
 
+// kindForPath asks whether any directory in path is named subagents, by segment
+// rather than by substring. The substring version required a leading separator
+// ("/subagents/"), so it answered "session" for a path that merely starts with the
+// directory - subagents/workflows/wf-1/agent-9.jsonl, which is what a walk rooted
+// inside a session directory hands back, and what a ledger row written by
+// `loom report .` from there looks like. That made the same file an agent run or a
+// session run depending on where the command was run from: the wrong kind, no
+// agent_type, and a workflow journal reading as a real transcript because
+// IsTranscript only requires the agent- prefix for agent-kinded paths.
 func kindForPath(path string) string {
-	if strings.Contains(filepath.ToSlash(path), "/subagents/") {
-		return "agent"
+	for _, seg := range strings.Split(filepath.ToSlash(path), "/") {
+		if seg == "subagents" {
+			return "agent"
+		}
 	}
 	return "session"
 }
