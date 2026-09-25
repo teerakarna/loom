@@ -141,25 +141,31 @@ func TestSupersedeRelativeRowsOnlyTakesRowsTheWalkReplaces(t *testing.T) {
 	// The plan is keyed on the replacement, which is also the forced re-read set,
 	// and that is half the fix: without it NeedsIngest vetoes the read and the
 	// replacement keeps whatever child rows it already had, which is none.
+	//
+	// Both relative spellings hang off that one key, and the value has to be a
+	// slice for that reason. A plain map kept only the last, and since child rows
+	// are first-seen-wins the survivor was usually the row holding the tool calls,
+	// so the forced re-read attached nothing.
 	replacement := "/home/me/.claude/projects/p/sess/subagents/agent-9.jsonl"
-	if len(plan) != 1 || plan[replacement] == "" {
-		t.Fatalf("plan = %v, want the one unambiguously walked path keyed to its relative row", plan)
+	if len(plan) != 1 || len(plan[replacement]) != 2 {
+		t.Fatalf("plan = %v, want both relative spellings keyed to the one walked path that replaces them", plan)
 	}
-	if !strings.HasSuffix(filepath.ToSlash(plan[replacement]), "p/sess/subagents/agent-9.jsonl") {
-		t.Errorf("plan[%s] = %q, which is not a spelling of that file", replacement, plan[replacement])
+	for _, row := range plan[replacement] {
+		if !strings.HasSuffix(filepath.ToSlash(filepath.Clean(row)), "p/sess/subagents/agent-9.jsonl") {
+			t.Errorf("plan[%s] contains %q, which is not a spelling of that file", replacement, row)
+		}
 	}
 
-	// Committing takes only the rows whose replacement actually read. Both
-	// spellings of the same file are candidates and one of them wins the map key;
-	// the other simply stays, which is correct - it is a second row for a file
-	// that now has an absolute one, and the next full-root report supersedes it.
+	// Committing takes only the rows whose replacement actually read.
 	read := map[string]ingest.RunSummary{replacement: {}}
 	if err := commitSupersessions(db, plan, read); err != nil {
 		t.Fatal(err)
 	}
 	got := knownPaths(t, db)
-	if got[plan[replacement]] {
-		t.Errorf("relative row %s survived even though its replacement was read", plan[replacement])
+	for _, row := range plan[replacement] {
+		if got[row] {
+			t.Errorf("relative row %s survived even though its replacement was read", row)
+		}
 	}
 	for _, p := range keep {
 		if !got[p] {
@@ -206,7 +212,7 @@ func TestPlanRelativeSupersessionsNeedsTheWholeCorpus(t *testing.T) {
 func TestCommitSupersessionsSkipsRowsWhoseReplacementDidNotRead(t *testing.T) {
 	db := openTestLedger(t)
 	insertRun(t, db, "p/sess.jsonl")
-	plan := map[string]string{"/home/me/.claude/projects/p/sess.jsonl": "p/sess.jsonl"}
+	plan := map[string][]string{"/home/me/.claude/projects/p/sess.jsonl": {"p/sess.jsonl"}}
 
 	if err := commitSupersessions(db, plan, map[string]ingest.RunSummary{}); err != nil {
 		t.Fatal(err)
@@ -658,5 +664,31 @@ func TestFreshnessFailsLoudlyWhenAnExistingRootCannotBeWalked(t *testing.T) {
 
 	if _, err := freshness(db, root); err == nil {
 		t.Error("freshness returned no error on a root it could not walk: a partial file list classifies live transcripts as unexplained")
+	}
+}
+
+// The default projects root is only the right lane root when the walk is inside
+// it. Substituting it unconditionally fixed the narrowed-report case and broke
+// every root that is not this machine's own - a restored backup, another
+// machine's export, a relocated CLAUDE_CONFIG_DIR - because every walked file is
+// then outside it, LaneFromPath returns "" for all of them, and those are first
+// inserts so the COALESCE guard has no stored lane to keep.
+func TestLaneRootForOnlySubstitutesTheDefaultForAWalkInsideIt(t *testing.T) {
+	const def = "/home/me/.claude/projects"
+	for _, c := range []struct {
+		name, root, want string
+	}{
+		{"the default itself", def, def},
+		{"narrowed to one project", def + "/proj-a", def},
+		{"narrowed to a session inside a project", def + "/proj-a/sess", def},
+		{"a restored backup elsewhere", "/mnt/backup/projects", "/mnt/backup/projects"},
+		{"a sibling with the same prefix text", def + "-old", def + "-old"},
+		{"an ancestor of the default", "/home/me/.claude", "/home/me/.claude"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := laneRootFor(def, c.root); got != c.want {
+				t.Errorf("laneRootFor(%q, %q) = %q, want %q", def, c.root, got, c.want)
+			}
+		})
 	}
 }

@@ -20,7 +20,20 @@ import (
 // asset_usage), the gap this mechanism was built to close: a session file
 // untouched since before those tables existed had a runs row but none of
 // their data, forever, confirmed on this machine's own real ledger.
-const CurrentFeatureVersion = 1
+//
+// 2 is the lane and kind corruption fixed alongside this bump, and it is a
+// repair rather than a backfill - the first time this counter has been used for
+// one. A report narrowed to a single project derived every lane from the walked
+// root instead of the projects root, so transcripts were filed under a session
+// UUID, or under nothing at all for the files sitting directly in that root;
+// kindForPath matched "subagents" as a substring, so the same file could be read
+// as an agent run or a session run depending on which root discovered it. Both
+// wrote a plausible wrong value and then made it permanent: size matches and the
+// version is current, so NeedsIngest vetoes every later read that would have
+// corrected it. A bump is the only repair path the design offers - there is
+// deliberately no --force (docs/design.md, "No reprocessing flag") - so without
+// one, a ledger that took a narrowed report stays wrong for as long as it lives.
+const CurrentFeatureVersion = 2
 
 // RunRecord is what gets written to the runs table for one ingested
 // transcript file. ReportedSubagentTokens/ReportedToolUses/ReportedDurationMs
@@ -84,15 +97,42 @@ func (d *DB) InsertRun(r RunRecord) error {
 			cache_creation_tokens = excluded.cache_creation_tokens,
 			weighted_cost = excluded.weighted_cost, tool_use_count = excluded.tool_use_count,
 			denial_count = excluded.denial_count, feedback_count = excluded.feedback_count,
-			reported_subagent_tokens = excluded.reported_subagent_tokens,
-			reported_tool_uses = excluded.reported_tool_uses,
-			reported_duration_ms = excluded.reported_duration_ms,
+			-- Same argument as lane, one step further: these three are NULL
+			-- unless some session read in the *same batch* reported figures for
+			-- this agent, and a re-read of one agent transcript is a batch of
+			-- one. So an ordinary incremental report writes NULL over a real
+			-- reconciliation figure whenever the parent session file has not
+			-- itself changed, and NeedsIngest then vetoes the read that would
+			-- restore it. NULL here means "nothing reported yet", never "the
+			-- earlier figure was withdrawn", so keeping the stored one is the
+			-- only reading that matches what the column means.
+			reported_subagent_tokens = COALESCE(excluded.reported_subagent_tokens, runs.reported_subagent_tokens),
+			reported_tool_uses = COALESCE(excluded.reported_tool_uses, runs.reported_tool_uses),
+			reported_duration_ms = COALESCE(excluded.reported_duration_ms, runs.reported_duration_ms),
 			feature_version = excluded.feature_version`,
 		r.Path, r.SizeBytes, r.SessionID, r.Kind, r.Model, r.Lane, r.AgentType, r.Effort, formatTime(r.StartedAt), formatTime(r.EndedAt),
 		r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheCreationTokens,
 		r.WeightedCost, r.ToolUseCount, r.DenialCount, r.FeedbackCount,
 		r.ReportedSubagentTokens, r.ReportedToolUses, r.ReportedDurationMs, CurrentFeatureVersion,
 	)
+	return err
+}
+
+// InvalidateRun marks one run as needing a re-read on the next report, by
+// clearing the feature version NeedsIngest compares against. A missing row is
+// not an error: there is then nothing to re-read and nothing stale to correct.
+//
+// It exists because a run is written in two steps that are not one
+// transaction - InsertRun, then recordOccupancyAndUsage for the child rows -
+// and the second one's failure is deliberately non-fatal, so one unreadable
+// transcript cannot cost a whole report. The size and feature version are
+// already stored by then, so NeedsIngest answers "no" from the next report
+// onward and the child rows never arrive. Worse on the supersession path, where
+// the old row's child rows have already been deleted to make room for them:
+// there the loss is silent and total. Writing the version back down costs one
+// UPDATE and makes the failure self-healing instead.
+func (d *DB) InvalidateRun(path string) error {
+	_, err := d.sql.Exec(`UPDATE runs SET feature_version = 0 WHERE path = ?`, path)
 	return err
 }
 

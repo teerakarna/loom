@@ -159,6 +159,95 @@ func TestInsertRunKeepsAKnownLaneWhenTheNewOneIsEmpty(t *testing.T) {
 	}
 }
 
+// Same guard, one column family further, and the case is more common than the
+// lane one: the reported figures are only populated from a session read in the
+// same batch, and a re-read of one agent transcript is a batch of one. So an
+// ordinary incremental report used to write NULL over a real reconciliation
+// figure whenever the parent session had not itself changed, and NeedsIngest
+// then vetoed the read that would have restored it.
+func TestInsertRunKeepsReportedFiguresWhenTheReReadHasNone(t *testing.T) {
+	db := openTestDB(t)
+	tokens, uses, ms := int64(500), int64(7), int64(1200)
+	rec := RunRecord{
+		Path: "p/sess/subagents/agent-1.jsonl", Kind: "agent", SizeBytes: 10,
+		ReportedSubagentTokens: &tokens, ReportedToolUses: &uses, ReportedDurationMs: &ms,
+	}
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	rec.ReportedSubagentTokens, rec.ReportedToolUses, rec.ReportedDurationMs = nil, nil, nil
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := reportedOf(t, db, rec.Path); got != [3]int64{500, 7, 1200} {
+		t.Errorf("reported figures = %v after a re-read that found none, want {500 7 1200}: that reconciliation is gone for good", got)
+	}
+
+	// The other direction, so COALESCE cannot be mistaken for "first write wins":
+	// a session that does report new figures still replaces the stored ones.
+	tokens, uses, ms = 900, 9, 1500
+	rec.ReportedSubagentTokens, rec.ReportedToolUses, rec.ReportedDurationMs = &tokens, &uses, &ms
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := reportedOf(t, db, rec.Path); got != [3]int64{900, 9, 1500} {
+		t.Errorf("reported figures = %v, want {900 9 1500}: a fresh figure must still replace a stored one", got)
+	}
+}
+
+func reportedOf(t *testing.T, db *DB, path string) [3]int64 {
+	t.Helper()
+	var got [3]int64
+	err := db.sql.QueryRow(`
+		SELECT COALESCE(reported_subagent_tokens, -1), COALESCE(reported_tool_uses, -1),
+		       COALESCE(reported_duration_ms, -1)
+		FROM runs WHERE path = ?`, path).Scan(&got[0], &got[1], &got[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// The two-step write is not one transaction, and the second step's failure is
+// deliberately non-fatal, so the row can end up stored with the current size and
+// feature version while its child rows were never written. NeedsIngest answers
+// "no" from then on, which makes that permanent unless something asks for the
+// re-read.
+func TestInvalidateRunForcesAReRead(t *testing.T) {
+	db := openTestDB(t)
+	rec := RunRecord{Path: "p/sess.jsonl", Kind: "session", SizeBytes: 10}
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+	// Positive control: without the invalidation this is exactly the "no" the
+	// failure would be stuck behind.
+	needs, err := db.NeedsIngest(rec.Path, rec.SizeBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if needs {
+		t.Fatal("NeedsIngest said yes on an unchanged row, so the assertion below would pass for the wrong reason")
+	}
+
+	if err := db.InvalidateRun(rec.Path); err != nil {
+		t.Fatal(err)
+	}
+	needs, err = db.NeedsIngest(rec.Path, rec.SizeBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !needs {
+		t.Error("NeedsIngest still says no after InvalidateRun: the child rows that failed to write can never arrive")
+	}
+
+	// A row that is not there is not an error - there is nothing to re-read and
+	// nothing stale to correct.
+	if err := db.InvalidateRun("never-ingested.jsonl"); err != nil {
+		t.Errorf("InvalidateRun on an absent path: %v", err)
+	}
+}
+
 func laneOf(t *testing.T, db *DB, path string) string {
 	t.Helper()
 	var lane string
