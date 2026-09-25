@@ -204,10 +204,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filesystem. Every walked file is then outside the lane root, `LaneFromPath` returns `""` for all of
   them, and the `COALESCE` guard cannot help because those are first inserts with no stored lane to
   keep - so the whole corpus reads as unattributed and `--lane` matches nothing, permanently. The
-  default is now substituted only when the walked root is inside it; otherwise the walked root is
-  both the only projects root on offer and the right answer. That also makes the whole-corpus gate
-  (`laneRoot == root`) reachable for an alternate root, which it could never be before, so those
-  ledgers now get the relative-row supersession instead of double-counting for as long as they live.
+  default is now substituted only when the walked root is inside it.
+- The first fix for that substituted the *walked* root for an alternate corpus, on the reasoning that
+  it is the only projects root on offer. That was the original defect again in different clothes: a
+  walk narrowed inside an alternate root is indistinguishable from a walk of one, so
+  `loom report /mnt/backup/projects/proj-a` went straight back to filing transcripts under session
+  UUIDs, permanently, since those are first inserts with no stored lane for the `COALESCE` to keep.
+  Nothing in a path says where a corpus begins, so a root outside the default now derives **no** lane
+  at all: an empty lane cannot displace a stored one, where a plausible wrong one is never corrected.
+  Such a ledger keeps the lanes it has and gains none, which reads as unattributed and is at least
+  true.
+- That also cost the `wholeCorpus` inference its premise. `laneRoot == root` was equal for *any* root
+  outside the default, narrowed ones included, which made the fourth data-loss path the supersession
+  planner documents at length reachable again through a different door. It is now an explicit
+  parameter, set from `root == defaultRoot` at the entry point and never inferred.
+- `agent_type` was overwritten unconditionally, and it is not in the transcript at all - it comes from
+  the `.meta.json` companion beside it, which `ReadAgentMeta` reports as absent when it is missing,
+  unreadable, not valid JSON, or names an empty type, all normal conditions on a corpus another tool
+  writes. So a transcript that grew after its companion was cleaned up re-read with no agent type and
+  filed the run under none for good, behind `NeedsIngest` like the rest of this family. Now
+  `COALESCE`, same as lane.
 - `CurrentFeatureVersion` 1 to 2, the first time this counter has been used for a repair rather than
   a backfill. The lane and kind fixes above stop recurrence and repair nothing, and a re-read is the
   only repair path the design offers - there is deliberately no `--force`. Without the bump a ledger

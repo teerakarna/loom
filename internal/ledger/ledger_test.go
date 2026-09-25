@@ -196,6 +196,50 @@ func TestInsertRunKeepsReportedFiguresWhenTheReReadHasNone(t *testing.T) {
 	}
 }
 
+// Third column with the same shape, and the trigger is the one most likely to
+// happen without anybody doing anything unusual: agent_type is not in the
+// transcript, it is in the .meta.json companion beside it, and ReadAgentMeta
+// answers "not found" for a companion that has been cleaned up, truncated, or
+// written by a version that spells the field differently. A transcript that grows
+// after that is a re-read with an empty agent type, and a plain overwrite filed
+// the run under no type for good.
+func TestInsertRunKeepsAKnownAgentTypeWhenTheReReadHasNone(t *testing.T) {
+	db := openTestDB(t)
+	rec := RunRecord{
+		Path: "p/sess/subagents/agent-1.jsonl", Kind: "agent", SizeBytes: 10,
+		AgentType: "Explore",
+	}
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	rec.AgentType = ""
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := agentTypeOf(t, db, rec.Path); got != "Explore" {
+		t.Errorf("agent_type = %q after a re-read with no companion file, want Explore: that run is untyped for good", got)
+	}
+
+	// And the other direction, so the guard cannot be read as "first write wins".
+	rec.AgentType = "fork"
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := agentTypeOf(t, db, rec.Path); got != "fork" {
+		t.Errorf("agent_type = %q, want fork: a real type must still replace a real type", got)
+	}
+}
+
+func agentTypeOf(t *testing.T, db *DB, path string) string {
+	t.Helper()
+	var got string
+	if err := db.sql.QueryRow(`SELECT agent_type FROM runs WHERE path = ?`, path).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
 func reportedOf(t *testing.T, db *DB, path string) [3]int64 {
 	t.Helper()
 	var got [3]int64

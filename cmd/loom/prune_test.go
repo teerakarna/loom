@@ -276,7 +276,7 @@ func TestIngestAllKeepsChildRowsWhenMigratingARelativeRow(t *testing.T) {
 	// Stage one: the relative root, exactly as the old binary was run. The rows it
 	// writes are relative, child rows included.
 	rel := filepath.Join(".claude", "projects")
-	if err := ingestAll(db, rel, rel); err != nil {
+	if err := ingestAll(db, rel, rel, true); err != nil {
 		t.Fatal(err)
 	}
 	before, err := db.Occupancy()
@@ -306,7 +306,7 @@ func TestIngestAllKeepsChildRowsWhenMigratingARelativeRow(t *testing.T) {
 	// Stage three: the migration, twice - the second run is the check that a loss
 	// here is permanent rather than repaired on the next report.
 	for range 2 {
-		if err := ingestAll(db, root, root); err != nil {
+		if err := ingestAll(db, root, root, true); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -354,20 +354,19 @@ func TestIngestAllKeepsRelativeRowsNoWalkCanReplace(t *testing.T) {
 			transcriptWithChildRows(t, filepath.Join(root, "p2", "b.jsonl"))
 
 			db := openTestLedger(t)
-			if err := ingestAll(db, filepath.Join(".claude", "projects"), filepath.Join(".claude", "projects")); err != nil {
+			if err := ingestAll(db, filepath.Join(".claude", "projects"), filepath.Join(".claude", "projects"), true); err != nil {
 				t.Fatal(err)
 			}
 			if got := len(knownPaths(t, db)); got != 2 {
 				t.Fatalf("setup ingested %d relative rows, want 2", got)
 			}
 
-			// laneRoot is the narrowed root too, so wholeCorpus reads true here
-			// even though the walk plainly is not the whole corpus. Deliberate: the
-			// gate added for the ambiguity case would otherwise make this pass for a
-			// second reason, and the ordering fix this test exists for would stop
-			// being what holds it up.
+			// wholeCorpus is passed true even though the walk plainly is not the
+			// whole corpus. Deliberate: the gate added for the ambiguity case would
+			// otherwise make this pass for a second reason, and the ordering fix
+			// this test exists for would stop being what holds it up.
 			narrowed := c.rootUnder(root)
-			err := ingestAll(db, narrowed, narrowed)
+			err := ingestAll(db, narrowed, narrowed, true)
 			if c.wantErr && err == nil {
 				t.Error("a root that does not exist returned no error, so the prune below is not the interesting part any more")
 			}
@@ -408,7 +407,7 @@ func TestIngestAllDerivesLanesFromTheProjectsRootNotTheWalkedRoot(t *testing.T) 
 	transcriptWithChildRows(t, filepath.Join(proj, "sess", "subagents", "agent-1.jsonl"))
 
 	db := openTestLedger(t)
-	if err := ingestAll(db, root, root); err != nil {
+	if err := ingestAll(db, root, root, true); err != nil {
 		t.Fatal(err)
 	}
 	assertOneLane(t, db, "-h-u-proj", "after a full-root report")
@@ -433,7 +432,7 @@ func TestIngestAllDerivesLanesFromTheProjectsRootNotTheWalkedRoot(t *testing.T) 
 		}
 	}
 
-	if err := ingestAll(db, proj, root); err != nil {
+	if err := ingestAll(db, proj, root, false); err != nil {
 		t.Fatal(err)
 	}
 	assertOneLane(t, db, "-h-u-proj", "after a report narrowed to that project")
@@ -667,12 +666,17 @@ func TestFreshnessFailsLoudlyWhenAnExistingRootCannotBeWalked(t *testing.T) {
 	}
 }
 
-// The default projects root is only the right lane root when the walk is inside
-// it. Substituting it unconditionally fixed the narrowed-report case and broke
-// every root that is not this machine's own - a restored backup, another
-// machine's export, a relocated CLAUDE_CONFIG_DIR - because every walked file is
-// then outside it, LaneFromPath returns "" for all of them, and those are first
-// inserts so the COALESCE guard has no stored lane to keep.
+// The default projects root is the lane root for any walk inside it, and for a
+// walk outside it there is no lane root at all - the empty string, meaning
+// attribute nothing.
+//
+// Both halves are regressions that happened. Deriving lanes from the walked root
+// made a narrowed report file 82 of 85 runs under session UUIDs. Substituting the
+// default unconditionally lost every lane for a root that is not this machine's
+// own. Returning root for those - the third version - was the first defect again
+// wearing the second's clothes, because a walk narrowed *inside* an alternate root
+// is indistinguishable from a walk of one, so the backup and ancestor cases below
+// pin "" rather than root: no lane is recoverable later, a wrong one is not.
 func TestLaneRootForOnlySubstitutesTheDefaultForAWalkInsideIt(t *testing.T) {
 	const def = "/home/me/.claude/projects"
 	for _, c := range []struct {
@@ -681,14 +685,36 @@ func TestLaneRootForOnlySubstitutesTheDefaultForAWalkInsideIt(t *testing.T) {
 		{"the default itself", def, def},
 		{"narrowed to one project", def + "/proj-a", def},
 		{"narrowed to a session inside a project", def + "/proj-a/sess", def},
-		{"a restored backup elsewhere", "/mnt/backup/projects", "/mnt/backup/projects"},
-		{"a sibling with the same prefix text", def + "-old", def + "-old"},
-		{"an ancestor of the default", "/home/me/.claude", "/home/me/.claude"},
+		{"a restored backup elsewhere", "/mnt/backup/projects", ""},
+		{"a sibling with the same prefix text", def + "-old", ""},
+		{"an ancestor of the default", "/home/me/.claude", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := laneRootFor(def, c.root); got != c.want {
 				t.Errorf("laneRootFor(%q, %q) = %q, want %q", def, c.root, got, c.want)
 			}
 		})
+	}
+}
+
+// And the consequence that makes returning "" safe rather than merely honest: no
+// lane is derived at all on such a walk, for any shape of path. The relative case
+// is the one that matters - LaneFromPath alone answers "relative" for it, since
+// an empty root cleans to "." and Rel succeeds, so this property belongs to
+// laneOf and not to LaneFromPath.
+func TestAnEmptyLaneRootDerivesNoLane(t *testing.T) {
+	for _, p := range []string{
+		"/mnt/backup/projects/proj-a/sess.jsonl",
+		"relative/proj-a/sess.jsonl",
+		"sess.jsonl",
+	} {
+		if got := laneOf("", p); got != "" {
+			t.Errorf("laneOf(%q, %q) = %q, want the empty lane", "", p, got)
+		}
+	}
+	// The positive control: a real lane root still reads the lane, so the test
+	// above is not passing because laneOf returns "" for everything.
+	if got := laneOf("/home/me/.claude/projects", "/home/me/.claude/projects/proj-a/sess.jsonl"); got != "proj-a" {
+		t.Errorf("laneOf with a real root = %q, want proj-a", got)
 	}
 }

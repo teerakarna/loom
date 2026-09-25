@@ -90,7 +90,17 @@ func (d *DB) InsertRun(r RunRecord) error {
 			-- never needs expressing - a run does not move out of the projects
 			-- root without its path changing, which makes it a different row.
 			lane = COALESCE(NULLIF(excluded.lane, ''), runs.lane),
-			agent_type = excluded.agent_type,
+			-- Same argument as lane, and for a nearly identical reason: agent_type
+			-- is not in the transcript at all. It is read from the .meta.json
+			-- companion beside it, and ReadAgentMeta answers "not found" for a
+			-- companion that is absent, unreadable, not valid JSON, or names an
+			-- empty type - all normal conditions on a corpus another tool writes.
+			-- So a transcript that grows after its companion has been cleaned up
+			-- re-reads with an empty agent type, and a plain overwrite would file
+			-- the run under no type for good, since the size then matches and the
+			-- feature version is current. An empty value here means "could not
+			-- read it", never "this run has no agent type".
+			agent_type = COALESCE(NULLIF(excluded.agent_type, ''), runs.agent_type),
 			effort = excluded.effort, started_at = excluded.started_at, ended_at = excluded.ended_at,
 			input_tokens = excluded.input_tokens, output_tokens = excluded.output_tokens,
 			cache_read_tokens = excluded.cache_read_tokens,

@@ -37,6 +37,15 @@ func runReport(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Absolutised for the same reason root is below, and it is not redundant:
+	// os.UserHomeDir returns $HOME unvalidated, so a relative HOME makes every
+	// filepath.Rel against this error out, and outsideRoot answers false on error
+	// by contract - which would send the whole corpus down the "inside the
+	// default" branch with a relative lane root and lose every lane.
+	defaultRoot, err = filepath.Abs(defaultRoot)
+	if err != nil {
+		return err
+	}
 	root := defaultRoot
 	// `loom report --lane <lane>` narrows to one project directory; a bare
 	// argument is still the projects root, as before.
@@ -73,7 +82,13 @@ func runReport(args []string) error {
 	}
 	defer func() { _ = db.Close() }()
 
-	if err := ingestAll(db, root, laneRootFor(defaultRoot, root)); err != nil {
+	// root == defaultRoot is the whole-corpus test, stated rather than inferred.
+	// Both sides are absolutised above, so this is a straight text compare, and
+	// the cases where it answers false wrongly - a case variant of the real path
+	// on a case-insensitive filesystem, a symlinked home - all fail in the
+	// direction that skips supersession, which is the direction that cannot
+	// destroy a row.
+	if err := ingestAll(db, root, laneRootFor(defaultRoot, root), root == defaultRoot); err != nil {
 		return err
 	}
 
@@ -96,7 +111,10 @@ func runReport(args []string) error {
 }
 
 // laneRootFor picks the root that lanes are derived from, given the machine's
-// default projects root and the root this invocation was told to walk.
+// default projects root and the root this invocation was told to walk. An empty
+// return means "do not attribute lanes on this walk" - LaneFromPath then yields
+// "" for every file, and the COALESCE on lane keeps whatever the ledger already
+// knows.
 //
 // A lane is the project directory a transcript sits in, so it is only meaningful
 // relative to the projects root - never relative to whatever root this
@@ -104,22 +122,49 @@ func runReport(args []string) error {
 // than inside ingestAll so the HOME lookup stays there and the tests can drive
 // ingestAll with a fixture root.
 //
-// The default only applies when the walked root is *inside* it, which is the
-// narrowed-report case it exists for. A first version substituted it
-// unconditionally, which fixed narrowing and broke every root that is not this
-// machine's own: a restored backup, another machine's export, a relocated
-// CLAUDE_CONFIG_DIR, or a case variant of the real path on a case-insensitive
-// filesystem. Every walked file is then outside laneRoot, LaneFromPath returns
-// "" for all of them, and the COALESCE guard cannot help because those are first
-// inserts with no stored lane to keep - so the whole corpus reads as
-// unattributed and `--lane` matches nothing, permanently. For a root that is not
-// under the default, root is the only projects root on offer and is also the
-// right answer: it is what the walk was told to treat as the corpus.
+// Two wrong versions preceded this, and the shape of both is why the third
+// refuses to answer rather than guessing. Deriving lanes from the walked root
+// meant `loom report <root>/<one-project>` filed every nested transcript under a
+// session UUID - measured on a real ledger, 82 of 85 runs. Substituting the
+// default unconditionally fixed that and lost every lane for any root that is
+// not this machine's own: a restored backup, another machine's export, a
+// relocated CLAUDE_CONFIG_DIR, a case variant of the real path on a
+// case-insensitive filesystem.
+//
+// The third attempt returned root for those, on the reasoning that it is "the
+// only projects root on offer". That was the same first defect again: a walk
+// narrowed *inside* an alternate root is indistinguishable from a walk of one,
+// so `loom report /mnt/backup/projects/proj-a` went straight back to filing
+// transcripts under session UUIDs, permanently, since those are first inserts
+// with no stored lane for the COALESCE to keep and the feature version is
+// stamped current. There is no signal that tells the two apart: only the machine
+// whose projects root it is knows where the corpus begins.
+//
+// So the only honest answer for a root outside the default is none. That fails
+// in the direction the COALESCE was built to absorb - an empty lane cannot
+// displace a stored one - rather than writing a plausible wrong value that
+// nothing will ever correct. A ledger walked from an alternate root keeps the
+// lanes it has and gains none, which reads as unattributed and is at least true.
 func laneRootFor(defaultRoot, root string) string {
 	if outsideRoot(defaultRoot, root) {
-		return root
+		return ""
 	}
 	return defaultRoot
+}
+
+// laneOf reads a path's lane, honouring laneRootFor's empty answer explicitly
+// rather than leaning on what LaneFromPath happens to do with an empty root.
+// It does return "" there today, but only by way of filepath.Rel("." , path)
+// failing, which it only does for an absolute path - a relative one would come
+// back with its own first segment as the lane. Every walked path is absolute in
+// production, so the shortcut would work; it would also be one refactor away
+// from writing invented lanes across a whole ledger, and the silence of that
+// failure is the entire reason laneRootFor answers "" in the first place.
+func laneOf(laneRoot, path string) string {
+	if laneRoot == "" {
+		return ""
+	}
+	return ingest.LaneFromPath(laneRoot, path)
 }
 
 // ingestAll walks root, ingests every transcript file not already in the
@@ -134,10 +179,17 @@ func laneRootFor(defaultRoot, root string) string {
 // made a narrowed report rewrite lanes to whatever directory came first under
 // it - measured on a real ledger, one narrowed report moved 82 of 85 runs off
 // their project and onto two session UUIDs, and NeedsIngest then vetoed every
-// later read that could have corrected them. Two parameters are not needed:
-// laneRoot == root is exactly "this walk covers the whole corpus", which is what
-// planRelativeSupersessions needs to know.
-func ingestAll(db *ledger.DB, root string, laneRoot string) error {
+// later read that could have corrected them. Empty means "attribute no lane on
+// this walk"; see laneRootFor for when that is the only honest answer.
+// wholeCorpus says whether this walk saw every transcript the ledger could know
+// about, which is what planRelativeSupersessions needs and what makes deleting a
+// row on the strength of the walk safe. It is a separate parameter because an
+// earlier version inferred it from laneRoot == root, and that inference went
+// wrong the moment laneRootFor stopped always returning the default: for any root
+// outside it the two were equal, so a *narrowed* walk of an alternate root read
+// as whole-corpus and the fourth data-loss path planRelativeSupersessions
+// documents at length became reachable again through a different door.
+func ingestAll(db *ledger.DB, root string, laneRoot string, wholeCorpus bool) error {
 	// Journals before the walk, deliberately. The prune reads the ledger and
 	// touches no file, so making it wait behind a walk that can fail means the one
 	// remedy `loom status` names for these rows does not run in the states where
@@ -161,7 +213,7 @@ func ingestAll(db *ledger.DB, root string, laneRoot string) error {
 	// planRelativeSupersessions and commitSupersessions for why "delete it, the
 	// walk will bring it back" was three separate kinds of wrong when it ran above
 	// the walk.
-	superseded, err := planRelativeSupersessions(db, paths, laneRoot == root)
+	superseded, err := planRelativeSupersessions(db, paths, wholeCorpus)
 	if err != nil {
 		return err
 	}
@@ -242,7 +294,7 @@ func ingestAll(db *ledger.DB, root string, laneRoot string) error {
 			SessionID:           rs.SessionID,
 			Kind:                rs.Kind,
 			Model:               rs.Model,
-			Lane:                ingest.LaneFromPath(laneRoot, path),
+			Lane:                laneOf(laneRoot, path),
 			AgentType:           rs.AgentType,
 			Effort:              rs.Effort,
 			StartedAt:           rs.StartedAt,
