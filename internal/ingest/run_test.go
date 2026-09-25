@@ -1,6 +1,10 @@
 package ingest
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestIngestFileSession(t *testing.T) {
 	rs, err := IngestFile("../../testdata/synthetic-session.jsonl")
@@ -259,5 +263,48 @@ func TestIngestFile_CompactionReadNotGuessed(t *testing.T) {
 	}
 	if c.Timestamp.IsZero() {
 		t.Error("Timestamp is zero, want the line's own timestamp")
+	}
+}
+
+// Walk's contract is "transcripts", not "every .jsonl". The regression that
+// prompted this: a workflow journal was ingested as an agent run and produced
+// a row with no model, no tokens and no tool calls. The guard is the agent-
+// prefix and deliberately not the nesting depth, because a workflow's own
+// subagents are real transcripts two levels below subagents/.
+func TestWalkDiscoversTranscriptsOnly(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]bool{ // path relative to root -> want discovered
+		"-h-u-proj/sess.jsonl":                                  true,
+		"-h-u-proj/sess/subagents/agent-1.jsonl":                true,
+		"-h-u-proj/sess/subagents/workflows/wf-9/agent-2.jsonl": true,
+		"-h-u-proj/sess/subagents/workflows/wf-9/journal.jsonl": false,
+		"-h-u-proj/notes.md":                                    false,
+	}
+	for rel := range files {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := Walk(root)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	found := make(map[string]bool, len(got))
+	for _, p := range got {
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found[filepath.ToSlash(rel)] = true
+	}
+	for rel, want := range files {
+		if found[rel] != want {
+			t.Errorf("Walk discovered %q = %v, want %v", rel, found[rel], want)
+		}
 	}
 }

@@ -258,8 +258,22 @@ func kindForPath(path string) string {
 }
 
 // Walk discovers transcript files under a Claude Code projects root
-// (typically ~/.claude/projects): every top-level session .jsonl file, plus
-// every subagent's own agent-*.jsonl file under <session-id>/subagents/.
+// (typically ~/.claude/projects): every session .jsonl file, plus every
+// subagent's own agent-*.jsonl file under <session-id>/subagents/.
+//
+// Not every .jsonl under the root is a transcript. A workflow run writes
+// subagents/workflows/<wf-id>/journal.jsonl, which carries orchestration
+// records ("started"/"result" keyed by agentId), no assistant turns and no
+// usage. Ingesting it yields a run with no model, no tokens and no tool
+// calls - a phantom that inflates the run count, adds an unlabelled bucket
+// to the by-model breakdown, and lands in the denominators policy decisions
+// are computed from. So under subagents/ the agent- prefix is required.
+//
+// Depth deliberately does not enter into it: a workflow's own subagents live
+// at subagents/workflows/<wf-id>/agent-<id>.jsonl, two levels down, and are
+// real transcripts. On the corpus this was measured against, requiring the
+// file to sit directly inside subagents/ would have dropped 42 of them.
+//
 // Files are returned in no particular order; the caller decides ingest order.
 func Walk(root string) ([]string, error) {
 	var files []string
@@ -271,6 +285,9 @@ func Walk(root string) ([]string, error) {
 			return nil
 		}
 		if !strings.HasSuffix(path, ".jsonl") {
+			return nil
+		}
+		if kindForPath(path) == "agent" && !strings.HasPrefix(filepath.Base(path), "agent-") {
 			return nil
 		}
 		files = append(files, path)
