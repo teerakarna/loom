@@ -125,12 +125,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `loom status` no longer guesses why a ledger row failed to come back from the walk. "Walk did not
   return it" was reported as "gone from disk" regardless of the reason, and a first attempt at fixing
   that reintroduced the same false signal one layer up, reporting 221 real transcripts as prunable
-  against a narrowed root. It now counts five states apart, each keyed on its own positive signal
-  rather than on what is left over: prunable (the same predicate `loom report` prunes on), genuinely
-  absent, present but unreadable, outside the root being asked about, and under the root but still
-  not walked. A file the walk did return but could not stat is counted too, so the freshness totals
-  add up. A projects root that does not exist is still a normal state for a new install, but any
-  other walk failure is now an error rather than a silent set of zeroes that read as an empty ledger.
+  against a narrowed root. It now counts five states apart. Four are keyed on a positive signal of
+  their own: prunable (the same predicate `loom report` prunes on), genuinely absent, present but
+  unreadable, and demonstrably outside the root being asked about. The fifth is the remainder, and is
+  labelled as one - "readable, not outside the root, and not walked" - rather than given a cause
+  nothing checked, because a row of that shape (a non-transcript `.jsonl` beside a workflow's
+  subagents) is real and never clears. A file the walk did return but could not stat is counted too,
+  so the freshness totals add up. A projects root that does not exist is still a normal state for a
+  new install, but any other walk failure is now an error rather than a silent set of zeroes that
+  read as an empty ledger. Both commands also normalise the root to an absolute path: ledger paths
+  are stored as walked and compared textually, so `loom report .claude/projects` followed by
+  `loom status ~/.claude/projects` reported one ingested, unchanged file as both "never ingested"
+  and "in ledger, outside root". The prune now runs before the walk rather than after, so the one
+  remedy `loom status` names for a prunable row still runs when the walk itself fails.
 
 ### Added
 

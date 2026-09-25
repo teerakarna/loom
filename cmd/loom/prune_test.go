@@ -112,8 +112,16 @@ func TestFreshnessSeparatesTheNotWalkedStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	gone := filepath.Join(root, "proj", "deleted.jsonl")
+	// A dangling symlink is walked (WalkDir lstats, so it is a plain .jsonl
+	// entry) and then fails os.Stat, which is the only way to reach the
+	// state-unknown count. Without it the totals assertion below is vacuous:
+	// deleting the increment it guards leaves 1+0+0+0 == 1 passing.
+	dangling := filepath.Join(root, "proj", "dangling.jsonl")
+	if err := os.Symlink(filepath.Join(root, "proj", "nothing-here.jsonl"), dangling); err != nil {
+		t.Fatal(err)
+	}
 
-	for _, p := range []string{current, journal, odd, elsewhere, gone} {
+	for _, p := range []string{current, journal, odd, elsewhere, gone, dangling} {
 		insertRun(t, db, p)
 	}
 	// Sizes must match for `current` to count as current rather than stale.
@@ -137,7 +145,8 @@ func TestFreshnessSeparatesTheNotWalkedStates(t *testing.T) {
 		{"prunable", f.prunable},
 		{"missing", f.missing},
 		{"outsideRoot", f.outsideRoot},
-		{"unexpected", f.unexpected},
+		{"unexplained", f.unexplained},
+		{"unreadableOnDisk", f.unreadableOnDisk},
 	} {
 		if c.got != 1 {
 			t.Errorf("%s = %d, want 1 (counts: %+v)", c.name, c.got, f)
@@ -173,5 +182,49 @@ func TestFreshnessOnAMissingRootStillClassifiesLedgerRows(t *testing.T) {
 	}
 	if f.missing != 1 {
 		t.Errorf("missing = %d, want 1 - the row was dropped rather than classified (counts: %+v)", f.missing, f)
+	}
+}
+
+// rootIsAbsent is the only thing separating a new install from a walk that broke
+// half way, and the error cannot tell them apart: WalkDir returns ENOENT for both
+// "that root does not exist" and "a directory vanished while I was reading it".
+// Tested directly because the second one is a race and cannot be staged, so no
+// end-to-end test can reach it - which is also why the predicate has a name.
+func TestRootIsAbsentAsksAboutTheRootNotTheError(t *testing.T) {
+	root := t.TempDir()
+	if rootIsAbsent(root) {
+		t.Error("an existing root read as absent, so a mid-walk failure would be classified as a new install")
+	}
+	if !rootIsAbsent(filepath.Join(root, "never-created")) {
+		t.Error("a missing root read as present, so a new install would be a hard error")
+	}
+}
+
+// And the behaviour that predicate guards: a root that exists but cannot be
+// walked must fail loudly. What this replaces returned every count as zero, so
+// one unreadable directory printed "0 transcripts on disk, 0 ingested" against a
+// ledger holding hundreds of rows.
+//
+// Staged with an unreadable subdirectory because that is deterministic. It is
+// EACCES rather than the ENOENT a mid-walk removal gives, so this test does not
+// by itself distinguish the two cases above - that is what the predicate test is
+// for.
+func TestFreshnessFailsLoudlyWhenAnExistingRootCannotBeWalked(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions, so the walk would not fail")
+	}
+	root := t.TempDir()
+	blocked := filepath.Join(root, "proj")
+	if err := os.Mkdir(blocked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	// Restored so TempDir's own cleanup can remove it.
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o700) })
+
+	db := openTestLedger(t)
+	insertRun(t, db, filepath.Join(blocked, "sess.jsonl"))
+
+	if _, err := freshness(db, root); err == nil {
+		t.Error("freshness returned no error on a root it could not walk: a partial file list classifies live transcripts as unexplained")
 	}
 }

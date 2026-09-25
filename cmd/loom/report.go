@@ -50,6 +50,16 @@ func runReport(args []string) error {
 		}
 		root = args[i]
 	}
+	// Absolute, always. The walked path is what gets stored as runs.path, so a
+	// relative root writes relative rows, and every later comparison against
+	// them is textual: `loom report .claude/projects` then `loom status
+	// ~/.claude/projects` reported the same ingested, unchanged file as both
+	// "never ingested" and "in ledger, outside root". Normalising at the two
+	// entry points is what makes the ledger's paths comparable at all.
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return err
+	}
 
 	ledgerPath, err := defaultLedgerPath()
 	if err != nil {
@@ -90,12 +100,18 @@ func runReport(args []string) error {
 // reference an agent whose own file is discovered in any order during the
 // walk.
 func ingestAll(db *ledger.DB, root string) error {
-	paths, err := ingest.Walk(root)
-	if err != nil {
+	// Before the walk, deliberately. The prune reads the ledger and touches no
+	// file, so making it wait behind a walk that can fail means the one remedy
+	// `loom status` names for a prunable row does not run in the states where
+	// the walk errors - including a projects root that does not exist, where
+	// status prints "`loom report` deletes these rows" and report exits on an
+	// lstat before reaching this line.
+	if err := pruneWorkflowJournals(db); err != nil {
 		return err
 	}
 
-	if err := pruneWorkflowJournals(db); err != nil {
+	paths, err := ingest.Walk(root)
+	if err != nil {
 		return err
 	}
 
@@ -372,16 +388,18 @@ func pruneWorkflowJournals(db *ledger.DB) error {
 	if err != nil {
 		return err
 	}
-	// Report what was deleted, not what was a candidate. DeleteRuns skips a
-	// path with no row rather than failing, so the two lists can differ - a
-	// duplicate path in the candidate list, or a stale list assembled before
-	// something else removed the row, and printing the candidates claims prunes
-	// that did not happen. This output exists precisely to make an unexplained
-	// drop in the run count explainable, which a wrong line undoes.
+	// Report what was deleted, not what was a candidate. DeleteRuns skips a path
+	// with no row rather than failing, so the two lists can differ, and printing
+	// the candidates claims prunes that did not happen - in output whose whole
+	// purpose is making a drop in the run count explainable.
 	//
-	// Not a concurrency story, despite reading like one: the connection sets no
-	// busy_timeout (ledger.Open), so a second `loom report` racing this one
-	// fails with SQLITE_BUSY rather than quietly winning the delete.
+	// The reachable cause is a second `loom report` on the same ledger, and it
+	// involves no lock contention at all: KnownRuns above runs outside any
+	// transaction, DeleteRuns opens its own, and a concurrent prune that commits
+	// in that window leaves our SELECT with no row to find. (An earlier version
+	// of this comment claimed the opposite - that such a race would surface as
+	// SQLITE_BUSY - and also offered a duplicate candidate path as the cause,
+	// which runs.path being UNIQUE makes impossible. Both wrong.)
 	for _, p := range deleted {
 		fmt.Fprintf(os.Stderr, "loom: pruned non-transcript ledger row %s\n", p)
 	}
