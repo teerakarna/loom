@@ -65,7 +65,18 @@ func (d *DB) InsertRun(r RunRecord) error {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path) DO UPDATE SET
 			size_bytes = excluded.size_bytes, session_id = excluded.session_id,
-			kind = excluded.kind, model = excluded.model, lane = excluded.lane,
+			kind = excluded.kind, model = excluded.model,
+			-- An empty lane carries no information, so it must not displace a
+			-- known one. Lane is derived from the root of the invocation that read
+			-- the file, and LaneFromPath returns "" for a file sitting directly in
+			-- that root - so re-reading a transcript under a report narrowed to one
+			-- project recomputed its lane as empty and wrote that over the real
+			-- one. Nothing repaired it afterwards: the size matched and
+			-- the feature version was current, so NeedsIngest vetoed every later
+			-- read and the run stayed in UnattributedLanes for good. The reverse
+			-- never needs expressing - a run does not move out of the projects
+			-- root without its path changing, which makes it a different row.
+			lane = COALESCE(NULLIF(excluded.lane, ''), runs.lane),
 			agent_type = excluded.agent_type,
 			effort = excluded.effort, started_at = excluded.started_at, ended_at = excluded.ended_at,
 			input_tokens = excluded.input_tokens, output_tokens = excluded.output_tokens,

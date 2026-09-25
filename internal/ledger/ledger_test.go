@@ -124,6 +124,50 @@ func TestInsertRunReplacesRatherThanDuplicating(t *testing.T) {
 	}
 }
 
+// Replacement is not blanket overwriting: a re-read that cannot work out the lane
+// must leave the known one alone. Lane is derived from the root of the invocation
+// that read the file, and it is empty for a file sitting directly in that root -
+// so a report narrowed to one project recomputed every lane in it as empty. With
+// a plain `lane = excluded.lane` that empty value won, and nothing ever repaired
+// it: the size matched and the feature version was current, so NeedsIngest vetoed
+// every later read and the run sat in UnattributedLanes permanently.
+//
+// The other direction is asserted too, because COALESCE must not be mistaken for
+// "first write wins" - a real lane still replaces a real lane, and a first insert
+// of an empty one is still empty rather than an error.
+func TestInsertRunKeepsAKnownLaneWhenTheNewOneIsEmpty(t *testing.T) {
+	db := openTestDB(t)
+	rec := RunRecord{Path: "p/sess.jsonl", Kind: "session", SizeBytes: 10, Lane: "proj-a"}
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	rec.Lane = ""
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := laneOf(t, db, rec.Path); got != "proj-a" {
+		t.Errorf("lane = %q after a re-read that could not derive one, want proj-a: that run is now unattributable for good", got)
+	}
+
+	rec.Lane = "proj-b"
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := laneOf(t, db, rec.Path); got != "proj-b" {
+		t.Errorf("lane = %q, want proj-b: a real lane must still replace a real lane", got)
+	}
+}
+
+func laneOf(t *testing.T, db *DB, path string) string {
+	t.Helper()
+	var lane string
+	if err := db.sql.QueryRow(`SELECT lane FROM runs WHERE path = ?`, path).Scan(&lane); err != nil {
+		t.Fatal(err)
+	}
+	return lane
+}
+
 // TestNeedsIngestDetectsAGrownFile is the regression test for silent cost
 // under-counting. Ingest previously keyed on path alone, so a session
 // transcript that grew after being ingested was frozen at its first reading
