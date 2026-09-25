@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/teerakarna/loom/internal/ingest"
 	"github.com/teerakarna/loom/internal/ledger"
@@ -100,19 +101,28 @@ func runReport(args []string) error {
 // reference an agent whose own file is discovered in any order during the
 // walk.
 func ingestAll(db *ledger.DB, root string) error {
-	// Before the walk, deliberately, and for two reasons now. The prune reads the
-	// ledger and touches no file, so making it wait behind a walk that can fail
-	// means the one remedy `loom status` names for a prunable row does not run in
-	// the states where the walk errors - including a projects root that does not
-	// exist, where status prints "`loom report` deletes these rows" and report
-	// exits on an lstat before reaching this line. And a relative row must go
-	// before the walk can insert its absolute replacement, or the ledger ends up
-	// holding both.
-	if err := pruneUnmatchableRows(db); err != nil {
+	// Journals before the walk, deliberately. The prune reads the ledger and
+	// touches no file, so making it wait behind a walk that can fail means the one
+	// remedy `loom status` names for these rows does not run in the states where
+	// the walk errors - including a projects root that does not exist, where status
+	// names a remedy and report exits on an lstat before reaching this line.
+	// Unconditional is safe here and only here: a journal was never a transcript,
+	// so no walk will ever return it, nothing is waiting to replace it, and it owns
+	// no child rows to lose.
+	if err := pruneJournalRows(db); err != nil {
 		return err
 	}
 
 	paths, err := ingest.Walk(root)
+	if err != nil {
+		return err
+	}
+
+	// The relative rows only now, once the walk has actually produced the files
+	// that replace them. That ordering is the whole fix - see
+	// supersedeRelativeRows, which also explains why "delete it, the walk will
+	// bring it back" was three separate kinds of wrong when it ran above.
+	reingest, err := supersedeRelativeRows(db, paths)
 	if err != nil {
 		return err
 	}
@@ -133,7 +143,12 @@ func ingestAll(db *ledger.DB, root string) error {
 		if err != nil {
 			return err
 		}
-		if needs {
+		// reingest overrides NeedsIngest rather than being consulted after it:
+		// a file whose relative row was just deleted usually has an absolute
+		// row of the same size already, which is exactly the case NeedsIngest
+		// answers "no" to. Without the override the runs row comes back and its
+		// child rows never do.
+		if needs || reingest[p] {
 			toInsert = append(toInsert, p)
 		}
 	}
@@ -353,93 +368,183 @@ func printGroup(s ledger.Summary, heading string, n int, row func(int) (string, 
 	}
 }
 
-// pruneUnmatchableRows drops rows no walk can ever match again, so the ledger
-// stops carrying numbers nothing can explain. Two kinds qualify, both written by
-// earlier versions of this program:
+// pruneJournalRows drops rows for workflow orchestration journals. A ledger built
+// before ingest.IsTranscript existed holds one run per
+// `subagents/workflows/<id>/journal.jsonl`, with no model, no tokens and no tool
+// calls. Nothing else removes them - reports, status and the MCP cost summary all
+// count `runs` unfiltered, so they keep inflating the totals for as long as the
+// ledger lives.
 //
-// A workflow orchestration journal. A ledger built before ingest.IsTranscript
-// existed holds one run per `subagents/workflows/<id>/journal.jsonl`, with no
-// model, no tokens and no tool calls. Nothing else removes them - reports, status
-// and the MCP cost summary all count `runs` unfiltered, so they keep inflating
-// the totals for as long as the ledger lives.
-//
-// A relative path. `loom report <relative root>` used to store whatever it walked,
-// and paths are compared as text everywhere, so now that both entry points
-// absolutise, such a row can never match a walked file again: it reads as unseen
-// and unexplained at once, and the next report inserts a second row for the same
-// file under its absolute name. The row cannot be repaired instead of deleted -
-// the working directory it was relative to is not recorded anywhere, and
-// resolving it against whatever the cwd happens to be now is precisely the
-// inference this command spent several rounds removing. Deleting is nearly free
-// when the file is still under the root, since the walk immediately below
-// re-ingests it in full. It does lose history in one case, a relative row whose
-// file has since gone from disk, and that is accepted deliberately: the choice
-// there is between a figure no comparison can reach and no figure at all.
-//
-// The journal case is deliberately keyed on the one known-bad filename rather
-// than on !IsTranscript, even though that reads as the more general fix. The
-// complement of a whitelist has unbounded blast radius: if the host ever
-// changes the subagent naming convention, or a ledger carries rows from a host
-// that used a different one, every subagent run under subagents/ would be
-// deleted with its child rows, and Walk would skip the same files so nothing
-// would re-ingest them. A phantom row that survives is a wrong number; a
-// wrongly deleted row is lost data. The paths go to stderr for the same
-// reason - a count alone leaves no way to see what went.
+// Deliberately keyed on the one known-bad filename rather than on !IsTranscript,
+// even though that reads as the more general fix. The complement of a whitelist
+// has unbounded blast radius: if the host ever changes the subagent naming
+// convention, or a ledger carries rows from a host that used a different one,
+// every subagent run under subagents/ would be deleted with its child rows, and
+// Walk would skip the same files so nothing would re-ingest them. A phantom row
+// that survives is a wrong number; a wrongly deleted row is lost data. The paths
+// go to stderr for the same reason - a count alone leaves no way to see what went.
 //
 // Keyed on the path shape rather than on cost, too: a genuinely zero-cost run
 // (a subagent that produced no assistant turn) is real data and must survive.
-func pruneUnmatchableRows(db *ledger.DB) error {
+func pruneJournalRows(db *ledger.DB) error {
 	known, err := db.KnownRuns()
 	if err != nil {
 		return err
 	}
-	var stale []string
+	var journals []string
 	for _, k := range known {
-		if isPrunableLedgerPath(k.Path) {
-			stale = append(stale, k.Path)
+		if isJournalLedgerPath(k.Path) {
+			journals = append(journals, k.Path)
 		}
 	}
-	if len(stale) == 0 {
+	if len(journals) == 0 {
 		return nil
 	}
-	deleted, err := db.DeleteRuns(stale)
+	deleted, err := db.DeleteRuns(journals)
 	if err != nil {
 		return err
 	}
-	// Report what was deleted, not what was a candidate. DeleteRuns skips a path
-	// with no row rather than failing, so the two lists can differ, and printing
-	// the candidates claims prunes that did not happen - in output whose whole
-	// purpose is making a drop in the run count explainable.
-	//
-	// The reachable cause is a second `loom report` on the same ledger, and it
-	// involves no lock contention at all: KnownRuns above runs outside any
-	// transaction, DeleteRuns opens its own, and a concurrent prune that commits
-	// in that window leaves our SELECT with no row to find. (An earlier version
-	// of this comment claimed the opposite - that such a race would surface as
-	// SQLITE_BUSY - and also offered a duplicate candidate path as the cause,
-	// which runs.path being UNIQUE makes impossible. Both wrong.)
-	for _, p := range deleted {
-		fmt.Fprintf(os.Stderr, "loom: pruned unmatchable ledger row %s\n", p)
-	}
+	reportPruned(deleted, "pruned unmatchable ledger row")
 	return nil
 }
 
-// isPrunableLedgerPath reports whether a ledger row's path is one `loom report`
-// will delete. Shared with `loom status`, which tells the user that running a
-// report clears these rows: keying both on one predicate is what makes that
-// claim true rather than merely true today. The two drifting apart is not a
-// hypothetical - status's first version inferred "not a transcript" from "Walk
-// did not return it", which counted every row outside a narrowed root as
-// prunable and pointed them at a remedy that would never touch them.
+// supersedeRelativeRows deletes ledger rows stored under a relative path - but
+// only the ones this walk has demonstrably replaced - and returns the walked
+// paths that must be re-read as a result.
 //
-// The relative test comes first because it is the one that must not be reached
-// through a stat: a relative path resolves against whatever the working directory
-// happens to be, so classifying it any later makes the answer depend on where the
-// command was run from. See pruneUnmatchableRows for why such a row is deleted
-// rather than repaired.
-func isPrunableLedgerPath(path string) bool {
-	if !filepath.IsAbs(path) {
-		return true
+// `loom report <relative root>` used to store whatever it walked, and paths are
+// compared as text everywhere, so now that both entry points absolutise, such a
+// row can never match a walked file again: it reads as unseen and unexplained at
+// once, and the next report inserts a second row for the same file under its
+// absolute name. It has to go, and it cannot be repaired in place instead - the
+// working directory it was relative to is not recorded anywhere, and resolving it
+// against whatever the cwd happens to be now is precisely the inference this
+// command spent several rounds removing.
+//
+// What separates this from the journal prune is that the row is a full transcript
+// with tool_usage, compaction and asset_usage rows hanging off it, so "delete it,
+// the walk will bring it back" is an assumption and not a fact. An earlier version
+// of this ran before the walk and stated that premise as though it were free.
+// Measured, it was wrong three ways, and the worst of them is silent:
+//
+//   - Once one report has run since the root was absolutised, the ledger holds two
+//     rows for the same file and every child row is still attached to the relative
+//     one - tool_use_id and boundary_uuid are globally unique and insert with ON
+//     CONFLICT DO NOTHING, so the second row's inserts were all no-ops. Deleting
+//     the relative row takes those children with it, and NeedsIngest then vetoes
+//     re-reading the file because the absolute row's size already matches. The
+//     occupancy and asset-usage data is gone for good, across any number of later
+//     reports, and nothing says so. Losing asset_usage is worse than losing a
+//     number: propose.retireStaleAssets falls back to first_seen when an asset has
+//     no usage row, so it starts offering live assets for retirement as never-used.
+//   - A narrowed root (`loom report <root>/one-project`) deleted the relative rows
+//     of every other project, which it was never going to walk or re-ingest.
+//   - A root that is absent or on an unmounted volume deleted every relative row
+//     and then failed on the lstat, leaving nothing to restore them from. That one
+//     also broke a promise made two lines apart in `loom status`, which says an
+//     unreadable row means "not data loss".
+//
+// So the delete needs a positive signal, and the signal is the walk itself: a
+// walked path that ends in this row's path. Matched against the walk rather than
+// against the filesystem because the walk is the thing that does the replacing,
+// and a suffix is sound here - a relative row's text is whatever Walk handed back
+// under a relative root, which is always a tail of that file's real absolute path.
+// Ambiguity is left alone rather than guessed at: if two walked files could both be
+// this row, nothing here can say which, so the row survives and `loom status` goes
+// on reporting it.
+//
+// DeleteRuns is called once for the whole set, and the matched paths are returned
+// so the caller can force a re-read. Both halves are needed - deleting without the
+// forced re-read leaves the child rows gone, which is the first bullet above.
+func supersedeRelativeRows(db *ledger.DB, walked []string) (map[string]bool, error) {
+	known, err := db.KnownRuns()
+	if err != nil {
+		return nil, err
 	}
+
+	reingest := map[string]bool{}
+	var superseded []string
+	for _, k := range known {
+		if filepath.IsAbs(k.Path) {
+			continue
+		}
+		replacement, ok := soleWalkedPathEndingIn(walked, k.Path)
+		if !ok {
+			continue
+		}
+		superseded = append(superseded, k.Path)
+		reingest[replacement] = true
+	}
+	if len(superseded) == 0 {
+		return nil, nil
+	}
+	deleted, err := db.DeleteRuns(superseded)
+	if err != nil {
+		return nil, err
+	}
+	reportPruned(deleted, "replaced relative ledger row with its absolute path, re-reading")
+	return reingest, nil
+}
+
+// soleWalkedPathEndingIn finds the one walked path that rel is a tail of, and
+// reports false when there is no such path or more than one. Zero means the walk
+// cannot replace that row, so it must not be deleted; more than one means the row
+// is genuinely ambiguous, and a coin toss between two real files is worse than
+// leaving a row `loom status` already reports.
+func soleWalkedPathEndingIn(walked []string, rel string) (string, bool) {
+	suffix := string(filepath.Separator) + filepath.Clean(rel)
+	var found string
+	n := 0
+	for _, p := range walked {
+		if strings.HasSuffix(p, suffix) {
+			found = p
+			n++
+		}
+	}
+	return found, n == 1
+}
+
+// reportPruned names what was deleted, not what was a candidate. DeleteRuns skips
+// a path with no row rather than failing, so the two lists can differ, and
+// printing the candidates claims prunes that did not happen - in output whose
+// whole purpose is making a drop in the run count explainable.
+//
+// The reachable cause is a second `loom report` on the same ledger, and it
+// involves no lock contention at all: KnownRuns runs outside any transaction,
+// DeleteRuns opens its own, and a concurrent prune that commits in that window
+// leaves our SELECT with no row to find. (An earlier version of this comment
+// claimed the opposite - that such a race would surface as SQLITE_BUSY - and also
+// offered a duplicate candidate path as the cause, which runs.path being UNIQUE
+// makes impossible. Both wrong.)
+func reportPruned(deleted []string, what string) {
+	for _, p := range deleted {
+		fmt.Fprintf(os.Stderr, "loom: %s %s\n", what, p)
+	}
+}
+
+// isJournalLedgerPath reports whether a ledger row is a workflow orchestration
+// journal. Not conditioned on the path being absolute: a relative journal row is
+// doubly unmatchable, and letting the relative pass have it would leave it in the
+// ledger forever, since no walk will ever produce the replacement that pass
+// requires.
+func isJournalLedgerPath(path string) bool {
 	return filepath.Base(path) == "journal.jsonl" && !ingest.IsTranscript(path)
+}
+
+// isPrunableLedgerPath reports whether a ledger row's path is one no walk can
+// match, in either of the two ways. Shared with `loom status`, which tells the
+// user a report clears these rows: keying both on one predicate is what keeps
+// that claim from drifting. It is not a hypothetical - status's first version
+// inferred "not a transcript" from "Walk did not return it", which counted every
+// row outside a narrowed root as prunable and pointed them at a remedy that would
+// never touch them.
+//
+// What the two callers do with a true answer is deliberately not the same, and
+// status's wording has to stay inside the weaker of the two. A journal is deleted
+// outright; a relative row is deleted only once the walk has produced its
+// replacement, so under a narrowed root a relative row can classify as prunable
+// here and correctly survive the report. Both are still "no walk can match this",
+// which is what this predicate answers and all that the label claims.
+func isPrunableLedgerPath(path string) bool {
+	return isJournalLedgerPath(path) || !filepath.IsAbs(path)
 }

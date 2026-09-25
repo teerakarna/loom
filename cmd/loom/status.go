@@ -106,8 +106,14 @@ func runStatus(args []string) error {
 	// not name the two reasons either: "not a transcript" was accurate while the
 	// journal was the only one, and became a false statement about a relative row
 	// the moment that was added.
+	//
+	// "clears what it can replace" rather than "deletes these rows", because the
+	// two classes are not cleared the same way: a journal goes outright, a relative
+	// row goes only once the walk has produced its replacement. Against a narrowed
+	// root a relative row is correctly counted here and correctly left alone by the
+	// report, and the earlier unconditional wording promised otherwise.
 	if fresh.prunable > 0 {
-		fmt.Printf("  in ledger, unmatchable    %d  (`loom report` deletes these rows)\n", fresh.prunable)
+		fmt.Printf("  in ledger, unmatchable    %d  (`loom report` clears what it can replace)\n", fresh.prunable)
 	}
 	if fresh.outsideRoot > 0 {
 		fmt.Printf("  in ledger, outside root   %d  (nothing to do; the root is an argument)\n", fresh.outsideRoot)
@@ -119,9 +125,14 @@ func runStatus(args []string) error {
 	// without calling the predicate that decides it is the same overreach the
 	// three rounds before this one kept producing - and so was the version of this
 	// line that said "readable, not outside the root": stat succeeding does not
-	// mean the file can be opened, and outsideRoot answers false for "cannot tell"
-	// as well as for "inside", so neither word was checked. Both are now stated as
-	// what was actually established.
+	// mean the file can be opened, and outsideRoot answers false for anything it
+	// cannot resolve as well as for "inside", so neither word was checked. Both are
+	// now stated as what was actually established. That second hedge is about what
+	// the predicate returns, not about a state reachable from here - every path
+	// getting this far is absolute and cleaned, so the unresolvable case does not
+	// arise. Wording a label to what its check establishes, rather than to what
+	// happens to be reachable today, is what stops it going stale the next time the
+	// caller changes.
 	if fresh.unexplained > 0 {
 		fmt.Printf("  in ledger, unexplained    %d  (exists, not known to be outside the root, and not walked - worth reporting)\n", fresh.unexplained)
 	}
@@ -231,7 +242,7 @@ func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 		// about the root and not about the error - an ENOENT alone cannot tell
 		// the two apart.
 		//
-		// The version before this returned the zero struct here without
+		// The first version of this block returned the zero struct here without
 		// classifying anything, so a missing root printed "0 transcripts on
 		// disk, 0 ingested" against a ledger holding hundreds of rows. Absence
 		// read as confirmed-empty is the failure this project has already had
@@ -273,9 +284,11 @@ func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 		// the thing that matters is that its label claims nothing more than
 		// "none of the above fired":
 		//
-		//   - not a path Walk would ever ingest, and `loom report` deletes it:
-		//     the one case where naming a remedy is honest, so it is keyed on
-		//     the same predicate the prune uses.
+		//   - not a path any walk can match, and `loom report` clears it: the
+		//     one case where naming a remedy is honest, so it is keyed on the
+		//     same predicate the prune uses. "Clears", not "deletes" - one of
+		//     the two classes is deleted only once the walk has produced its
+		//     replacement, and the label must not overstate the weaker half.
 		//   - genuinely absent: the row outlived its file.
 		//   - present but unreadable: says nothing about the data, and must
 		//     not be reported as absence.
@@ -336,12 +349,21 @@ func rootIsAbsent(root string) bool {
 // says so. Answering true here instead is how the relative-root bug printed
 // "nothing to do; the root is an argument" about a current transcript.
 //
-// The reachable unresolvable case is one side being relative, and those are now
-// pruned before this is called. An earlier version of this comment also offered
-// differing volumes as an example, which is a counterexample to its own rule: two
-// volumes cannot be Rel'd precisely because one is definitively outside the other.
-// Nothing here runs on a platform with volume names, so the case is left out
-// rather than half-handled.
+// As called today that branch is unreachable, and saying so is the point rather
+// than an excuse to drop it: filepath.Rel only fails when it cannot express p
+// relative to root, which on this platform means one of them is relative, and the
+// classifier buckets a relative row before it gets here while root is absolutised
+// at both entry points. So this is a contract, not a live case - anything that
+// cannot be resolved is "cannot tell", and only the caller's shape keeps that from
+// happening.
+//
+// An earlier version of this comment offered differing volumes as the example,
+// which is a counterexample to its own rule: two volumes cannot be Rel'd precisely
+// because one is definitively outside the other. Nothing here runs on a platform
+// with volume names, so the case is left out rather than half-handled. A later one
+// said relative paths are "pruned before this is called", which was wrong in a way
+// worth naming - they are *classified* before this is called, and a report only
+// prunes the ones it can replace.
 func outsideRoot(root, p string) bool {
 	rel, err := filepath.Rel(root, p)
 	if err != nil {

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/teerakarna/loom/internal/ledger"
@@ -47,36 +48,36 @@ func knownPaths(t *testing.T, db *ledger.DB) map[string]bool {
 // re-ingest them. A phantom row is a wrong number; a wrongly deleted row is
 // lost data.
 //
-// The relative row is the second prunable class and is the migration for this
-// branch's own change: absolutising the root fixed the paths going in and did
-// nothing for the ones already stored, which can no longer match a walked file
-// under any root. Left in place, the next report inserts a second row for the
-// same file and the ledger double-counts its cost forever.
-func TestPruneUnmatchableRowsTakesOnlyJournalsAndRelativePaths(t *testing.T) {
+// A relative journal is deliberately this pass's problem and not the relative
+// pass's. It qualifies on both counts, and the relative pass only deletes a row
+// once the walk has produced a replacement - which for a journal never happens,
+// since no walk returns one. Routed the other way it would sit in the ledger
+// forever.
+func TestPruneJournalRowsTakesJournalsWhereverTheyAre(t *testing.T) {
 	db := openTestLedger(t)
 	prune := []string{
 		"/p/sess/subagents/workflows/wf-1/journal.jsonl", // orchestration journal, no usage
-		"p/sess.jsonl",                                   // relative: written by an older `loom report <relative root>`
-		"./p/sess/subagents/agent-9.jsonl",               // relative and a real transcript; still unmatchable
+		"p/sess/subagents/workflows/wf-2/journal.jsonl",  // the same, stored relative
 	}
 	keep := []string{
 		"/p/sess.jsonl",                                   // session transcript
 		"/p/sess/subagents/agent-1.jsonl",                 // subagent transcript
 		"/p/sess/subagents/workflows/wf-1/agent-2.jsonl",  // workflow's own subagent
 		"/p/sess/subagents/workflows/wf-1/whatever.jsonl", // not a transcript, not a journal
+		"p/sess.jsonl",                                    // relative, but a real transcript: not this pass's
 	}
 	for _, p := range append(append([]string{}, prune...), keep...) {
 		insertRun(t, db, p)
 	}
 
-	if err := pruneUnmatchableRows(db); err != nil {
+	if err := pruneJournalRows(db); err != nil {
 		t.Fatal(err)
 	}
 
 	got := knownPaths(t, db)
 	for _, p := range prune {
 		if got[p] {
-			t.Errorf("unmatchable row %s survived the prune", p)
+			t.Errorf("journal row %s survived the prune", p)
 		}
 	}
 	for _, p := range keep {
@@ -86,12 +87,250 @@ func TestPruneUnmatchableRowsTakesOnlyJournalsAndRelativePaths(t *testing.T) {
 	}
 }
 
+// The relative rows are the migration for this branch's own change: absolutising
+// the root fixed the paths going in and did nothing for the ones already stored,
+// which can no longer match a walked file under any root. Left in place, the next
+// report inserts a second row for the same file and the ledger double-counts its
+// cost forever.
+//
+// But a relative row is a full transcript with child rows hanging off it, so
+// deleting one is only safe when the walk has actually produced its replacement.
+// The version before this deleted every relative row unconditionally, before the
+// walk, on the stated premise that the walk re-ingests each one in full. Three
+// measured counterexamples, two of them staged below and the third in
+// TestIngestAllKeepsChildRowsWhenMigratingARelativeRow: a narrowed root deleted
+// rows it was never going to walk, an absent root deleted every one of them and
+// then failed, and an already-migrated file lost its child rows permanently.
+func TestSupersedeRelativeRowsOnlyTakesRowsTheWalkReplaces(t *testing.T) {
+	db := openTestLedger(t)
+	walked := []string{
+		"/home/me/.claude/projects/p/sess.jsonl",
+		"/home/me/.claude/projects/p/sess/subagents/agent-9.jsonl",
+		// Two walked files with the same tail: the root was moved or copied,
+		// and both halves are still under it.
+		"/home/me/.claude/projects/dup/sess.jsonl",
+		"/home/me/.claude/projects/old/dup/sess.jsonl",
+	}
+	superseded := []string{
+		"p/sess/subagents/agent-9.jsonl",   // walked exactly once: safe to replace
+		"./p/sess/subagents/agent-9.jsonl", // same file, unclean spelling
+	}
+	keep := []string{
+		"p/gone.jsonl",   // nothing walked ends here: the walk cannot replace it
+		"dup/sess.jsonl", // ends two walked paths: ambiguous, so not guessed at
+	}
+	for _, p := range append(append([]string{}, superseded...), keep...) {
+		insertRun(t, db, p)
+	}
+
+	reingest, err := supersedeRelativeRows(db, walked)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := knownPaths(t, db)
+	for _, p := range superseded {
+		if got[p] {
+			t.Errorf("relative row %s survived even though the walk replaced it", p)
+		}
+	}
+	for _, p := range keep {
+		if !got[p] {
+			t.Errorf("deleted %s with no walked replacement for it: that row's history is simply gone", p)
+		}
+	}
+	// The forced re-read is half the fix. Without it the replacement keeps
+	// whatever child rows it already had, which is none.
+	want := map[string]bool{"/home/me/.claude/projects/p/sess/subagents/agent-9.jsonl": true}
+	if len(reingest) != len(want) {
+		t.Fatalf("reingest = %v, want %v", reingest, want)
+	}
+	for p := range want {
+		if !reingest[p] {
+			t.Errorf("reingest is missing %s, so NeedsIngest will veto re-reading it", p)
+		}
+	}
+}
+
+// transcriptWithChildRows writes a session transcript that produces tool_usage and
+// compaction rows, not just a runs row. That distinction is the whole point of the
+// test below: a fixture of bare `{}` lines ingests fine and proves nothing, because
+// the data the migration was destroying lives in the child tables.
+//
+// The shapes are the ones ingest actually keys on, and getting them wrong fails
+// silently. tool_usage comes from a `tool_result` block on a **user** line, matched
+// back to a `tool_use` id seen earlier on an assistant line - a `tool_use` alone
+// records nothing. A compaction needs a `system` line with subtype
+// `compact_boundary`, a non-empty `uuid` to dedupe on, and a `compactMetadata`
+// object; miss any of the three and parseCompaction returns nil.
+func transcriptWithChildRows(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lines := []string{
+		`{"type":"assistant","sessionId":"s1","timestamp":"2026-09-01T10:00:00Z","message":{"id":"m1","model":"claude-opus-5","usage":{"input_tokens":100,"output_tokens":50},"content":[{"type":"tool_use","id":"t1","name":"Read","input":{}},{"type":"tool_use","id":"t2","name":"Bash","input":{}}]}}`,
+		`{"type":"user","sessionId":"s1","timestamp":"2026-09-01T10:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"some file contents"},{"type":"tool_result","tool_use_id":"t2","content":"command output"}]}}`,
+		`{"type":"system","subtype":"compact_boundary","sessionId":"s1","uuid":"u-boundary-1","timestamp":"2026-09-01T10:00:02Z","compactMetadata":{"trigger":"auto","preTokens":90000,"postTokens":20000,"durationMs":4200}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The migration deletes a row and relies on the walk to put it back, and nothing
+// in this file could previously catch it getting that wrong: insertRun writes a
+// bare runs row, so there were no child rows to lose. This runs the real thing
+// end to end.
+//
+// The sequence is the one a real user hits, in order. An old binary ingested via a
+// relative root, so the row and all of its tool_usage and compaction rows are
+// stored under a relative path. Then a report absolutised the root, which inserted
+// a *second* row for the same file and attached nothing to it - tool_use_id and
+// boundary_uuid are globally unique and insert with ON CONFLICT DO NOTHING, so
+// every child insert was a no-op against the rows the relative run already owned.
+// Only then does the migration run.
+//
+// Deleting the relative row at that point takes the child rows with it, and
+// NeedsIngest declines to re-read the file because the absolute row's size already
+// matches. Measured against the version this replaces: tool_usage 2 -> 0,
+// compactions 1 -> 0, unrecoverable across any number of later reports, with
+// `loom context` printing "Nothing recorded yet" against a ledger holding the run.
+func TestIngestAllKeepsChildRowsWhenMigratingARelativeRow(t *testing.T) {
+	home := t.TempDir()
+	t.Chdir(home)
+	root := filepath.Join(home, ".claude", "projects")
+	transcriptWithChildRows(t, filepath.Join(root, "proj", "sess.jsonl"))
+
+	db := openTestLedger(t)
+	// Stage one: the relative root, exactly as the old binary was run. The rows it
+	// writes are relative, child rows included.
+	rel := filepath.Join(".claude", "projects")
+	if err := ingestAll(db, rel); err != nil {
+		t.Fatal(err)
+	}
+	before, err := db.Occupancy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.CompactionCount != 1 || toolCalls(before) != 2 {
+		t.Fatalf("fixture produced no child rows to lose (tool calls %d, compactions %d): the rest of this test would pass vacuously",
+			toolCalls(before), before.CompactionCount)
+	}
+
+	// Stage two: a report that absolutised the root but had no migration yet, so
+	// it inserted a second row for the same file and attached nothing to it. This
+	// state is not reachable by calling ingestAll - the migration would run first -
+	// so it is built directly. It is the state on the disk of anyone who ran a
+	// build from that window, and it is what makes the deletion lossy: without it
+	// the walk re-reads the file and the child rows come back on their own.
+	abs := filepath.Join(root, "proj", "sess.jsonl")
+	fi, err := os.Stat(abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertRun(ledger.RunRecord{Path: abs, Kind: "session", SizeBytes: fi.Size()}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stage three: the migration, twice - the second run is the check that a loss
+	// here is permanent rather than repaired on the next report.
+	for range 2 {
+		if err := ingestAll(db, root); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	after, err := db.Occupancy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if toolCalls(after) != 2 {
+		t.Errorf("tool_usage calls = %d, want 2: the migration deleted them and nothing re-read the file", toolCalls(after))
+	}
+	if after.CompactionCount != 1 {
+		t.Errorf("compactions = %d, want 1: same loss, and asset_usage goes with it - which makes propose offer live assets for retirement as never-used", after.CompactionCount)
+	}
+	// And the visible half: one file, one row, under its absolute path.
+	got := knownPaths(t, db)
+	want := filepath.Join(root, "proj", "sess.jsonl")
+	if len(got) != 1 || !got[want] {
+		t.Errorf("runs = %v, want exactly %s", got, want)
+	}
+}
+
+// The other two ways "delete it, the walk will bring it back" was wrong, and the
+// reason the relative prune sits after the walk rather than before it. Both are
+// about a walk that was never going to produce the replacement: one narrowed to a
+// single project, one that could not run at all. Before the reorder each deleted
+// every relative row in the ledger regardless, and the absent-root case then failed
+// on the lstat with nothing left to restore from - which also broke a promise
+// `loom status` makes two lines from where it counts these, that an unreachable row
+// means "not data loss".
+func TestIngestAllKeepsRelativeRowsNoWalkCanReplace(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		rootUnder func(root string) string
+		wantErr   bool
+	}{
+		{"narrowed-root", func(root string) string { return filepath.Join(root, "p1") }, false},
+		{"absent-root", func(root string) string { return filepath.Join(root, "never-created") }, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Chdir(home)
+			root := filepath.Join(home, ".claude", "projects")
+			transcriptWithChildRows(t, filepath.Join(root, "p1", "a.jsonl"))
+			transcriptWithChildRows(t, filepath.Join(root, "p2", "b.jsonl"))
+
+			db := openTestLedger(t)
+			if err := ingestAll(db, filepath.Join(".claude", "projects")); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(knownPaths(t, db)); got != 2 {
+				t.Fatalf("setup ingested %d relative rows, want 2", got)
+			}
+
+			err := ingestAll(db, c.rootUnder(root))
+			if c.wantErr && err == nil {
+				t.Error("a root that does not exist returned no error, so the prune below is not the interesting part any more")
+			}
+			if !c.wantErr && err != nil {
+				t.Fatal(err)
+			}
+
+			// p2's row is the one at stake either way: no walk here reaches it,
+			// so deleting it destroys the only record of that run. Keyed on the
+			// path as walked - the row records the root it was found under, not a
+			// path relative to it.
+			got := knownPaths(t, db)
+			if !got[filepath.Join(".claude", "projects", "p2", "b.jsonl")] {
+				t.Errorf("p2's relative row was deleted with nothing to replace it (rows: %v)", got)
+			}
+		})
+	}
+}
+
+// toolCalls sums Occupancy's per-tool call counts. Occupancy joins tool_usage to
+// runs, so this counts what a user can actually see - a child row orphaned from
+// its run would not appear, which is the right measure here.
+func toolCalls(r ledger.OccupancyReport) int {
+	n := 0
+	for _, t := range r.ByTool {
+		n += t.Calls
+	}
+	return n
+}
+
 // A relative row must classify as prunable, and it must do so without asking the
 // filesystem anything: the cwd a `loom status` happens to run from is not the one
 // the row was written against, so a stat would answer a different question each
-// time. Run from a directory where the row's path resolves to a real file under
-// the root, which is the case that would otherwise look current or unexplained
-// depending on where the user stood.
+// time. Staged so the row's path resolves to a real file under the root from one
+// cwd and to nothing from the other - which without the check lands it in a
+// different bucket each time, `unexplained` from the root and `missing` from
+// anywhere else. ("Current" is not one of the outcomes: a relative row never
+// matches a walked path, so it cannot reach the on-disk arm of the classifier at
+// all, and an earlier version of this comment claiming otherwise was wrong.)
 func TestFreshnessCountsARelativeRowAsPrunableWhateverTheCwd(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "proj"), 0o755); err != nil {
@@ -101,9 +340,12 @@ func TestFreshnessCountsARelativeRowAsPrunableWhateverTheCwd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, cwd := range []string{root, t.TempDir()} {
-		t.Run(filepath.Base(cwd), func(t *testing.T) {
-			t.Chdir(cwd)
+	for _, c := range []struct{ name, cwd string }{
+		{"cwd-is-root", root},
+		{"cwd-elsewhere", t.TempDir()},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Chdir(c.cwd)
 			db := openTestLedger(t)
 			insertRun(t, db, filepath.Join("proj", "sess.jsonl"))
 
@@ -116,6 +358,12 @@ func TestFreshnessCountsARelativeRowAsPrunableWhateverTheCwd(t *testing.T) {
 			}
 			if f.unexplained != 0 || f.missing != 0 || f.outsideRoot != 0 {
 				t.Errorf("a relative row landed in a bucket that names the wrong cause (counts: %+v)", f)
+			}
+			// The visible half, and the reason the row is worth reporting at
+			// all: the file is right there and counted as never ingested, so
+			// the ledger holds a run for it and cannot say so.
+			if f.onDisk != 1 || f.unseen != 1 {
+				t.Errorf("onDisk = %d, unseen = %d, want 1 and 1 (counts: %+v)", f.onDisk, f.unseen, f)
 			}
 		})
 	}

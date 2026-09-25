@@ -126,7 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   return it" was reported as "gone from disk" regardless of the reason, and a first attempt at fixing
   that reintroduced the same false signal one layer up, reporting 221 real transcripts as prunable
   against a narrowed root. It now counts five states apart. Four are keyed on a positive signal of
-  their own: prunable (the same predicate `loom report` prunes on), genuinely absent, present but
+  their own: prunable (the same predicate `loom report` clears on), genuinely absent, present but
   unreadable, and demonstrably outside the root being asked about. The fifth is the remainder, and is
   labelled as one - "exists, not known to be outside the root, and not walked" - rather than given a
   cause nothing checked, because a row of that shape (a non-transcript `.jsonl` beside a workflow's
@@ -142,12 +142,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged file as both "never ingested" and "in ledger, outside root". Absolutising fixes the paths
   going in and does nothing for the ones already stored: such a row can never match a walked file
   again under any root, so the next report inserts a second row for the same file and the ledger
-  double-counts its cost for as long as it lives. The row is deleted rather than repaired - the
-  working directory it was written against is not recorded anywhere, so there is nothing to resolve it
-  against - and the walk immediately re-ingests it in full whenever the file is still under the root.
-  The prune also runs before the walk now rather than after, both so a relative row is gone before its
-  absolute replacement is inserted, and so the one remedy `loom status` names for these rows still
-  runs when the walk itself fails.
+  double-counts its cost for as long as it lives. Doubled rows also reach `policy.MinSampleSize`, so
+  they halve the real sample an evidence-backed policy needs. The row is superseded rather than
+  repaired - the working directory it was written against is not recorded anywhere, so there is
+  nothing to resolve it against - and it is deleted only once the walk has actually returned the file
+  that replaces it, with that file then forced through a re-read whether or not its size changed.
+  Both halves matter. "Delete it, the walk will bring it back" was the obvious design and it was
+  wrong three separate ways, each measured: an absolute row for the same file usually exists already,
+  and because `tool_usage.tool_use_id` and `compactions.boundary_uuid` are globally unique with
+  first-seen-wins, every child row stays attached to the relative row - so deleting it destroys the
+  tool calls, compactions and `asset_usage` permanently, and `NeedsIngest` then answers "no" to the
+  re-read that would restore them because the surviving row already has the right size. A root
+  narrowed to one project deleted the relative rows of every other project it was never going to
+  walk. And a root that does not exist deleted every relative row in the ledger and then failed on
+  the lstat, with nothing left to restore from. A relative row is now left alone unless exactly one
+  walked path ends in it; two candidates is ambiguous and is not guessed at.
+  The journal rows above are the one class still cleared before the walk, and only because a journal
+  was never a transcript: no walk will ever return one, so nothing is waiting to replace it, and it
+  owns no child rows to lose. Doing it there is what keeps the remedy `loom status` names for those
+  rows working in the states where the walk itself fails.
 
 ### Added
 
