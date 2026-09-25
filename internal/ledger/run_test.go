@@ -27,13 +27,15 @@ func TestDeleteRunsRemovesChildRows(t *testing.T) {
 		}
 	}
 
-	n, err := db.DeleteRuns([]string{"phantom.jsonl", "never-ingested.jsonl"})
+	deleted, err := db.DeleteRuns([]string{"phantom.jsonl", "never-ingested.jsonl"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A path that was never in the ledger is not an error and is not counted.
-	if n != 1 {
-		t.Errorf("DeleteRuns deleted %d runs, want 1", n)
+	// A path that was never in the ledger is not an error, and must not come
+	// back as deleted: the caller prints this list to explain why the run count
+	// dropped, so a path in it that still has a row is a false claim.
+	if len(deleted) != 1 || deleted[0] != "phantom.jsonl" {
+		t.Errorf("DeleteRuns returned %q, want [phantom.jsonl]", deleted)
 	}
 
 	var runs, orphans, kept int
@@ -57,8 +59,8 @@ func TestDeleteRunsEmptyIsNoOp(t *testing.T) {
 	db := openTestDB(t)
 	insertTestRun(t, db, "keep.jsonl")
 
-	if n, err := db.DeleteRuns(nil); err != nil || n != 0 {
-		t.Fatalf("DeleteRuns(nil) = %d, %v; want 0, nil", n, err)
+	if deleted, err := db.DeleteRuns(nil); err != nil || len(deleted) != 0 {
+		t.Fatalf("DeleteRuns(nil) = %q, %v; want none, nil", deleted, err)
 	}
 	var runs int
 	if err := db.sql.QueryRow(`SELECT count(*) FROM runs`).Scan(&runs); err != nil {

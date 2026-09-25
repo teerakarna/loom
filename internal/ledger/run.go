@@ -398,7 +398,11 @@ func perRun(total float64, runs int) float64 {
 }
 
 // DeleteRuns removes the named runs and everything hanging off them,
-// returning how many rows were deleted from `runs`.
+// returning the paths it actually deleted. A path with no row is skipped
+// rather than reported as an error, so the return value is the only honest
+// basis for telling a user what went: it can be shorter than the input, and a
+// caller that echoes its own candidate list instead claims deletions that did
+// not happen.
 //
 // Why this exists at all: the ingester once treated every .jsonl under the
 // projects root as a transcript, so a workflow's orchestration journal became
@@ -424,37 +428,37 @@ func perRun(total float64, runs int) float64 {
 // session transcript owns the ids its resumed continuation replays, so
 // deleting one drops those events from the continuation's occupancy, and the
 // only way back is re-ingesting the deleted file.
-func (d *DB) DeleteRuns(paths []string) (int, error) {
+func (d *DB) DeleteRuns(paths []string) ([]string, error) {
 	if len(paths) == 0 {
-		return 0, nil
+		return nil, nil
 	}
 	tx, err := d.sql.Begin()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var deleted int
+	var deleted []string
 	for _, p := range paths {
 		var id int64
 		if err := tx.QueryRow(`SELECT id FROM runs WHERE path = ?`, p).Scan(&id); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				continue
 			}
-			return 0, err
+			return nil, err
 		}
 		for _, table := range []string{"tool_usage", "compactions", "asset_usage"} {
 			if _, err := tx.Exec(`DELETE FROM `+table+` WHERE run_id = ?`, id); err != nil {
-				return 0, err
+				return nil, err
 			}
 		}
 		if _, err := tx.Exec(`DELETE FROM runs WHERE id = ?`, id); err != nil {
-			return 0, err
+			return nil, err
 		}
-		deleted++
+		deleted = append(deleted, p)
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return nil, err
 	}
 	return deleted, nil
 }

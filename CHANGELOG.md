@@ -113,8 +113,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ingest treated every `.jsonl` under the projects root as a transcript, so a workflow run's
   `subagents/workflows/<wf-id>/journal.jsonl` - orchestration records only, no assistant turns and
   no `usage` - became a run with no model, no tokens and no tool calls. It inflated the run count,
-  added an unlabelled bucket to the by-model breakdown, and skewed the averages derived from those
-  totals in `loom report`, `loom status` and the MCP cost summary. Under `subagents/` the `agent-`
+  added an unlabelled bucket to the by-model breakdown, and skewed the per-run figures derived from
+  those totals in `loom report` and the MCP cost summary. (`loom status` printed it in its counts;
+  it prints no averages.) Under `subagents/` the `agent-`
   filename prefix is now required, reusing `AgentIDFromPath`'s predicate so discovery and id
   extraction cannot disagree. Depth is deliberately not the discriminator: a workflow's own subagents
   live two levels down and are real transcripts - on the corpus this was measured against, a depth

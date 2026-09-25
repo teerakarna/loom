@@ -266,7 +266,7 @@ func kindForPath(path string) string {
 // records ("started"/"result" keyed by agentId), no assistant turns and no
 // usage. Ingesting it yields a run with no model, no tokens and no tool
 // calls - a phantom that inflates the run count, adds an unlabelled bucket
-// to the by-model breakdown, and skews every average computed from those
+// to the by-model breakdown, and skews the per-run figures derived from those
 // totals. (Not the per-agent-type policy figures: those filter on a non-empty
 // agent_type, which a journal has no .meta.json to supply. Reporting numbers,
 // not policy ones.) So under subagents/ the agent- prefix is required, and

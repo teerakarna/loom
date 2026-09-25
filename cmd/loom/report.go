@@ -361,20 +361,35 @@ func pruneWorkflowJournals(db *ledger.DB) error {
 	}
 	var stale []string
 	for _, k := range known {
-		if filepath.Base(k.Path) == "journal.jsonl" && !ingest.IsTranscript(k.Path) {
+		if isPrunableLedgerPath(k.Path) {
 			stale = append(stale, k.Path)
 		}
 	}
 	if len(stale) == 0 {
 		return nil
 	}
-	if _, err := db.DeleteRuns(stale); err != nil {
+	deleted, err := db.DeleteRuns(stale)
+	if err != nil {
 		return err
 	}
-	// Worth saying out loud: the run count drops, and an unexplained drop in a
-	// cost report is the kind of thing that gets read as data loss.
-	for _, p := range stale {
+	// Report what was deleted, not what was a candidate. DeleteRuns skips a
+	// path whose row has already gone (a concurrent `loom report` on the same
+	// ledger is enough), so printing the candidate list claims prunes that did
+	// not happen - and this output exists precisely to make an unexplained drop
+	// in the run count explainable, which a wrong line undoes.
+	for _, p := range deleted {
 		fmt.Fprintf(os.Stderr, "loom: pruned non-transcript ledger row %s\n", p)
 	}
 	return nil
+}
+
+// isPrunableLedgerPath reports whether a ledger row's path is one `loom report`
+// will delete. Shared with `loom status`, which tells the user that running a
+// report clears these rows: keying both on one predicate is what makes that
+// claim true rather than merely true today. The two drifting apart is not a
+// hypothetical - status's first version inferred "not a transcript" from "Walk
+// did not return it", which counted every row outside a narrowed root as
+// prunable and pointed them at a remedy that would never touch them.
+func isPrunableLedgerPath(path string) bool {
+	return filepath.Base(path) == "journal.jsonl" && !ingest.IsTranscript(path)
 }

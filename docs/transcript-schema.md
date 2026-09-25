@@ -39,7 +39,9 @@ Measured on a real corpus 2026-09-25: 169 flat `agent-<id>.jsonl`, 42 nested und
 that was a real transcript. So the discriminator is the **filename prefix**, not the nesting depth -
 a depth rule would have silently dropped all 42 workflow subagent runs. `ingest.IsTranscript` is
 where that lives, and ingesting the journal by mistake produced a run with no model, no tokens and
-no tool calls that then sat in the by-model breakdown and the policy denominators.
+no tool calls that then inflated the run count and added an unlabelled row to the by-model breakdown.
+Not the per-agent-type policy figures, which filter on a non-empty `agent_type` a journal has no
+`.meta.json` to supply - reporting numbers, not policy ones.
 
 ## Top-level line types
 

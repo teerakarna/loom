@@ -62,14 +62,19 @@ func runStatus(args []string) error {
 	} else {
 		fmt.Printf("  never ingested            0\n")
 	}
+	// Label widths match deliberately: these counts are read against each
+	// other, and a one-character shift makes them look like separate columns.
 	if fresh.missing > 0 {
 		fmt.Printf("  in ledger, gone from disk %d\n", fresh.missing)
 	}
+	if fresh.unreadable > 0 {
+		fmt.Printf("  in ledger, unreadable     %d  (permissions or an unavailable mount, not data loss)\n", fresh.unreadable)
+	}
 	if fresh.prunable > 0 {
-		// Label width matches the line above deliberately: the two counts are
-		// read against each other, and a one-character shift makes them look
-		// like different columns.
-		fmt.Printf("  in ledger, not transcript %d  (file still there; `loom report` prunes workflow journals)\n", fresh.prunable)
+		fmt.Printf("  in ledger, not transcript %d  (file still there; `loom report` deletes these rows)\n", fresh.prunable)
+	}
+	if fresh.outsideRoot > 0 {
+		fmt.Printf("  in ledger, outside root   %d  (nothing to do; the root is an argument)\n", fresh.outsideRoot)
 	}
 	fmt.Println()
 
@@ -125,7 +130,12 @@ func runStatus(args []string) error {
 	return nil
 }
 
-type freshnessCounts struct{ onDisk, current, stale, unseen, missing, prunable int }
+type freshnessCounts struct {
+	onDisk, current, stale, unseen int
+	// The four ways a ledger row can fail to come back from Walk. See the
+	// classifier in freshness for why they are counted apart.
+	missing, unreadable, prunable, outsideRoot int
+}
 
 // freshness compares the ledger against what is on disk right now, without
 // ingesting. This is the check that would have surfaced the staleness bug:
@@ -176,18 +186,37 @@ func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 		if onDisk[p] {
 			continue
 		}
-		// Walk did not return it, which is two different states, and
-		// conflating them misreports both. The file may be genuinely gone -
-		// or it may be sitting right there and simply not be a transcript (a
-		// workflow's orchestration journal, ingested before IsTranscript
-		// existed), in which case "gone from disk" is a false signal that
-		// never clears. Stat decides; status stays read-only either way, and
-		// the next `loom report` is what removes the row.
-		if _, err := os.Stat(p); err == nil {
+		// "Walk did not return it" is four different states, and the whole
+		// value of this block is telling them apart - each one implies a
+		// different action, and one of them implies none at all. Classify by
+		// the narrowest available signal, never by elimination:
+		//
+		//   - not a path Walk would ever ingest, and `loom report` deletes it:
+		//     the one case where naming a remedy is honest, so it is keyed on
+		//     the same predicate the prune uses.
+		//   - genuinely absent: the row outlived its file.
+		//   - present but unreadable: says nothing about the data, and must
+		//     not be reported as absence.
+		//   - present, readable, a transcript: it simply sits outside the root
+		//     being asked about. Normal, and nothing to do about it.
+		//
+		// The last one is why this cannot be inferred from Walk's silence: the
+		// root is an argument, and the ledger deliberately holds runs from
+		// outside it (that is what an empty lane means). Guessing from absence
+		// reported 221 real transcripts as prunable against a narrowed root.
+		if isPrunableLedgerPath(p) {
 			f.prunable++
 			continue
 		}
-		f.missing++
+		if _, err := os.Stat(p); err != nil {
+			if os.IsNotExist(err) {
+				f.missing++
+			} else {
+				f.unreadable++
+			}
+			continue
+		}
+		f.outsideRoot++
 	}
 	return f, nil
 }
