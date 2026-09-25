@@ -198,6 +198,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Kind drives `agent_type` and the by-model breakdown, and `IsTranscript` only requires the `agent-`
   prefix for agent-kinded paths, so the same slip let a workflow journal read from that root pass as a
   transcript - which is also how the prune could promise to clear a row that nothing would clear.
+- The lane fix above substituted the default projects root unconditionally, which fixed the narrowed
+  case and broke every root that is not this machine's own: a restored backup, another machine's
+  export, a relocated `CLAUDE_CONFIG_DIR`, a case variant of the real path on a case-insensitive
+  filesystem. Every walked file is then outside the lane root, `LaneFromPath` returns `""` for all of
+  them, and the `COALESCE` guard cannot help because those are first inserts with no stored lane to
+  keep - so the whole corpus reads as unattributed and `--lane` matches nothing, permanently. The
+  default is now substituted only when the walked root is inside it; otherwise the walked root is
+  both the only projects root on offer and the right answer. That also makes the whole-corpus gate
+  (`laneRoot == root`) reachable for an alternate root, which it could never be before, so those
+  ledgers now get the relative-row supersession instead of double-counting for as long as they live.
+- `CurrentFeatureVersion` 1 to 2, the first time this counter has been used for a repair rather than
+  a backfill. The lane and kind fixes above stop recurrence and repair nothing, and a re-read is the
+  only repair path the design offers - there is deliberately no `--force`. Without the bump a ledger
+  that took one narrowed report stays wrong for as long as it lives, since the size matches and the
+  version is current.
+- `reported_subagent_tokens`, `reported_tool_uses` and `reported_duration_ms` were overwritten
+  unconditionally, and they are only populated from a session read in the same batch. A re-read of
+  one agent transcript is a batch of one, so an ordinary incremental report wrote NULL over a real
+  reconciliation figure whenever the parent session file had not itself changed - and `NeedsIngest`
+  then vetoed the read that would have restored it. Now `COALESCE`, on the grounds that NULL here
+  means "nothing reported yet" and never "the earlier figure was withdrawn".
+- The supersession plan was keyed on the replacement with a single row as its value, so one walked
+  path that legitimately replaces two relative spellings of the same file (`p/s.jsonl` and `s.jsonl`,
+  written from two different working directories) kept only the last. Child rows are first-seen-wins,
+  so the survivor was usually the row actually holding the tool calls, and the forced re-read
+  attached nothing.
+- A failed `recordOccupancyAndUsage` was permanent. Its failure is deliberately non-fatal so one
+  unreadable transcript cannot cost a whole report, but the runs row is already stored with the
+  current size and feature version by then, so `NeedsIngest` answered "no" from the next report
+  onward and the child rows never arrived - worst on the supersession path, where the old row's child
+  rows have already been deleted to make room for them. The run is now marked for a re-read instead.
 
 ### Added
 
