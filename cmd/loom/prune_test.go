@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/teerakarna/loom/internal/ingest"
 	"github.com/teerakarna/loom/internal/ledger"
 )
 
@@ -123,32 +124,95 @@ func TestSupersedeRelativeRowsOnlyTakesRowsTheWalkReplaces(t *testing.T) {
 		insertRun(t, db, p)
 	}
 
-	reingest, err := supersedeRelativeRows(db, walked)
+	plan, err := planRelativeSupersessions(db, walked, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got := knownPaths(t, db)
-	for _, p := range superseded {
-		if got[p] {
-			t.Errorf("relative row %s survived even though the walk replaced it", p)
+	// Planning alone must not have touched the ledger - the delete waits for the
+	// replacement to be read, which is what stops a failed read losing the row.
+	before := knownPaths(t, db)
+	for _, p := range append(append([]string{}, superseded...), keep...) {
+		if !before[p] {
+			t.Errorf("planning deleted %s; the delete belongs in commitSupersessions, after the read", p)
 		}
+	}
+
+	// The plan is keyed on the replacement, which is also the forced re-read set,
+	// and that is half the fix: without it NeedsIngest vetoes the read and the
+	// replacement keeps whatever child rows it already had, which is none.
+	replacement := "/home/me/.claude/projects/p/sess/subagents/agent-9.jsonl"
+	if len(plan) != 1 || plan[replacement] == "" {
+		t.Fatalf("plan = %v, want the one unambiguously walked path keyed to its relative row", plan)
+	}
+	if !strings.HasSuffix(filepath.ToSlash(plan[replacement]), "p/sess/subagents/agent-9.jsonl") {
+		t.Errorf("plan[%s] = %q, which is not a spelling of that file", replacement, plan[replacement])
+	}
+
+	// Committing takes only the rows whose replacement actually read. Both
+	// spellings of the same file are candidates and one of them wins the map key;
+	// the other simply stays, which is correct - it is a second row for a file
+	// that now has an absolute one, and the next full-root report supersedes it.
+	read := map[string]ingest.RunSummary{replacement: {}}
+	if err := commitSupersessions(db, plan, read); err != nil {
+		t.Fatal(err)
+	}
+	got := knownPaths(t, db)
+	if got[plan[replacement]] {
+		t.Errorf("relative row %s survived even though its replacement was read", plan[replacement])
 	}
 	for _, p := range keep {
 		if !got[p] {
 			t.Errorf("deleted %s with no walked replacement for it: that row's history is simply gone", p)
 		}
 	}
-	// The forced re-read is half the fix. Without it the replacement keeps
-	// whatever child rows it already had, which is none.
-	want := map[string]bool{"/home/me/.claude/projects/p/sess/subagents/agent-9.jsonl": true}
-	if len(reingest) != len(want) {
-		t.Fatalf("reingest = %v, want %v", reingest, want)
+}
+
+// A walk over one project is not evidence about the corpus, so it does not get to
+// supersede anything. The ambiguity guard counts candidates among walked paths, and
+// narrowing the walk hides the second candidate: under the full root dup/sess.jsonl
+// is correctly kept, and under <root>/old it would be confidently matched to the
+// wrong file and deleted with its child rows. Same data loss this round exists to
+// fix, reached through a narrowed root rather than an absent one.
+func TestPlanRelativeSupersessionsNeedsTheWholeCorpus(t *testing.T) {
+	db := openTestLedger(t)
+	insertRun(t, db, "dup/sess.jsonl")
+	narrowed := []string{"/home/me/.claude/projects/old/dup/sess.jsonl"}
+
+	plan, err := planRelativeSupersessions(db, narrowed, false)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for p := range want {
-		if !reingest[p] {
-			t.Errorf("reingest is missing %s, so NeedsIngest will veto re-reading it", p)
-		}
+	if len(plan) != 0 {
+		t.Errorf("a narrowed walk planned %v; that match is only unambiguous because the other candidate was not walked", plan)
+	}
+
+	// Positive control, so the assertion above cannot pass just because nothing
+	// ever matches: the same walk with the same row does match when it is claimed
+	// to cover everything.
+	plan, err = planRelativeSupersessions(db, narrowed, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan) != 1 {
+		t.Fatalf("plan = %v over the whole corpus, want the one match - the wholeCorpus check above proves nothing otherwise", plan)
+	}
+}
+
+// A read that fails must leave the relative row alone. Deleting first and finding
+// out afterwards left the child rows gone with nothing holding them and no way
+// back, since the surviving absolute row's size already matched and NeedsIngest
+// vetoed every later read.
+func TestCommitSupersessionsSkipsRowsWhoseReplacementDidNotRead(t *testing.T) {
+	db := openTestLedger(t)
+	insertRun(t, db, "p/sess.jsonl")
+	plan := map[string]string{"/home/me/.claude/projects/p/sess.jsonl": "p/sess.jsonl"}
+
+	if err := commitSupersessions(db, plan, map[string]ingest.RunSummary{}); err != nil {
+		t.Fatal(err)
+	}
+	if !knownPaths(t, db)["p/sess.jsonl"] {
+		t.Error("deleted the relative row although its replacement was never read: a stale figure is better than none")
 	}
 }
 
@@ -206,7 +270,7 @@ func TestIngestAllKeepsChildRowsWhenMigratingARelativeRow(t *testing.T) {
 	// Stage one: the relative root, exactly as the old binary was run. The rows it
 	// writes are relative, child rows included.
 	rel := filepath.Join(".claude", "projects")
-	if err := ingestAll(db, rel); err != nil {
+	if err := ingestAll(db, rel, rel); err != nil {
 		t.Fatal(err)
 	}
 	before, err := db.Occupancy()
@@ -236,7 +300,7 @@ func TestIngestAllKeepsChildRowsWhenMigratingARelativeRow(t *testing.T) {
 	// Stage three: the migration, twice - the second run is the check that a loss
 	// here is permanent rather than repaired on the next report.
 	for range 2 {
-		if err := ingestAll(db, root); err != nil {
+		if err := ingestAll(db, root, root); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -284,14 +348,20 @@ func TestIngestAllKeepsRelativeRowsNoWalkCanReplace(t *testing.T) {
 			transcriptWithChildRows(t, filepath.Join(root, "p2", "b.jsonl"))
 
 			db := openTestLedger(t)
-			if err := ingestAll(db, filepath.Join(".claude", "projects")); err != nil {
+			if err := ingestAll(db, filepath.Join(".claude", "projects"), filepath.Join(".claude", "projects")); err != nil {
 				t.Fatal(err)
 			}
 			if got := len(knownPaths(t, db)); got != 2 {
 				t.Fatalf("setup ingested %d relative rows, want 2", got)
 			}
 
-			err := ingestAll(db, c.rootUnder(root))
+			// laneRoot is the narrowed root too, so wholeCorpus reads true here
+			// even though the walk plainly is not the whole corpus. Deliberate: the
+			// gate added for the ambiguity case would otherwise make this pass for a
+			// second reason, and the ordering fix this test exists for would stop
+			// being what holds it up.
+			narrowed := c.rootUnder(root)
+			err := ingestAll(db, narrowed, narrowed)
 			if c.wantErr && err == nil {
 				t.Error("a root that does not exist returned no error, so the prune below is not the interesting part any more")
 			}
@@ -308,6 +378,74 @@ func TestIngestAllKeepsRelativeRowsNoWalkCanReplace(t *testing.T) {
 				t.Errorf("p2's relative row was deleted with nothing to replace it (rows: %v)", got)
 			}
 		})
+	}
+}
+
+// A lane names the project directory a transcript belongs to, so it has to be
+// derived from the projects root and not from whatever root the invocation walked.
+// `loom report <root>/<one-project>` used to recompute the lane relative to that
+// narrower root, which for a nested subagent transcript is the session directory:
+// the lane became a session UUID. Measured on a real ledger, one such report moved
+// 82 of 85 runs off their project onto two UUIDs, and NeedsIngest then vetoed every
+// later read that could have put them back.
+//
+// The nesting is the case that matters, so the fixture has both: a transcript
+// directly in the project directory (which recomputed to an empty lane, the
+// separate defect the ledger's COALESCE now absorbs) and one under subagents/,
+// which recomputed to a plausible-looking wrong value that no COALESCE can catch.
+func TestIngestAllDerivesLanesFromTheProjectsRootNotTheWalkedRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Chdir(home)
+	root := filepath.Join(home, ".claude", "projects")
+	proj := filepath.Join(root, "-h-u-proj")
+	transcriptWithChildRows(t, filepath.Join(proj, "sess.jsonl"))
+	transcriptWithChildRows(t, filepath.Join(proj, "sess", "subagents", "agent-1.jsonl"))
+
+	db := openTestLedger(t)
+	if err := ingestAll(db, root, root); err != nil {
+		t.Fatal(err)
+	}
+	assertOneLane(t, db, "-h-u-proj", "after a full-root report")
+
+	// Now the narrowed walk. Both files have to look grown or NeedsIngest skips
+	// them and the assertion passes without the code being exercised - which is
+	// also what a live session does between two reports, so it is the realistic
+	// case rather than a contrivance.
+	for _, p := range []string{
+		filepath.Join(proj, "sess.jsonl"),
+		filepath.Join(proj, "sess", "subagents", "agent-1.jsonl"),
+	} {
+		f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString("{}\n"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := ingestAll(db, proj, root); err != nil {
+		t.Fatal(err)
+	}
+	assertOneLane(t, db, "-h-u-proj", "after a report narrowed to that project")
+}
+
+// assertOneLane checks that every run in the ledger is attributed to want, via
+// the by-lane breakdown a user actually reads rather than a private query.
+func assertOneLane(t *testing.T, db *ledger.DB, want, when string) {
+	t.Helper()
+	s, err := db.Report()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.TotalRuns != 2 {
+		t.Fatalf("runs = %d %s, want the 2 the fixture wrote: the lane assertion would not measure anything", s.TotalRuns, when)
+	}
+	if len(s.ByLane) != 1 || s.ByLane[0].Lane != want || s.ByLane[0].Runs != 2 {
+		t.Errorf("lanes %s = %+v, want all 2 runs under %q", when, s.ByLane, want)
 	}
 }
 

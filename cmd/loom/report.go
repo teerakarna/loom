@@ -72,7 +72,21 @@ func runReport(args []string) error {
 	}
 	defer func() { _ = db.Close() }()
 
-	if err := ingestAll(db, root); err != nil {
+	// A lane is the project directory a transcript sits in, so it is only
+	// meaningful relative to the projects root - never relative to whatever root
+	// this particular invocation happened to walk. Resolved here rather than
+	// inside ingestAll so the HOME lookup stays at the entry point and the tests
+	// can drive ingestAll with a fixture root; a default that cannot be resolved
+	// falls back to root, which is what the walk is being told to treat as the
+	// corpus anyway.
+	laneRoot := root
+	if def, derr := defaultProjectsRoot(); derr == nil {
+		if abs, aerr := filepath.Abs(def); aerr == nil {
+			laneRoot = abs
+		}
+	}
+
+	if err := ingestAll(db, root, laneRoot); err != nil {
 		return err
 	}
 
@@ -100,7 +114,16 @@ func runReport(args []string) error {
 // after every file in the batch has been read, since a session file can
 // reference an agent whose own file is discovered in any order during the
 // walk.
-func ingestAll(db *ledger.DB, root string) error {
+// laneRoot is the projects root, which root may be narrower than: `loom report
+// <root>/<one-project>` walks one project but its transcripts still belong to
+// the lane that project directory names. Deriving the lane from root instead
+// made a narrowed report rewrite lanes to whatever directory came first under
+// it - measured on a real ledger, one narrowed report moved 82 of 85 runs off
+// their project and onto two session UUIDs, and NeedsIngest then vetoed every
+// later read that could have corrected them. Two parameters are not needed:
+// laneRoot == root is exactly "this walk covers the whole corpus", which is what
+// planRelativeSupersessions needs to know.
+func ingestAll(db *ledger.DB, root string, laneRoot string) error {
 	// Journals before the walk, deliberately. The prune reads the ledger and
 	// touches no file, so making it wait behind a walk that can fail means the one
 	// remedy `loom status` names for these rows does not run in the states where
@@ -119,10 +142,11 @@ func ingestAll(db *ledger.DB, root string) error {
 	}
 
 	// The relative rows only now, once the walk has actually produced the files
-	// that replace them. That ordering is the whole fix - see
-	// supersedeRelativeRows, which also explains why "delete it, the walk will
-	// bring it back" was three separate kinds of wrong when it ran above.
-	reingest, err := supersedeRelativeRows(db, paths)
+	// that replace them - and planned here, committed further down once those
+	// files have been read successfully. That ordering is the whole fix; see
+	// supersedeRelativeRows for why "delete it, the walk will bring it back" was
+	// three separate kinds of wrong when it ran above the walk.
+	superseded, err := planRelativeSupersessions(db, paths, laneRoot == root)
 	if err != nil {
 		return err
 	}
@@ -143,12 +167,12 @@ func ingestAll(db *ledger.DB, root string) error {
 		if err != nil {
 			return err
 		}
-		// reingest overrides NeedsIngest rather than being consulted after it:
-		// a file whose relative row was just deleted usually has an absolute
-		// row of the same size already, which is exactly the case NeedsIngest
-		// answers "no" to. Without the override the runs row comes back and its
-		// child rows never do.
-		if needs || reingest[p] {
+		// A planned supersession overrides NeedsIngest rather than being consulted
+		// after it: the file whose relative row is about to go usually has an
+		// absolute row of the same size already, which is exactly the case
+		// NeedsIngest answers "no" to. Without the override the runs row survives
+		// and its child rows never come back.
+		if needs || superseded[p] != "" {
 			toInsert = append(toInsert, p)
 		}
 	}
@@ -164,6 +188,19 @@ func ingestAll(db *ledger.DB, root string) error {
 			continue
 		}
 		summaries[p] = rs
+	}
+
+	// Commit the supersessions only for files that actually read, and only now
+	// that they have. The delete has to precede the inserts below - tool_use ids
+	// and compaction uuids are globally unique and first-seen-wins, so the child
+	// rows cannot be re-attached while the old row still holds them - but it must
+	// not precede the read. Deleting first and finding out afterwards that the
+	// file was unreadable or unparseable left the child rows gone with nothing
+	// holding them and no way back: the surviving row's size already matched, so
+	// NeedsIngest vetoed every later attempt. A file that fails to read simply
+	// keeps its old relative row, which is a stale figure rather than no figure.
+	if err := commitSupersessions(db, superseded, summaries); err != nil {
+		return err
 	}
 
 	// Reconciliation figures reported by any session in this batch, keyed by
@@ -190,7 +227,7 @@ func ingestAll(db *ledger.DB, root string) error {
 			SessionID:           rs.SessionID,
 			Kind:                rs.Kind,
 			Model:               rs.Model,
-			Lane:                ingest.LaneFromPath(root, path),
+			Lane:                ingest.LaneFromPath(laneRoot, path),
 			AgentType:           rs.AgentType,
 			Effort:              rs.Effort,
 			StartedAt:           rs.StartedAt,
@@ -453,17 +490,32 @@ func pruneJournalRows(db *ledger.DB) error {
 // this row, nothing here can say which, so the row survives and `loom status` goes
 // on reporting it.
 //
-// DeleteRuns is called once for the whole set, and the matched paths are returned
-// so the caller can force a re-read. Both halves are needed - deleting without the
-// forced re-read leaves the child rows gone, which is the first bullet above.
-func supersedeRelativeRows(db *ledger.DB, walked []string) (map[string]bool, error) {
+// wholeCorpus is what makes that ambiguity check mean anything, and skipping it is
+// a fourth way to lose the same data. The count is taken over the walk, so a walk
+// that covers one project can see one candidate where the corpus holds two: given
+// <root>/dup/sess.jsonl and <root>/old/dup/sess.jsonl, a relative row dup/sess.jsonl
+// is correctly kept under the full root and would be confidently mismatched under
+// `loom report <root>/old` - deleted, with its child rows, and its history credited
+// to a file that already has a row of its own. A narrowed walk is not evidence about
+// the corpus, so it does not get to supersede anything. It still walks and ingests
+// normally; the migration is simply a full-root job.
+//
+// The matched paths are returned rather than deleted here, so the caller can read
+// the replacements first and commit only the ones that read - see
+// commitSupersessions. Both halves are needed: deleting without the forced re-read
+// leaves the child rows gone, which is the first bullet above.
+func planRelativeSupersessions(db *ledger.DB, walked []string, wholeCorpus bool) (map[string]string, error) {
+	if !wholeCorpus {
+		return nil, nil
+	}
 	known, err := db.KnownRuns()
 	if err != nil {
 		return nil, err
 	}
 
-	reingest := map[string]bool{}
-	var superseded []string
+	// Keyed on the replacement, valued on the row it replaces: the caller needs
+	// the walked path to force a re-read, and the commit needs the row to delete.
+	superseded := map[string]string{}
 	for _, k := range known {
 		if filepath.IsAbs(k.Path) {
 			continue
@@ -472,25 +524,53 @@ func supersedeRelativeRows(db *ledger.DB, walked []string) (map[string]bool, err
 		if !ok {
 			continue
 		}
-		superseded = append(superseded, k.Path)
-		reingest[replacement] = true
+		superseded[replacement] = k.Path
 	}
-	if len(superseded) == 0 {
-		return nil, nil
+	return superseded, nil
+}
+
+// commitSupersessions deletes the relative rows whose replacement actually read.
+// Split from the planning half so the delete cannot outrun the read: see the
+// caller for why it has to sit between the read and the inserts rather than
+// before either.
+func commitSupersessions(db *ledger.DB, superseded map[string]string, read map[string]ingest.RunSummary) error {
+	var rows, replacements []string
+	for replacement, row := range superseded {
+		if _, ok := read[replacement]; !ok {
+			continue
+		}
+		rows = append(rows, row)
+		replacements = append(replacements, replacement)
 	}
-	deleted, err := db.DeleteRuns(superseded)
+	if len(rows) == 0 {
+		return nil
+	}
+	deleted, err := db.DeleteRuns(rows)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	reportPruned(deleted, "replaced relative ledger row with its absolute path, re-reading")
-	return reingest, nil
+	// Names both paths. An earlier version printed only the deleted relative row
+	// next to the words "re-reading", so the line named the row that had just
+	// stopped existing and never named the file being read - in output whose whole
+	// purpose is making a change to the ledger explainable.
+	gone := map[string]bool{}
+	for _, p := range deleted {
+		gone[p] = true
+	}
+	for i, row := range rows {
+		if gone[row] {
+			fmt.Fprintf(os.Stderr, "loom: replaced relative ledger row %s with %s, re-reading\n", row, replacements[i])
+		}
+	}
+	return nil
 }
 
 // soleWalkedPathEndingIn finds the one walked path that rel is a tail of, and
 // reports false when there is no such path or more than one. Zero means the walk
 // cannot replace that row, so it must not be deleted; more than one means the row
 // is genuinely ambiguous, and a coin toss between two real files is worse than
-// leaving a row `loom status` already reports.
+// leaving a row `loom status` already reports. The count is only as good as the
+// walk it is taken over - see planRelativeSupersessions on wholeCorpus.
 func soleWalkedPathEndingIn(walked []string, rel string) (string, bool) {
 	suffix := string(filepath.Separator) + filepath.Clean(rel)
 	var found string

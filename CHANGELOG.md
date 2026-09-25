@@ -161,6 +161,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was never a transcript: no walk will ever return one, so nothing is waiting to replace it, and it
   owns no child rows to lose. Doing it there is what keeps the remedy `loom status` names for those
   rows working in the states where the walk itself fails.
+- A lane was derived from whatever root the invocation happened to walk, not from the projects root,
+  so `loom report <root>/<one-project>` reattributed almost the whole corpus. A lane is the project
+  directory a transcript sits in, and `LaneFromPath` returns the first path segment under the root it
+  is given - under a narrowed root that segment is the session directory, so every nested subagent
+  transcript was filed under a session UUID instead of its project. Measured on a copy of this
+  machine's real ledger: one narrowed report moved 82 of 85 runs off their project and onto two
+  session UUIDs, and because the sizes then matched and the feature version was current, `NeedsIngest`
+  vetoed every later read that could have corrected them - permanent, from one command that looks like
+  a narrowing convenience. Fixed by resolving the projects root once at the entry point and passing it
+  through for lane derivation, independently of the root being walked. That also removed a separate
+  `wholeCorpus` flag: `laneRoot == root` is exactly "this walk covers the whole corpus".
+- An empty recomputed lane overwrote a known one. `InsertRun`'s upsert wrote every column
+  unconditionally, and a transcript sitting directly in the walked root has no lane to derive, so a
+  narrowed report blanked the lane of the files at its top level and they moved to
+  `UnattributedLanes` for good, again behind `NeedsIngest`. Now `COALESCE(NULLIF(...))`, so an empty
+  lane cannot displace a stored one while a real lane still replaces a real lane. Measured the same
+  way: three rows lost their lane before the fix, none after. This is the narrower half of the defect
+  above and does not subsume it - a lane recomputed as a session UUID is non-empty and plausible, so
+  no guard on emptiness can catch it.
+- The relative-row supersession ran even when the walk could not possibly cover the corpus. The
+  ambiguity guard added for it ("exactly one walked path ends in this row") is a guard against two
+  candidates, not against zero: under a root narrowed to one project, a relative row belonging to a
+  different project simply had no candidate and was left alone, which is right, but the migration was
+  still free to fire on any row that did match by accident. It is now gated on the walk being the
+  whole corpus, which is the only state where "the walk will bring it back" is a claim anyone can make.
+- The supersession's delete ran after the re-inserts rather than between the parse and the insert.
+  Child rows are globally keyed and first-seen-wins, so the old row had to be gone before the new one
+  was written or the tool calls and compactions never reattached - and it equally could not be deleted
+  before the file was read, since a failed read would then have destroyed the only copy. Split into a
+  planning pass and a commit that happens between the two loops, which is the one position satisfying
+  both.
+- `kindForPath` keyed on the substring `/subagents/`, so the same file was an agent run read one way
+  and a session run read another: a walk rooted inside a session directory hands back
+  `subagents/agent-1.jsonl` with no leading separator. It now splits the path and compares segments.
+  Kind drives `agent_type` and the by-model breakdown, and `IsTranscript` only requires the `agent-`
+  prefix for agent-kinded paths, so the same slip let a workflow journal read from that root pass as a
+  transcript - which is also how the prune could promise to clear a row that nothing would clear.
 
 ### Added
 
