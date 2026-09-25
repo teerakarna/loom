@@ -1650,6 +1650,30 @@ Branch protection's required status checks were updated to match (`ci`, `secrets
 five old names) - confirmed with the owner before changing it, both that the change should happen at
 all and that it should happen once the workflow itself was ready, not before.
 
+#### The review-loop rule had a quality stop condition and no cost ceiling - BUILT 2026-09-25
+
+Issue #84. `CLAUDE.md`'s own re-run guidance - "stop re-running once a pass comes back clean, not
+before" - names only a quality bar, and the CI cost-hygiene PR just above is real, if moderate,
+evidence of the shape: five `/code-review high` rounds, four of them finding a genuine behavioral
+bug, before a pass came back without one. A sibling repo (`session-exchange`) ran the identical rule
+to its actual conclusion first: eleven `high` passes on one PR, the last several changing only prose
+in `CONTRIBUTING.md`, two of them dying on the 600s stall watchdog and returning nothing at all.
+Filed here because the rule originated in this file, with the explicit question of whether loom
+wants the same fix or a different one, given `scripts/ci.sh` and a stronger automated gate than that
+other repo has.
+
+Adopted the same structural fix rather than a bare round-count ceiling, since a numeric cap treats
+the symptom (too many rounds) without touching the cause (each round reviewing the same untouched
+diff again). Two additions to the existing clean-stop rule, not a replacement for it: scope each
+re-run to what the *last fix* touched, not the whole original diff, since reviewing an unchanged
+region repeatedly is exactly how a clean-stop-only rule turns into eleven rounds on a 1559-line diff;
+and treat a pass whose only findings are wording or comments, not behavior, as the real stop signal -
+read the diff yourself at that point and say so in the PR body, rather than spending another round
+on prose. A pass with zero findings still stops immediately, unchanged. Not adopted: a hard numeric
+ceiling on its own - loom's own five-round experience found real bugs through round four, later than
+`session-exchange`'s pattern decayed, so a small fixed cap would have cut off genuine findings here
+specifically, the exact case-by-case judgment a bare number can't make.
+
 ### B7 scope, agreed 2026-09-22
 
 Two independent reassessments arrived at the same place within a fortnight. One was written on a
