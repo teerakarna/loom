@@ -373,10 +373,15 @@ func pruneWorkflowJournals(db *ledger.DB) error {
 		return err
 	}
 	// Report what was deleted, not what was a candidate. DeleteRuns skips a
-	// path whose row has already gone (a concurrent `loom report` on the same
-	// ledger is enough), so printing the candidate list claims prunes that did
-	// not happen - and this output exists precisely to make an unexplained drop
-	// in the run count explainable, which a wrong line undoes.
+	// path with no row rather than failing, so the two lists can differ - a
+	// duplicate path in the candidate list, or a stale list assembled before
+	// something else removed the row, and printing the candidates claims prunes
+	// that did not happen. This output exists precisely to make an unexplained
+	// drop in the run count explainable, which a wrong line undoes.
+	//
+	// Not a concurrency story, despite reading like one: the connection sets no
+	// busy_timeout (ledger.Open), so a second `loom report` racing this one
+	// fails with SQLITE_BUSY rather than quietly winning the delete.
 	for _, p := range deleted {
 		fmt.Fprintf(os.Stderr, "loom: pruned non-transcript ledger row %s\n", p)
 	}

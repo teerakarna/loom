@@ -75,12 +75,18 @@ func TestPruneWorkflowJournalsOnlyTakesJournals(t *testing.T) {
 	}
 }
 
-// Every one of these four states looked like "gone from disk" in the first
-// version of this classifier, and the out-of-root one is not rare: the root is
-// a command argument, and the ledger deliberately holds runs from outside it.
+// Every one of these states looked like "gone from disk" in the first version
+// of this classifier, and the out-of-root one is not rare: the root is a
+// command argument, and the ledger deliberately holds runs from outside it.
 // Against a narrowed root that misreported 221 real transcripts as prunable,
 // and pointed them at a `loom report` that would never have touched them.
-func TestFreshnessSeparatesTheFourNotWalkedStates(t *testing.T) {
+//
+// The `unexpected` case is the same lesson one step further on: a row under the
+// root that Walk will never return and the prune will never delete belongs in
+// neither of the two buckets that name a remedy. Without this assertion the
+// classifier can go back to ending in a bare `outsideRoot++`, which is a false
+// statement on both halves for a row that never clears.
+func TestFreshnessSeparatesTheNotWalkedStates(t *testing.T) {
 	db := openTestLedger(t)
 	root := t.TempDir()
 	outside := t.TempDir()
@@ -98,13 +104,16 @@ func TestFreshnessSeparatesTheFourNotWalkedStates(t *testing.T) {
 
 	current := write("proj/sess.jsonl")
 	journal := write("proj/sess/subagents/workflows/wf-1/journal.jsonl")
+	// Under the root, on disk, and not a path Walk returns: not prunable, not
+	// missing, not outside the root. Nothing explains it, which is the point.
+	odd := write("proj/sess/subagents/workflows/wf-1/other.jsonl")
 	elsewhere := filepath.Join(outside, "other.jsonl")
 	if err := os.WriteFile(elsewhere, []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	gone := filepath.Join(root, "proj", "deleted.jsonl")
 
-	for _, p := range []string{current, journal, elsewhere, gone} {
+	for _, p := range []string{current, journal, odd, elsewhere, gone} {
 		insertRun(t, db, p)
 	}
 	// Sizes must match for `current` to count as current rather than stale.
@@ -128,6 +137,7 @@ func TestFreshnessSeparatesTheFourNotWalkedStates(t *testing.T) {
 		{"prunable", f.prunable},
 		{"missing", f.missing},
 		{"outsideRoot", f.outsideRoot},
+		{"unexpected", f.unexpected},
 	} {
 		if c.got != 1 {
 			t.Errorf("%s = %d, want 1 (counts: %+v)", c.name, c.got, f)
@@ -135,5 +145,33 @@ func TestFreshnessSeparatesTheFourNotWalkedStates(t *testing.T) {
 	}
 	if f.unreadable != 0 {
 		t.Errorf("unreadable = %d, want 0 (counts: %+v)", f.unreadable, f)
+	}
+	// The freshness totals are read against each other, so they have to add up.
+	if f.current+f.stale+f.unseen+f.unreadableOnDisk != f.onDisk {
+		t.Errorf("current+stale+unseen+unreadable != onDisk (counts: %+v)", f)
+	}
+}
+
+// A projects root that does not exist is a new install, and the ledger rows are
+// still worth classifying. Any other walk failure leaves a partial file list,
+// where continuing would report live transcripts as unexpected - and the version
+// this replaces went further and returned every count as zero, printing
+// "0 transcripts on disk, 0 ingested" against a ledger holding hundreds of rows.
+// Absence read as confirmed-empty is the failure this project has already had
+// once, in the memory store.
+func TestFreshnessOnAMissingRootStillClassifiesLedgerRows(t *testing.T) {
+	db := openTestLedger(t)
+	root := filepath.Join(t.TempDir(), "never-created")
+	insertRun(t, db, filepath.Join(root, "proj", "sess.jsonl"))
+
+	f, err := freshness(db, root)
+	if err != nil {
+		t.Fatalf("freshness on a missing root: %v", err)
+	}
+	if f.onDisk != 0 {
+		t.Errorf("onDisk = %d, want 0 (counts: %+v)", f.onDisk, f)
+	}
+	if f.missing != 1 {
+		t.Errorf("missing = %d, want 1 - the row was dropped rather than classified (counts: %+v)", f.missing, f)
 	}
 }

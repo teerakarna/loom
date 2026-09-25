@@ -122,7 +122,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule would have dropped 42 of them. `loom report` also prunes any such rows an existing ledger
   already holds, naming each one on stderr, since nothing else removes them and the discovery fix on
   its own would leave them reported as "in ledger, gone from disk" for files that are still there.
-  `loom status` now stats before making that claim and counts the two states separately.
+- `loom status` no longer guesses why a ledger row failed to come back from the walk. "Walk did not
+  return it" was reported as "gone from disk" regardless of the reason, and a first attempt at fixing
+  that reintroduced the same false signal one layer up, reporting 221 real transcripts as prunable
+  against a narrowed root. It now counts five states apart, each keyed on its own positive signal
+  rather than on what is left over: prunable (the same predicate `loom report` prunes on), genuinely
+  absent, present but unreadable, outside the root being asked about, and under the root but still
+  not walked. A file the walk did return but could not stat is counted too, so the freshness totals
+  add up. A projects root that does not exist is still a normal state for a new install, but any
+  other walk failure is now an error rather than a silent set of zeroes that read as an empty ledger.
 
 ### Added
 

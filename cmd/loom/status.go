@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/teerakarna/loom/internal/ingest"
 	"github.com/teerakarna/loom/internal/ledger"
@@ -62,6 +64,13 @@ func runStatus(args []string) error {
 	} else {
 		fmt.Printf("  never ingested            0\n")
 	}
+	// Printed whenever non-zero so the four counts above still add up to
+	// `transcripts on disk`. A file loom found but could not stat is neither
+	// current nor stale nor unseen, and silently dropping it makes the
+	// arithmetic wrong with nothing on screen to explain the gap.
+	if fresh.unreadableOnDisk > 0 {
+		fmt.Printf("  ingested but unreadable   %d  (could not stat to compare size; state unknown)\n", fresh.unreadableOnDisk)
+	}
 	// Label widths match deliberately: these counts are read against each
 	// other, and a one-character shift makes them look like separate columns.
 	if fresh.missing > 0 {
@@ -70,11 +79,17 @@ func runStatus(args []string) error {
 	if fresh.unreadable > 0 {
 		fmt.Printf("  in ledger, unreadable     %d  (permissions or an unavailable mount, not data loss)\n", fresh.unreadable)
 	}
+	// No claim about the file here. This bucket is keyed on the path alone, so
+	// the row is prunable whether the file is still on disk or not, and saying
+	// "file still there" would be asserting a disk state nothing checked.
 	if fresh.prunable > 0 {
-		fmt.Printf("  in ledger, not transcript %d  (file still there; `loom report` deletes these rows)\n", fresh.prunable)
+		fmt.Printf("  in ledger, not transcript %d  (`loom report` deletes these rows)\n", fresh.prunable)
 	}
 	if fresh.outsideRoot > 0 {
 		fmt.Printf("  in ledger, outside root   %d  (nothing to do; the root is an argument)\n", fresh.outsideRoot)
+	}
+	if fresh.unexpected > 0 {
+		fmt.Printf("  in ledger, unexpected     %d  (under the root, but not a path this version walks)\n", fresh.unexpected)
 	}
 	fmt.Println()
 
@@ -132,9 +147,14 @@ func runStatus(args []string) error {
 
 type freshnessCounts struct {
 	onDisk, current, stale, unseen int
-	// The four ways a ledger row can fail to come back from Walk. See the
+	// A file Walk returned that could not be stat'd, so its size cannot be
+	// compared. Counted so current+stale+unseen+this equals onDisk; a state
+	// that vanishes from a set of totals that are read against each other is
+	// worse than one with an awkward name.
+	unreadableOnDisk int
+	// The five ways a ledger row can fail to come back from Walk. See the
 	// classifier in freshness for why they are counted apart.
-	missing, unreadable, prunable, outsideRoot int
+	missing, unreadable, prunable, outsideRoot, unexpected int
 }
 
 // freshness compares the ledger against what is on disk right now, without
@@ -155,12 +175,23 @@ func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 
 	paths, err := ingest.Walk(root)
 	if err != nil {
-		// A missing projects root is a normal state for a new install, not an
-		// error worth failing the whole command over.
-		if os.IsNotExist(err) {
-			return f, nil
+		// A projects root that does not exist at all is a normal state for a
+		// new install, and the ledger rows are still worth classifying: nothing
+		// was walked, so every one of them is genuinely not-walked and the loop
+		// below is as accurate as it ever is.
+		//
+		// Every other walk failure is different in kind and must not take the
+		// same path. WalkDir reports a directory removed mid-walk as an ENOENT
+		// too, and there `paths` is partial: continuing would classify live,
+		// current transcripts as unexpected, and the old code went further and
+		// returned zeroes for everything - printing "0 transcripts on disk, 0
+		// ingested" against a ledger holding hundreds of rows, which reads as
+		// confirmed-empty rather than as a failed scan. So distinguish the two
+		// by asking about the root itself, and fail loudly for the rest.
+		if _, statErr := os.Stat(root); !os.IsNotExist(statErr) {
+			return f, err
 		}
-		return f, err
+		paths = nil
 	}
 
 	onDisk := map[string]bool{}
@@ -174,6 +205,7 @@ func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 		}
 		fi, err := os.Stat(p)
 		if err != nil {
+			f.unreadableOnDisk++
 			continue
 		}
 		if fi.Size() != size {
@@ -186,10 +218,11 @@ func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 		if onDisk[p] {
 			continue
 		}
-		// "Walk did not return it" is four different states, and the whole
+		// "Walk did not return it" is five different states, and the whole
 		// value of this block is telling them apart - each one implies a
-		// different action, and one of them implies none at all. Classify by
-		// the narrowest available signal, never by elimination:
+		// different action, and two of them imply none at all. Every bucket is
+		// keyed on its own positive signal, and nothing is inferred from what
+		// is left over:
 		//
 		//   - not a path Walk would ever ingest, and `loom report` deletes it:
 		//     the one case where naming a remedy is honest, so it is keyed on
@@ -197,13 +230,19 @@ func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 		//   - genuinely absent: the row outlived its file.
 		//   - present but unreadable: says nothing about the data, and must
 		//     not be reported as absence.
-		//   - present, readable, a transcript: it simply sits outside the root
-		//     being asked about. Normal, and nothing to do about it.
+		//   - outside the root being asked about: normal, nothing to do, and
+		//     decided by comparing against the root rather than by exhaustion.
+		//   - under the root, readable, and still not walked: no story explains
+		//     it, so it gets a bucket that says exactly that.
 		//
-		// The last one is why this cannot be inferred from Walk's silence: the
-		// root is an argument, and the ledger deliberately holds runs from
-		// outside it (that is what an empty lane means). Guessing from absence
-		// reported 221 real transcripts as prunable against a narrowed root.
+		// The out-of-root case is why this cannot be inferred from Walk's
+		// silence at all: the root is an argument, and the ledger deliberately
+		// holds runs from outside it (that is what an empty lane means).
+		// Guessing from absence reported 221 real transcripts as prunable
+		// against a narrowed root. The last bucket is the same lesson applied
+		// once more: a row like <root>/sess/subagents/workflows/wf-1/other.jsonl
+		// is neither prunable nor outside the root, and calling it either would
+		// be a false statement about a row that never clears.
 		if isPrunableLedgerPath(p) {
 			f.prunable++
 			continue
@@ -216,7 +255,23 @@ func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 			}
 			continue
 		}
-		f.outsideRoot++
+		if outsideRoot(root, p) {
+			f.outsideRoot++
+			continue
+		}
+		f.unexpected++
 	}
 	return f, nil
+}
+
+// outsideRoot reports whether p lies outside root. An unresolvable comparison
+// (different volumes, one side relative) counts as outside: the question this
+// answers is "can the root being asked about explain why Walk skipped it", and
+// a path the root cannot even be compared against is not explained by it.
+func outsideRoot(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return true
+	}
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
