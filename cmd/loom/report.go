@@ -95,7 +95,7 @@ func ingestAll(db *ledger.DB, root string) error {
 		return err
 	}
 
-	if err := pruneNonTranscripts(db); err != nil {
+	if err := pruneWorkflowJournals(db); err != nil {
 		return err
 	}
 
@@ -335,35 +335,46 @@ func printGroup(s ledger.Summary, heading string, n int, row func(int) (string, 
 	}
 }
 
-// pruneNonTranscripts drops rows the ingester should never have written: a
+// pruneWorkflowJournals drops rows the ingester should never have written: a
 // ledger built before ingest.IsTranscript existed holds one run per workflow
 // orchestration journal, with no model, no tokens and no tool calls. Nothing
-// else removes them - reports and policy both scan `runs` unfiltered, so they
-// keep inflating the run count and the medians for as long as the ledger
-// lives.
+// else removes them - reports, status and the MCP cost summary all count
+// `runs` unfiltered, so they keep inflating the totals for as long as the
+// ledger lives.
 //
-// Keyed on the path shape rather than on cost, deliberately: a genuinely
-// zero-cost run (a subagent that produced no assistant turn) is real data and
-// must survive.
-func pruneNonTranscripts(db *ledger.DB) error {
+// Deliberately keyed on the one known-bad filename rather than on
+// !IsTranscript, even though that reads as the more general fix. The
+// complement of a whitelist has unbounded blast radius: if the host ever
+// changes the subagent naming convention, or a ledger carries rows from a host
+// that used a different one, every subagent run under subagents/ would be
+// deleted with its child rows, and Walk would skip the same files so nothing
+// would re-ingest them. A phantom row that survives is a wrong number; a
+// wrongly deleted row is lost data. The paths go to stderr for the same
+// reason - a count alone leaves no way to see what went.
+//
+// Keyed on the path shape rather than on cost, too: a genuinely zero-cost run
+// (a subagent that produced no assistant turn) is real data and must survive.
+func pruneWorkflowJournals(db *ledger.DB) error {
 	known, err := db.KnownRuns()
 	if err != nil {
 		return err
 	}
 	var stale []string
 	for _, k := range known {
-		if !ingest.IsTranscript(k.Path) {
+		if filepath.Base(k.Path) == "journal.jsonl" && !ingest.IsTranscript(k.Path) {
 			stale = append(stale, k.Path)
 		}
 	}
-	n, err := db.DeleteRuns(stale)
-	if err != nil {
+	if len(stale) == 0 {
+		return nil
+	}
+	if _, err := db.DeleteRuns(stale); err != nil {
 		return err
 	}
-	if n > 0 {
-		// Worth a line: the run count drops, and an unexplained drop in a
-		// cost report is the kind of thing that gets read as data loss.
-		fmt.Fprintf(os.Stderr, "loom: pruned %d ledger row(s) that were not transcripts\n", n)
+	// Worth saying out loud: the run count drops, and an unexplained drop in a
+	// cost report is the kind of thing that gets read as data loss.
+	for _, p := range stale {
+		fmt.Fprintf(os.Stderr, "loom: pruned non-transcript ledger row %s\n", p)
 	}
 	return nil
 }

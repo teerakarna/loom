@@ -10,7 +10,10 @@ import (
 // Child rows are the risk here: there is no ON DELETE CASCADE and foreign
 // keys are not enabled on this connection, so a delete that only touches
 // `runs` leaves tool_usage/compactions/asset_usage rows pointing at a dead
-// id - and the next run to be allocated that id inherits them.
+// id. Not because the id gets reused - it is AUTOINCREMENT - but because
+// tool_use_id and boundary_uuid are globally unique and first-seen-wins, so a
+// leftover row keeps an id claimed on behalf of a run that no longer exists
+// and a resumed session's replay of the same event is silently dropped.
 func TestDeleteRunsRemovesChildRows(t *testing.T) {
 	db := openTestDB(t)
 	id := insertTestRun(t, db, "phantom.jsonl")

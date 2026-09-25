@@ -65,6 +65,12 @@ func runStatus(args []string) error {
 	if fresh.missing > 0 {
 		fmt.Printf("  in ledger, gone from disk %d\n", fresh.missing)
 	}
+	if fresh.prunable > 0 {
+		// Label width matches the line above deliberately: the two counts are
+		// read against each other, and a one-character shift makes them look
+		// like different columns.
+		fmt.Printf("  in ledger, not transcript %d  (file still there; `loom report` prunes workflow journals)\n", fresh.prunable)
+	}
 	fmt.Println()
 
 	fmt.Println("Ledger contents:")
@@ -119,7 +125,7 @@ func runStatus(args []string) error {
 	return nil
 }
 
-type freshnessCounts struct{ onDisk, current, stale, unseen, missing int }
+type freshnessCounts struct{ onDisk, current, stale, unseen, missing, prunable int }
 
 // freshness compares the ledger against what is on disk right now, without
 // ingesting. This is the check that would have surfaced the staleness bug:
@@ -167,9 +173,21 @@ func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 		}
 	}
 	for p := range known {
-		if !onDisk[p] {
-			f.missing++
+		if onDisk[p] {
+			continue
 		}
+		// Walk did not return it, which is two different states, and
+		// conflating them misreports both. The file may be genuinely gone -
+		// or it may be sitting right there and simply not be a transcript (a
+		// workflow's orchestration journal, ingested before IsTranscript
+		// existed), in which case "gone from disk" is a false signal that
+		// never clears. Stat decides; status stays read-only either way, and
+		// the next `loom report` is what removes the row.
+		if _, err := os.Stat(p); err == nil {
+			f.prunable++
+			continue
+		}
+		f.missing++
 	}
 	return f, nil
 }

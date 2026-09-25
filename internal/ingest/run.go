@@ -266,8 +266,10 @@ func kindForPath(path string) string {
 // records ("started"/"result" keyed by agentId), no assistant turns and no
 // usage. Ingesting it yields a run with no model, no tokens and no tool
 // calls - a phantom that inflates the run count, adds an unlabelled bucket
-// to the by-model breakdown, and lands in the denominators policy decisions
-// are computed from. So under subagents/ the agent- prefix is required, and
+// to the by-model breakdown, and skews every average computed from those
+// totals. (Not the per-agent-type policy figures: those filter on a non-empty
+// agent_type, which a journal has no .meta.json to supply. Reporting numbers,
+// not policy ones.) So under subagents/ the agent- prefix is required, and
 // the check is AgentIDFromPath's rather than a second copy of it: discovery
 // and id extraction must agree on what a subagent filename looks like, or a
 // later convention change fixes one and silently breaks the other.

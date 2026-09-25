@@ -412,7 +412,18 @@ func perRun(total float64, runs int) float64 {
 // The child rows are deleted explicitly. There is no ON DELETE CASCADE and
 // foreign keys are not enabled on this connection, so a bare delete from
 // `runs` would leave tool_usage, compactions and asset_usage rows pointing at
-// an id that no longer exists.
+// an id that no longer exists. `runs.id` is AUTOINCREMENT, so a later run
+// never inherits those rows by reusing the id - the hazard is the other
+// direction: tool_usage.tool_use_id is a global primary key and
+// compactions.boundary_uuid globally unique, both first-seen-wins via ON
+// CONFLICT DO NOTHING. A leftover child row keeps a replayed event's id
+// claimed by a dead run, so when a resumed session replays that event its
+// copy is silently dropped and the inner join in occupancy() never sees it.
+//
+// Which is also why this is not a general-purpose "delete any run" tool. A
+// session transcript owns the ids its resumed continuation replays, so
+// deleting one drops those events from the continuation's occupancy, and the
+// only way back is re-ingesting the deleted file.
 func (d *DB) DeleteRuns(paths []string) (int, error) {
 	if len(paths) == 0 {
 		return 0, nil
