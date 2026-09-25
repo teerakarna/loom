@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Ingest treated every `.jsonl` under the projects root as a transcript, so a workflow run's
+  `subagents/workflows/<wf-id>/journal.jsonl` - orchestration records only, no assistant turns and
+  no `usage` - became a run with no model, no tokens and no tool calls. It inflated the run count,
+  added an unlabelled bucket to the by-model breakdown, and sat in the denominators policy decisions
+  are computed from. Under `subagents/` the `agent-` filename prefix is now required, reusing
+  `AgentIDFromPath`'s predicate so discovery and id extraction cannot disagree. Depth is
+  deliberately not the discriminator: a workflow's own subagents live two levels down and are real
+  transcripts - on the corpus this was measured against, a depth rule would have dropped 42 of them.
+  `loom report` also prunes any such rows an existing ledger already holds, since nothing else
+  removes them and the discovery fix on its own would leave them reported as "in ledger, gone from
+  disk" for files that are still there.
+
 ### Changed
 
 - CI reduced from five billed jobs to two: `test`/`lint`/`govulncheck`/`plugin` merged into one `ci`

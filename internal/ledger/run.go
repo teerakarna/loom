@@ -1,6 +1,8 @@
 package ledger
 
 import (
+	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
@@ -393,4 +395,55 @@ func perRun(total float64, runs int) float64 {
 		return 0
 	}
 	return total / float64(runs)
+}
+
+// DeleteRuns removes the named runs and everything hanging off them,
+// returning how many rows were deleted from `runs`.
+//
+// Why this exists at all: the ingester once treated every .jsonl under the
+// projects root as a transcript, so a workflow's orchestration journal became
+// a run with no model, no tokens and no tool calls. Fixing discovery
+// (ingest.IsTranscript) stops new ones, but it cannot help a ledger that
+// already holds some - and it makes them worse, because they are now in the
+// ledger and never returned by Walk, which `loom status` reads as "in ledger,
+// gone from disk" for a file that is sitting right there. So the prune is
+// part of the fix, not a follow-up.
+//
+// The child rows are deleted explicitly. There is no ON DELETE CASCADE and
+// foreign keys are not enabled on this connection, so a bare delete from
+// `runs` would leave tool_usage, compactions and asset_usage rows pointing at
+// an id that no longer exists.
+func (d *DB) DeleteRuns(paths []string) (int, error) {
+	if len(paths) == 0 {
+		return 0, nil
+	}
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var deleted int
+	for _, p := range paths {
+		var id int64
+		if err := tx.QueryRow(`SELECT id FROM runs WHERE path = ?`, p).Scan(&id); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return 0, err
+		}
+		for _, table := range []string{"tool_usage", "compactions", "asset_usage"} {
+			if _, err := tx.Exec(`DELETE FROM `+table+` WHERE run_id = ?`, id); err != nil {
+				return 0, err
+			}
+		}
+		if _, err := tx.Exec(`DELETE FROM runs WHERE id = ?`, id); err != nil {
+			return 0, err
+		}
+		deleted++
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }

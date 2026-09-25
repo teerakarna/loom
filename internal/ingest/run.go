@@ -257,9 +257,9 @@ func kindForPath(path string) string {
 	return "session"
 }
 
-// Walk discovers transcript files under a Claude Code projects root
-// (typically ~/.claude/projects): every session .jsonl file, plus every
-// subagent's own agent-*.jsonl file under <session-id>/subagents/.
+// IsTranscript reports whether path is a file loom should ingest as one run:
+// a session .jsonl anywhere under the projects root, or a subagent's own
+// agent-<id>.jsonl under <session-id>/subagents/.
 //
 // Not every .jsonl under the root is a transcript. A workflow run writes
 // subagents/workflows/<wf-id>/journal.jsonl, which carries orchestration
@@ -267,12 +267,31 @@ func kindForPath(path string) string {
 // usage. Ingesting it yields a run with no model, no tokens and no tool
 // calls - a phantom that inflates the run count, adds an unlabelled bucket
 // to the by-model breakdown, and lands in the denominators policy decisions
-// are computed from. So under subagents/ the agent- prefix is required.
+// are computed from. So under subagents/ the agent- prefix is required, and
+// the check is AgentIDFromPath's rather than a second copy of it: discovery
+// and id extraction must agree on what a subagent filename looks like, or a
+// later convention change fixes one and silently breaks the other.
 //
 // Depth deliberately does not enter into it: a workflow's own subagents live
 // at subagents/workflows/<wf-id>/agent-<id>.jsonl, two levels down, and are
 // real transcripts. On the corpus this was measured against, requiring the
 // file to sit directly inside subagents/ would have dropped 42 of them.
+//
+// This is also what the ledger prunes against, so it has to be a predicate
+// on a path alone - it is applied to rows whose file may no longer exist.
+func IsTranscript(path string) bool {
+	if !strings.HasSuffix(path, ".jsonl") {
+		return false
+	}
+	if kindForPath(path) != "agent" {
+		return true
+	}
+	_, ok := AgentIDFromPath(path)
+	return ok
+}
+
+// Walk discovers every transcript file under a Claude Code projects root
+// (typically ~/.claude/projects). See IsTranscript for what qualifies.
 //
 // Files are returned in no particular order; the caller decides ingest order.
 func Walk(root string) ([]string, error) {
@@ -281,13 +300,7 @@ func Walk(root string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".jsonl") {
-			return nil
-		}
-		if kindForPath(path) == "agent" && !strings.HasPrefix(filepath.Base(path), "agent-") {
+		if d.IsDir() || !IsTranscript(path) {
 			return nil
 		}
 		files = append(files, path)

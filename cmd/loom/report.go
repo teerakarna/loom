@@ -95,6 +95,10 @@ func ingestAll(db *ledger.DB, root string) error {
 		return err
 	}
 
+	if err := pruneNonTranscripts(db); err != nil {
+		return err
+	}
+
 	// Size is what decides: a transcript that has grown since it was last
 	// ingested must be re-read, or a live session's cost stays frozen at
 	// whatever it was the first time loom looked (see ledger.NeedsIngest).
@@ -329,4 +333,37 @@ func printGroup(s ledger.Summary, heading string, n int, row func(int) (string, 
 		name, runs, total, per := row(i)
 		fmt.Printf("  %-24s %6d %14.0f %14.0f\n", name, runs, total, per)
 	}
+}
+
+// pruneNonTranscripts drops rows the ingester should never have written: a
+// ledger built before ingest.IsTranscript existed holds one run per workflow
+// orchestration journal, with no model, no tokens and no tool calls. Nothing
+// else removes them - reports and policy both scan `runs` unfiltered, so they
+// keep inflating the run count and the medians for as long as the ledger
+// lives.
+//
+// Keyed on the path shape rather than on cost, deliberately: a genuinely
+// zero-cost run (a subagent that produced no assistant turn) is real data and
+// must survive.
+func pruneNonTranscripts(db *ledger.DB) error {
+	known, err := db.KnownRuns()
+	if err != nil {
+		return err
+	}
+	var stale []string
+	for _, k := range known {
+		if !ingest.IsTranscript(k.Path) {
+			stale = append(stale, k.Path)
+		}
+	}
+	n, err := db.DeleteRuns(stale)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		// Worth a line: the run count drops, and an unexplained drop in a
+		// cost report is the kind of thing that gets read as data loss.
+		fmt.Fprintf(os.Stderr, "loom: pruned %d ledger row(s) that were not transcripts\n", n)
+	}
+	return nil
 }
