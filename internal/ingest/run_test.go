@@ -1,6 +1,10 @@
 package ingest
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestIngestFileSession(t *testing.T) {
 	rs, err := IngestFile("../../testdata/synthetic-session.jsonl")
@@ -259,5 +263,82 @@ func TestIngestFile_CompactionReadNotGuessed(t *testing.T) {
 	}
 	if c.Timestamp.IsZero() {
 		t.Error("Timestamp is zero, want the line's own timestamp")
+	}
+}
+
+// Walk's contract is "transcripts", not "every .jsonl". The regression that
+// prompted this: a workflow journal was ingested as an agent run and produced
+// a row with no model, no tokens and no tool calls. The guard is the agent-
+// prefix and deliberately not the nesting depth, because a workflow's own
+// subagents are real transcripts two levels below subagents/.
+func TestWalkDiscoversTranscriptsOnly(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]bool{ // path relative to root -> want discovered
+		"-h-u-proj/sess.jsonl":                                  true,
+		"-h-u-proj/sess/subagents/agent-1.jsonl":                true,
+		"-h-u-proj/sess/subagents/workflows/wf-9/agent-2.jsonl": true,
+		"-h-u-proj/sess/subagents/workflows/wf-9/journal.jsonl": false,
+		"-h-u-proj/notes.md":                                    false,
+	}
+	for rel := range files {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := Walk(root)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	found := make(map[string]bool, len(got))
+	for _, p := range got {
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found[filepath.ToSlash(rel)] = true
+	}
+	for rel, want := range files {
+		if found[rel] != want {
+			t.Errorf("Walk discovered %q = %v, want %v", rel, found[rel], want)
+		}
+	}
+}
+
+// A path is classified by what its directories are named, not by whether the
+// subagents directory happens to have a separator in front of it. The substring
+// test this replaces required "/subagents/", so the same file was an agent run
+// read one way and a session run read another: a walk rooted inside a session
+// directory hands back subagents/agent-1.jsonl with no leading separator, and so
+// does a ledger row written from there.
+//
+// Two things went wrong at once and both are asserted here. The kind was wrong,
+// which loses agent_type and puts the run in the by-model breakdown as a session.
+// And IsTranscript only requires the agent- prefix for agent-kinded paths, so a
+// workflow journal read from that root passed as a transcript - which is also why
+// the ledger's own prune could promise to clear a row that nothing would clear.
+func TestKindAndTranscriptDoNotDependOnALeadingSeparator(t *testing.T) {
+	for _, c := range []struct {
+		path           string
+		wantKind       string
+		wantTranscript bool
+	}{
+		{"/h/proj/sess/subagents/agent-1.jsonl", "agent", true},
+		{"subagents/agent-1.jsonl", "agent", true},
+		{"subagents/workflows/wf-1/agent-9.jsonl", "agent", true},
+		{"subagents/workflows/wf-1/journal.jsonl", "agent", false},
+		{"journal.jsonl", "session", true}, // not under subagents: a real walkable file
+		{"proj/sess.jsonl", "session", true},
+	} {
+		if got := kindForPath(c.path); got != c.wantKind {
+			t.Errorf("kindForPath(%q) = %q, want %q", c.path, got, c.wantKind)
+		}
+		if got := IsTranscript(c.path); got != c.wantTranscript {
+			t.Errorf("IsTranscript(%q) = %v, want %v", c.path, got, c.wantTranscript)
+		}
 	}
 }

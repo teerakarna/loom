@@ -124,6 +124,183 @@ func TestInsertRunReplacesRatherThanDuplicating(t *testing.T) {
 	}
 }
 
+// Replacement is not blanket overwriting: a re-read that cannot work out the lane
+// must leave the known one alone. Lane is derived from the root of the invocation
+// that read the file, and it is empty for a file sitting directly in that root -
+// so a report narrowed to one project recomputed every lane in it as empty. With
+// a plain `lane = excluded.lane` that empty value won, and nothing ever repaired
+// it: the size matched and the feature version was current, so NeedsIngest vetoed
+// every later read and the run sat in UnattributedLanes permanently.
+//
+// The other direction is asserted too, because COALESCE must not be mistaken for
+// "first write wins" - a real lane still replaces a real lane, and a first insert
+// of an empty one is still empty rather than an error.
+func TestInsertRunKeepsAKnownLaneWhenTheNewOneIsEmpty(t *testing.T) {
+	db := openTestDB(t)
+	rec := RunRecord{Path: "p/sess.jsonl", Kind: "session", SizeBytes: 10, Lane: "proj-a"}
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	rec.Lane = ""
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := laneOf(t, db, rec.Path); got != "proj-a" {
+		t.Errorf("lane = %q after a re-read that could not derive one, want proj-a: that run is now unattributable for good", got)
+	}
+
+	rec.Lane = "proj-b"
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := laneOf(t, db, rec.Path); got != "proj-b" {
+		t.Errorf("lane = %q, want proj-b: a real lane must still replace a real lane", got)
+	}
+}
+
+// Same guard, one column family further, and the case is more common than the
+// lane one: the reported figures are only populated from a session read in the
+// same batch, and a re-read of one agent transcript is a batch of one. So an
+// ordinary incremental report used to write NULL over a real reconciliation
+// figure whenever the parent session had not itself changed, and NeedsIngest
+// then vetoed the read that would have restored it.
+func TestInsertRunKeepsReportedFiguresWhenTheReReadHasNone(t *testing.T) {
+	db := openTestDB(t)
+	tokens, uses, ms := int64(500), int64(7), int64(1200)
+	rec := RunRecord{
+		Path: "p/sess/subagents/agent-1.jsonl", Kind: "agent", SizeBytes: 10,
+		ReportedSubagentTokens: &tokens, ReportedToolUses: &uses, ReportedDurationMs: &ms,
+	}
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	rec.ReportedSubagentTokens, rec.ReportedToolUses, rec.ReportedDurationMs = nil, nil, nil
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := reportedOf(t, db, rec.Path); got != [3]int64{500, 7, 1200} {
+		t.Errorf("reported figures = %v after a re-read that found none, want {500 7 1200}: that reconciliation is gone for good", got)
+	}
+
+	// The other direction, so COALESCE cannot be mistaken for "first write wins":
+	// a session that does report new figures still replaces the stored ones.
+	tokens, uses, ms = 900, 9, 1500
+	rec.ReportedSubagentTokens, rec.ReportedToolUses, rec.ReportedDurationMs = &tokens, &uses, &ms
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := reportedOf(t, db, rec.Path); got != [3]int64{900, 9, 1500} {
+		t.Errorf("reported figures = %v, want {900 9 1500}: a fresh figure must still replace a stored one", got)
+	}
+}
+
+// Third column with the same shape, and the trigger is the one most likely to
+// happen without anybody doing anything unusual: agent_type is not in the
+// transcript, it is in the .meta.json companion beside it, and ReadAgentMeta
+// answers "not found" for a companion that has been cleaned up, truncated, or
+// written by a version that spells the field differently. A transcript that grows
+// after that is a re-read with an empty agent type, and a plain overwrite filed
+// the run under no type for good.
+func TestInsertRunKeepsAKnownAgentTypeWhenTheReReadHasNone(t *testing.T) {
+	db := openTestDB(t)
+	rec := RunRecord{
+		Path: "p/sess/subagents/agent-1.jsonl", Kind: "agent", SizeBytes: 10,
+		AgentType: "Explore",
+	}
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	rec.AgentType = ""
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := agentTypeOf(t, db, rec.Path); got != "Explore" {
+		t.Errorf("agent_type = %q after a re-read with no companion file, want Explore: that run is untyped for good", got)
+	}
+
+	// And the other direction, so the guard cannot be read as "first write wins".
+	rec.AgentType = "fork"
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := agentTypeOf(t, db, rec.Path); got != "fork" {
+		t.Errorf("agent_type = %q, want fork: a real type must still replace a real type", got)
+	}
+}
+
+func agentTypeOf(t *testing.T, db *DB, path string) string {
+	t.Helper()
+	var got string
+	if err := db.sql.QueryRow(`SELECT agent_type FROM runs WHERE path = ?`, path).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func reportedOf(t *testing.T, db *DB, path string) [3]int64 {
+	t.Helper()
+	var got [3]int64
+	err := db.sql.QueryRow(`
+		SELECT COALESCE(reported_subagent_tokens, -1), COALESCE(reported_tool_uses, -1),
+		       COALESCE(reported_duration_ms, -1)
+		FROM runs WHERE path = ?`, path).Scan(&got[0], &got[1], &got[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// The two-step write is not one transaction, and the second step's failure is
+// deliberately non-fatal, so the row can end up stored with the current size and
+// feature version while its child rows were never written. NeedsIngest answers
+// "no" from then on, which makes that permanent unless something asks for the
+// re-read.
+func TestInvalidateRunForcesAReRead(t *testing.T) {
+	db := openTestDB(t)
+	rec := RunRecord{Path: "p/sess.jsonl", Kind: "session", SizeBytes: 10}
+	if err := db.InsertRun(rec); err != nil {
+		t.Fatal(err)
+	}
+	// Positive control: without the invalidation this is exactly the "no" the
+	// failure would be stuck behind.
+	needs, err := db.NeedsIngest(rec.Path, rec.SizeBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if needs {
+		t.Fatal("NeedsIngest said yes on an unchanged row, so the assertion below would pass for the wrong reason")
+	}
+
+	if err := db.InvalidateRun(rec.Path); err != nil {
+		t.Fatal(err)
+	}
+	needs, err = db.NeedsIngest(rec.Path, rec.SizeBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !needs {
+		t.Error("NeedsIngest still says no after InvalidateRun: the child rows that failed to write can never arrive")
+	}
+
+	// A row that is not there is not an error - there is nothing to re-read and
+	// nothing stale to correct.
+	if err := db.InvalidateRun("never-ingested.jsonl"); err != nil {
+		t.Errorf("InvalidateRun on an absent path: %v", err)
+	}
+}
+
+func laneOf(t *testing.T, db *DB, path string) string {
+	t.Helper()
+	var lane string
+	if err := db.sql.QueryRow(`SELECT lane FROM runs WHERE path = ?`, path).Scan(&lane); err != nil {
+		t.Fatal(err)
+	}
+	return lane
+}
+
 // TestNeedsIngestDetectsAGrownFile is the regression test for silent cost
 // under-counting. Ingest previously keyed on path alone, so a session
 // transcript that grew after being ingested was frozen at its first reading

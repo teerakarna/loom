@@ -1,6 +1,8 @@
 package ledger
 
 import (
+	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
@@ -18,7 +20,20 @@ import (
 // asset_usage), the gap this mechanism was built to close: a session file
 // untouched since before those tables existed had a runs row but none of
 // their data, forever, confirmed on this machine's own real ledger.
-const CurrentFeatureVersion = 1
+//
+// 2 is the lane and kind corruption fixed alongside this bump, and it is a
+// repair rather than a backfill - the first time this counter has been used for
+// one. A report narrowed to a single project derived every lane from the walked
+// root instead of the projects root, so transcripts were filed under a session
+// UUID, or under nothing at all for the files sitting directly in that root;
+// kindForPath matched "subagents" as a substring, so the same file could be read
+// as an agent run or a session run depending on which root discovered it. Both
+// wrote a plausible wrong value and then made it permanent: size matches and the
+// version is current, so NeedsIngest vetoes every later read that would have
+// corrected it. A bump is the only repair path the design offers - there is
+// deliberately no --force (docs/design.md, "No reprocessing flag") - so without
+// one, a ledger that took a narrowed report stays wrong for as long as it lives.
+const CurrentFeatureVersion = 2
 
 // RunRecord is what gets written to the runs table for one ingested
 // transcript file. ReportedSubagentTokens/ReportedToolUses/ReportedDurationMs
@@ -63,23 +78,71 @@ func (d *DB) InsertRun(r RunRecord) error {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path) DO UPDATE SET
 			size_bytes = excluded.size_bytes, session_id = excluded.session_id,
-			kind = excluded.kind, model = excluded.model, lane = excluded.lane,
-			agent_type = excluded.agent_type,
+			kind = excluded.kind, model = excluded.model,
+			-- An empty lane carries no information, so it must not displace a
+			-- known one. Lane is derived from the root of the invocation that read
+			-- the file, and LaneFromPath returns "" for a file sitting directly in
+			-- that root - so re-reading a transcript under a report narrowed to one
+			-- project recomputed its lane as empty and wrote that over the real
+			-- one. Nothing repaired it afterwards: the size matched and
+			-- the feature version was current, so NeedsIngest vetoed every later
+			-- read and the run stayed in UnattributedLanes for good. The reverse
+			-- never needs expressing - a run does not move out of the projects
+			-- root without its path changing, which makes it a different row.
+			lane = COALESCE(NULLIF(excluded.lane, ''), runs.lane),
+			-- Same argument as lane, and for a nearly identical reason: agent_type
+			-- is not in the transcript at all. It is read from the .meta.json
+			-- companion beside it, and ReadAgentMeta answers "not found" for a
+			-- companion that is absent, unreadable, not valid JSON, or names an
+			-- empty type - all normal conditions on a corpus another tool writes.
+			-- So a transcript that grows after its companion has been cleaned up
+			-- re-reads with an empty agent type, and a plain overwrite would file
+			-- the run under no type for good, since the size then matches and the
+			-- feature version is current. An empty value here means "could not
+			-- read it", never "this run has no agent type".
+			agent_type = COALESCE(NULLIF(excluded.agent_type, ''), runs.agent_type),
 			effort = excluded.effort, started_at = excluded.started_at, ended_at = excluded.ended_at,
 			input_tokens = excluded.input_tokens, output_tokens = excluded.output_tokens,
 			cache_read_tokens = excluded.cache_read_tokens,
 			cache_creation_tokens = excluded.cache_creation_tokens,
 			weighted_cost = excluded.weighted_cost, tool_use_count = excluded.tool_use_count,
 			denial_count = excluded.denial_count, feedback_count = excluded.feedback_count,
-			reported_subagent_tokens = excluded.reported_subagent_tokens,
-			reported_tool_uses = excluded.reported_tool_uses,
-			reported_duration_ms = excluded.reported_duration_ms,
+			-- Same argument as lane, one step further: these three are NULL
+			-- unless some session read in the *same batch* reported figures for
+			-- this agent, and a re-read of one agent transcript is a batch of
+			-- one. So an ordinary incremental report writes NULL over a real
+			-- reconciliation figure whenever the parent session file has not
+			-- itself changed, and NeedsIngest then vetoes the read that would
+			-- restore it. NULL here means "nothing reported yet", never "the
+			-- earlier figure was withdrawn", so keeping the stored one is the
+			-- only reading that matches what the column means.
+			reported_subagent_tokens = COALESCE(excluded.reported_subagent_tokens, runs.reported_subagent_tokens),
+			reported_tool_uses = COALESCE(excluded.reported_tool_uses, runs.reported_tool_uses),
+			reported_duration_ms = COALESCE(excluded.reported_duration_ms, runs.reported_duration_ms),
 			feature_version = excluded.feature_version`,
 		r.Path, r.SizeBytes, r.SessionID, r.Kind, r.Model, r.Lane, r.AgentType, r.Effort, formatTime(r.StartedAt), formatTime(r.EndedAt),
 		r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheCreationTokens,
 		r.WeightedCost, r.ToolUseCount, r.DenialCount, r.FeedbackCount,
 		r.ReportedSubagentTokens, r.ReportedToolUses, r.ReportedDurationMs, CurrentFeatureVersion,
 	)
+	return err
+}
+
+// InvalidateRun marks one run as needing a re-read on the next report, by
+// clearing the feature version NeedsIngest compares against. A missing row is
+// not an error: there is then nothing to re-read and nothing stale to correct.
+//
+// It exists because a run is written in two steps that are not one
+// transaction - InsertRun, then recordOccupancyAndUsage for the child rows -
+// and the second one's failure is deliberately non-fatal, so one unreadable
+// transcript cannot cost a whole report. The size and feature version are
+// already stored by then, so NeedsIngest answers "no" from the next report
+// onward and the child rows never arrive. Worse on the supersession path, where
+// the old row's child rows have already been deleted to make room for them:
+// there the loss is silent and total. Writing the version back down costs one
+// UPDATE and makes the failure self-healing instead.
+func (d *DB) InvalidateRun(path string) error {
+	_, err := d.sql.Exec(`UPDATE runs SET feature_version = 0 WHERE path = ?`, path)
 	return err
 }
 
@@ -393,4 +456,70 @@ func perRun(total float64, runs int) float64 {
 		return 0
 	}
 	return total / float64(runs)
+}
+
+// DeleteRuns removes the named runs and everything hanging off them,
+// returning the paths it actually deleted. A path with no row is skipped
+// rather than reported as an error, so the return value is the only honest
+// basis for telling a user what went: it can be shorter than the input, and a
+// caller that echoes its own candidate list instead claims deletions that did
+// not happen.
+//
+// Why this exists at all: the ingester once treated every .jsonl under the
+// projects root as a transcript, so a workflow's orchestration journal became
+// a run with no model, no tokens and no tool calls. Fixing discovery
+// (ingest.IsTranscript) stops new ones, but it cannot help a ledger that
+// already holds some - and it makes them worse, because they are now in the
+// ledger and never returned by Walk, which `loom status` reads as "in ledger,
+// gone from disk" for a file that is sitting right there. So the prune is
+// part of the fix, not a follow-up.
+//
+// The child rows are deleted explicitly. There is no ON DELETE CASCADE and
+// foreign keys are not enabled on this connection, so a bare delete from
+// `runs` would leave tool_usage, compactions and asset_usage rows pointing at
+// an id that no longer exists. `runs.id` is AUTOINCREMENT, so a later run
+// never inherits those rows by reusing the id - the hazard is the other
+// direction: tool_usage.tool_use_id is a global primary key and
+// compactions.boundary_uuid globally unique, both first-seen-wins via ON
+// CONFLICT DO NOTHING. A leftover child row keeps a replayed event's id
+// claimed by a dead run, so when a resumed session replays that event its
+// copy is silently dropped and the inner join in occupancy() never sees it.
+//
+// Which is also why this is not a general-purpose "delete any run" tool. A
+// session transcript owns the ids its resumed continuation replays, so
+// deleting one drops those events from the continuation's occupancy, and the
+// only way back is re-ingesting the deleted file.
+func (d *DB) DeleteRuns(paths []string) ([]string, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	tx, err := d.sql.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var deleted []string
+	for _, p := range paths {
+		var id int64
+		if err := tx.QueryRow(`SELECT id FROM runs WHERE path = ?`, p).Scan(&id); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return nil, err
+		}
+		for _, table := range []string{"tool_usage", "compactions", "asset_usage"} {
+			if _, err := tx.Exec(`DELETE FROM `+table+` WHERE run_id = ?`, id); err != nil {
+				return nil, err
+			}
+		}
+		if _, err := tx.Exec(`DELETE FROM runs WHERE id = ?`, id); err != nil {
+			return nil, err
+		}
+		deleted = append(deleted, p)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return deleted, nil
 }

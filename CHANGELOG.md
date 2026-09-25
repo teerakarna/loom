@@ -108,6 +108,144 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replaces `record_outcome`. `NewServer` dropped its now-unused `home` parameter; contract version
   `v0.2.0` -> `v0.3.0`, `plugin.json` bumped to match.
 
+### Fixed
+
+- Ingest treated every `.jsonl` under the projects root as a transcript, so a workflow run's
+  `subagents/workflows/<wf-id>/journal.jsonl` - orchestration records only, no assistant turns and
+  no `usage` - became a run with no model, no tokens and no tool calls. It inflated the run count,
+  added an unlabelled bucket to the by-model breakdown, and skewed the per-run figures derived from
+  those totals in `loom report` and the MCP cost summary. (`loom status` printed it in its counts;
+  it prints no averages.) Under `subagents/` the `agent-`
+  filename prefix is now required, reusing `AgentIDFromPath`'s predicate so discovery and id
+  extraction cannot disagree. Depth is deliberately not the discriminator: a workflow's own subagents
+  live two levels down and are real transcripts - on the corpus this was measured against, a depth
+  rule would have dropped 42 of them. `loom report` also prunes any such rows an existing ledger
+  already holds, naming each one on stderr, since nothing else removes them and the discovery fix on
+  its own would leave them reported as "in ledger, gone from disk" for files that are still there.
+- `loom status` no longer guesses why a ledger row failed to come back from the walk. "Walk did not
+  return it" was reported as "gone from disk" regardless of the reason, and a first attempt at fixing
+  that reintroduced the same false signal one layer up, reporting 221 real transcripts as prunable
+  against a narrowed root. It now counts five states apart. Four are keyed on a positive signal of
+  their own: prunable (the same predicate `loom report` clears on), genuinely absent, present but
+  unreadable, and demonstrably outside the root being asked about. The fifth is the remainder, and is
+  labelled as one - "exists, not known to be outside the root, and not walked" - rather than given a
+  cause nothing checked, because a row of that shape (a non-transcript `.jsonl` beside a workflow's
+  subagents) is real and never clears. A file the walk did return but could not stat is counted too,
+  so the freshness totals add up. A projects root that does not exist is still a normal state for a
+  new install; any other walk failure no longer passes silently, and instead of returning zeroes that
+  read as an empty ledger, `loom status` says the scan failed, omits the freshness counts, and prints
+  the rest of its output (`loom report` still exits non-zero on the same condition, since its walk is
+  the whole job).
+- Both commands normalise the root to an absolute path, and `loom report` now prunes ledger rows that
+  are already stored relative. Ledger paths are stored as walked and compared textually, so
+  `loom report .claude/projects` followed by `loom status ~/.claude/projects` reported one ingested,
+  unchanged file as both "never ingested" and "in ledger, outside root". Absolutising fixes the paths
+  going in and does nothing for the ones already stored: such a row can never match a walked file
+  again under any root, so the next report inserts a second row for the same file and the ledger
+  double-counts its cost for as long as it lives. Doubled rows also reach `policy.MinSampleSize`, so
+  they halve the real sample an evidence-backed policy needs. The row is superseded rather than
+  repaired - the working directory it was written against is not recorded anywhere, so there is
+  nothing to resolve it against - and it is deleted only once the walk has actually returned the file
+  that replaces it, with that file then forced through a re-read whether or not its size changed.
+  Both halves matter. "Delete it, the walk will bring it back" was the obvious design and it was
+  wrong three separate ways, each measured: an absolute row for the same file usually exists already,
+  and because `tool_usage.tool_use_id` and `compactions.boundary_uuid` are globally unique with
+  first-seen-wins, every child row stays attached to the relative row - so deleting it destroys the
+  tool calls, compactions and `asset_usage` permanently, and `NeedsIngest` then answers "no" to the
+  re-read that would restore them because the surviving row already has the right size. A root
+  narrowed to one project deleted the relative rows of every other project it was never going to
+  walk. And a root that does not exist deleted every relative row in the ledger and then failed on
+  the lstat, with nothing left to restore from. A relative row is now left alone unless exactly one
+  walked path ends in it; two candidates is ambiguous and is not guessed at.
+  The journal rows above are the one class still cleared before the walk, and only because a journal
+  was never a transcript: no walk will ever return one, so nothing is waiting to replace it, and it
+  owns no child rows to lose. Doing it there is what keeps the remedy `loom status` names for those
+  rows working in the states where the walk itself fails.
+- A lane was derived from whatever root the invocation happened to walk, not from the projects root,
+  so `loom report <root>/<one-project>` reattributed almost the whole corpus. A lane is the project
+  directory a transcript sits in, and `LaneFromPath` returns the first path segment under the root it
+  is given - under a narrowed root that segment is the session directory, so every nested subagent
+  transcript was filed under a session UUID instead of its project. Measured on a copy of this
+  machine's real ledger: one narrowed report moved 82 of 85 runs off their project and onto two
+  session UUIDs, and because the sizes then matched and the feature version was current, `NeedsIngest`
+  vetoed every later read that could have corrected them - permanent, from one command that looks like
+  a narrowing convenience. Fixed by resolving the projects root once at the entry point and passing it
+  through for lane derivation, independently of the root being walked. That also removed a separate
+  `wholeCorpus` flag: `laneRoot == root` is exactly "this walk covers the whole corpus".
+- An empty recomputed lane overwrote a known one. `InsertRun`'s upsert wrote every column
+  unconditionally, and a transcript sitting directly in the walked root has no lane to derive, so a
+  narrowed report blanked the lane of the files at its top level and they moved to
+  `UnattributedLanes` for good, again behind `NeedsIngest`. Now `COALESCE(NULLIF(...))`, so an empty
+  lane cannot displace a stored one while a real lane still replaces a real lane. Measured the same
+  way: three rows lost their lane before the fix, none after. This is the narrower half of the defect
+  above and does not subsume it - a lane recomputed as a session UUID is non-empty and plausible, so
+  no guard on emptiness can catch it.
+- The relative-row supersession ran even when the walk could not possibly cover the corpus. The
+  ambiguity guard added for it ("exactly one walked path ends in this row") is a guard against two
+  candidates, not against zero: under a root narrowed to one project, a relative row belonging to a
+  different project simply had no candidate and was left alone, which is right, but the migration was
+  still free to fire on any row that did match by accident. It is now gated on the walk being the
+  whole corpus, which is the only state where "the walk will bring it back" is a claim anyone can make.
+- The supersession's delete ran after the re-inserts rather than between the parse and the insert.
+  Child rows are globally keyed and first-seen-wins, so the old row had to be gone before the new one
+  was written or the tool calls and compactions never reattached - and it equally could not be deleted
+  before the file was read, since a failed read would then have destroyed the only copy. Split into a
+  planning pass and a commit that happens between the two loops, which is the one position satisfying
+  both.
+- `kindForPath` keyed on the substring `/subagents/`, so the same file was an agent run read one way
+  and a session run read another: a walk rooted inside a session directory hands back
+  `subagents/agent-1.jsonl` with no leading separator. It now splits the path and compares segments.
+  Kind drives `agent_type` and the by-model breakdown, and `IsTranscript` only requires the `agent-`
+  prefix for agent-kinded paths, so the same slip let a workflow journal read from that root pass as a
+  transcript - which is also how the prune could promise to clear a row that nothing would clear.
+- The lane fix above substituted the default projects root unconditionally, which fixed the narrowed
+  case and broke every root that is not this machine's own: a restored backup, another machine's
+  export, a relocated `CLAUDE_CONFIG_DIR`, a case variant of the real path on a case-insensitive
+  filesystem. Every walked file is then outside the lane root, `LaneFromPath` returns `""` for all of
+  them, and the `COALESCE` guard cannot help because those are first inserts with no stored lane to
+  keep - so the whole corpus reads as unattributed and `--lane` matches nothing, permanently. The
+  default is now substituted only when the walked root is inside it.
+- The first fix for that substituted the *walked* root for an alternate corpus, on the reasoning that
+  it is the only projects root on offer. That was the original defect again in different clothes: a
+  walk narrowed inside an alternate root is indistinguishable from a walk of one, so
+  `loom report /mnt/backup/projects/proj-a` went straight back to filing transcripts under session
+  UUIDs, permanently, since those are first inserts with no stored lane for the `COALESCE` to keep.
+  Nothing in a path says where a corpus begins, so a root outside the default now derives **no** lane
+  at all: an empty lane cannot displace a stored one, where a plausible wrong one is never corrected.
+  Such a ledger keeps the lanes it has and gains none, which reads as unattributed and is at least
+  true.
+- That also cost the `wholeCorpus` inference its premise. `laneRoot == root` was equal for *any* root
+  outside the default, narrowed ones included, which made the fourth data-loss path the supersession
+  planner documents at length reachable again through a different door. It is now an explicit
+  parameter, set from `root == defaultRoot` at the entry point and never inferred.
+- `agent_type` was overwritten unconditionally, and it is not in the transcript at all - it comes from
+  the `.meta.json` companion beside it, which `ReadAgentMeta` reports as absent when it is missing,
+  unreadable, not valid JSON, or names an empty type, all normal conditions on a corpus another tool
+  writes. So a transcript that grew after its companion was cleaned up re-read with no agent type and
+  filed the run under none for good, behind `NeedsIngest` like the rest of this family. Now
+  `COALESCE`, same as lane.
+- `CurrentFeatureVersion` 1 to 2, the first time this counter has been used for a repair rather than
+  a backfill. The lane and kind fixes above stop recurrence and repair nothing, and a re-read is the
+  only repair path the design offers - there is deliberately no `--force`. Without the bump a ledger
+  that took one narrowed report stays wrong for as long as it lives, since the size matches and the
+  version is current.
+- `reported_subagent_tokens`, `reported_tool_uses` and `reported_duration_ms` were overwritten
+  unconditionally, and they are only populated from a session read in the same batch. A re-read of
+  one agent transcript is a batch of one, so an ordinary incremental report wrote NULL over a real
+  reconciliation figure whenever the parent session file had not itself changed - and `NeedsIngest`
+  then vetoed the read that would have restored it. Now `COALESCE`, on the grounds that NULL here
+  means "nothing reported yet" and never "the earlier figure was withdrawn".
+- The supersession plan was keyed on the replacement with a single row as its value, so one walked
+  path that legitimately replaces two relative spellings of the same file (`p/s.jsonl` and `s.jsonl`,
+  written from two different working directories) kept only the last. Child rows are first-seen-wins,
+  so the survivor was usually the row actually holding the tool calls, and the forced re-read
+  attached nothing.
+- A failed `recordOccupancyAndUsage` was permanent. Its failure is deliberately non-fatal so one
+  unreadable transcript cannot cost a whole report, but the runs row is already stored with the
+  current size and feature version by then, so `NeedsIngest` answered "no" from the next report
+  onward and the child rows never arrived - worst on the supersession path, where the old row's child
+  rows have already been deleted to make room for them. The run is now marked for a re-read instead.
+
 ### Added
 
 - `loom advise --agent-type <type>` and `get_recommendation`'s new optional `agent_type` (#63, found
