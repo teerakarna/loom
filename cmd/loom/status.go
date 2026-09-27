@@ -88,10 +88,10 @@ func runStatus(args []string) error {
 	} else {
 		fmt.Printf("  never ingested            0\n")
 	}
-	// Printed whenever non-zero so the four counts above still add up to
+	// Printed whenever non-zero so the five counts above still add up to
 	// `transcripts on disk`. A file loom found but could not stat is neither
-	// current nor stale nor unseen, and silently dropping it makes the
-	// arithmetic wrong with nothing on screen to explain the gap.
+	// current, stale, behind-version, nor unseen, and silently dropping it
+	// makes the arithmetic wrong with nothing on screen to explain the gap.
 	// Names no cause. "unreadable" would guess at one, and since WalkDir had
 	// just listed the entry the likeliest reason is that it went away in
 	// between, not permissions - which is also why this must not share wording
