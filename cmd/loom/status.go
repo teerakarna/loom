@@ -31,10 +31,12 @@ func runStatus(args []string) error {
 	if positionalGiven {
 		root = positional
 	}
-	// See runReport: ledger paths are stored absolute, and every comparison
-	// against them here is textual, so a relative root silently misreports
-	// current transcripts as unseen and out-of-root at the same time.
-	root, err = filepath.Abs(root)
+	// See runReport: ledger paths are stored resolved (issue #88, plus the
+	// long-standing relative-vs-absolute reason), and every comparison
+	// against them here is textual, so an unresolved root silently
+	// misreports current transcripts as unseen and out-of-root at the same
+	// time.
+	root, err = resolveRoot(root)
 	if err != nil {
 		return err
 	}

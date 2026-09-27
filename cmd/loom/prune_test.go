@@ -27,6 +27,15 @@ func insertRun(t *testing.T, db *ledger.DB, path string) {
 	}
 }
 
+func mustKnownRuns(t *testing.T, db *ledger.DB) []ledger.KnownRun {
+	t.Helper()
+	rows, err := db.KnownRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
 func knownPaths(t *testing.T, db *ledger.DB) map[string]bool {
 	t.Helper()
 	rows, err := db.KnownRuns()
@@ -124,10 +133,7 @@ func TestSupersedeRelativeRowsOnlyTakesRowsTheWalkReplaces(t *testing.T) {
 		insertRun(t, db, p)
 	}
 
-	plan, err := planRelativeSupersessions(db, walked, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := planRelativeSupersessions(mustKnownRuns(t, db), walked, true)
 
 	// Planning alone must not have touched the ledger - the delete waits for the
 	// replacement to be read, which is what stops a failed read losing the row.
@@ -185,10 +191,8 @@ func TestPlanRelativeSupersessionsNeedsTheWholeCorpus(t *testing.T) {
 	insertRun(t, db, "dup/sess.jsonl")
 	narrowed := []string{"/home/me/.claude/projects/old/dup/sess.jsonl"}
 
-	plan, err := planRelativeSupersessions(db, narrowed, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	known := mustKnownRuns(t, db)
+	plan := planRelativeSupersessions(known, narrowed, false)
 	if len(plan) != 0 {
 		t.Errorf("a narrowed walk planned %v; that match is only unambiguous because the other candidate was not walked", plan)
 	}
@@ -196,10 +200,7 @@ func TestPlanRelativeSupersessionsNeedsTheWholeCorpus(t *testing.T) {
 	// Positive control, so the assertion above cannot pass just because nothing
 	// ever matches: the same walk with the same row does match when it is claimed
 	// to cover everything.
-	plan, err = planRelativeSupersessions(db, narrowed, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan = planRelativeSupersessions(known, narrowed, true)
 	if len(plan) != 1 {
 		t.Fatalf("plan = %v over the whole corpus, want the one match - the wholeCorpus check above proves nothing otherwise", plan)
 	}
