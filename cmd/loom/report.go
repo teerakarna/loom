@@ -19,6 +19,35 @@ func defaultProjectsRoot() (string, error) {
 	return filepath.Join(home, ".claude", "projects"), nil
 }
 
+// resolveRoot is filepath.Abs plus symlink resolution, used everywhere a
+// projects root is normalised for storage or comparison (issue #88). Abs
+// alone is purely textual, so two spellings of the same real directory - a
+// symlinked ~/.claude, say - compared unequal and ingested as two different
+// roots, each producing its own row for the same file. EvalSymlinks closes
+// that, but it is stricter than Abs in one way that matters here: it stats
+// every path component and fails if any does not exist yet, where a missing
+// projects root is a normal new-install state Abs never objected to and
+// ingest.Walk's own caller (rootIsAbsent) already handles gracefully. So a
+// not-yet-existing root falls back to the plain absolute path instead of
+// erroring - there is nothing in the ledger to be confused about a spelling
+// for, since nothing has ever been ingested from a root that has never
+// existed. Any other EvalSymlinks failure (a permission error partway
+// through the chain) is real and returned rather than silently swallowed.
+func resolveRoot(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err == nil {
+		return resolved, nil
+	}
+	if os.IsNotExist(err) {
+		return abs, nil
+	}
+	return "", err
+}
+
 // defaultLedgerPath is where Loom's own SQLite ledger lives.
 func defaultLedgerPath() (string, error) {
 	home, err := os.UserHomeDir()
@@ -37,12 +66,12 @@ func runReport(args []string) error {
 	if err != nil {
 		return err
 	}
-	// Absolutised for the same reason root is below, and it is not redundant:
+	// Resolved for the same reason root is below, and it is not redundant:
 	// os.UserHomeDir returns $HOME unvalidated, so a relative HOME makes every
 	// filepath.Rel against this error out, and outsideRoot answers false on error
 	// by contract - which would send the whole corpus down the "inside the
 	// default" branch with a relative lane root and lose every lane.
-	defaultRoot, err = filepath.Abs(defaultRoot)
+	defaultRoot, err = resolveRoot(defaultRoot)
 	if err != nil {
 		return err
 	}
@@ -59,13 +88,15 @@ func runReport(args []string) error {
 		root = positional
 	}
 	lane := flags["--lane"]
-	// Absolute, always. The walked path is what gets stored as runs.path, so a
+	// Resolved, always. The walked path is what gets stored as runs.path, so a
 	// relative root writes relative rows, and every later comparison against
 	// them is textual: `loom report .claude/projects` then `loom status
 	// ~/.claude/projects` reported the same ingested, unchanged file as both
 	// "never ingested" and "in ledger, outside root". Normalising at the two
-	// entry points is what makes the ledger's paths comparable at all.
-	root, err = filepath.Abs(root)
+	// entry points is what makes the ledger's paths comparable at all - and,
+	// since resolveRoot, comparable even across two spellings of the same
+	// symlinked directory (issue #88), not just across relative vs absolute.
+	root, err = resolveRoot(root)
 	if err != nil {
 		return err
 	}
@@ -215,6 +246,13 @@ func ingestAll(db *ledger.DB, root string, laneRoot string, wholeCorpus bool) er
 	if err != nil {
 		return err
 	}
+	// Same reasoning, same ordering, for issue #88's absolute-but-differently-
+	// spelled rows - see planSymlinkSupersessions. The two migrations partition
+	// KnownRuns by filepath.IsAbs, so they never compete for the same row.
+	symlinkSuperseded, err := planSymlinkSupersessions(db, paths, wholeCorpus)
+	if err != nil {
+		return err
+	}
 
 	// Size is what decides: a transcript that has grown since it was last
 	// ingested must be re-read, or a live session's cost stays frozen at
@@ -236,8 +274,9 @@ func ingestAll(db *ledger.DB, root string, laneRoot string, wholeCorpus bool) er
 		// after it: the file whose relative row is about to go usually has an
 		// absolute row of the same size already, which is exactly the case
 		// NeedsIngest answers "no" to. Without the override the runs row survives
-		// and its child rows never come back.
-		if needs || len(superseded[p]) > 0 {
+		// and its child rows never come back. Same override, same reason, for a
+		// symlink supersession (issue #88).
+		if needs || len(superseded[p]) > 0 || len(symlinkSuperseded[p]) > 0 {
 			toInsert = append(toInsert, p)
 		}
 	}
@@ -265,6 +304,12 @@ func ingestAll(db *ledger.DB, root string, laneRoot string, wholeCorpus bool) er
 	// NeedsIngest vetoed every later attempt. A file that fails to read simply
 	// keeps its old relative row, which is a stale figure rather than no figure.
 	if err := commitSupersessions(db, superseded, summaries); err != nil {
+		return err
+	}
+	// Same commit, same reason, for issue #88's rows - a separate call, not a
+	// merged map, since the two migrations already partition KnownRuns and a
+	// merge would only add complexity without changing what gets deleted.
+	if err := commitSupersessions(db, symlinkSuperseded, summaries); err != nil {
 		return err
 	}
 
@@ -621,10 +666,14 @@ func planRelativeSupersessions(db *ledger.DB, walked []string, wholeCorpus bool)
 	return superseded, nil
 }
 
-// commitSupersessions deletes the relative rows whose replacement actually read.
-// Split from the planning half so the delete cannot outrun the read: see the
-// caller for why it has to sit between the read and the inserts rather than
-// before either.
+// commitSupersessions deletes the superseded rows whose replacement actually
+// read - shared by both planRelativeSupersessions and (issue #88)
+// planSymlinkSupersessions, since neither cares what the old row's path
+// looked like once a replacement has been confirmed to read: only that a
+// walked file superseded it and that the read succeeded. Split from the
+// planning half so the delete cannot outrun the read: see the caller for
+// why it has to sit between the read and the inserts rather than before
+// either.
 func commitSupersessions(db *ledger.DB, superseded map[string][]string, read map[string]ingest.RunSummary) error {
 	var rows, replacements []string
 	for replacement, replaced := range superseded {
@@ -653,7 +702,7 @@ func commitSupersessions(db *ledger.DB, superseded map[string][]string, read map
 	}
 	for i, row := range rows {
 		if gone[row] {
-			fmt.Fprintf(os.Stderr, "loom: replaced relative ledger row %s with %s, re-reading\n", row, replacements[i])
+			fmt.Fprintf(os.Stderr, "loom: replaced ledger row %s with %s, re-reading\n", row, replacements[i])
 		}
 	}
 	return nil
@@ -671,6 +720,75 @@ func soleWalkedPathEndingIn(walked []string, rel string) (string, bool) {
 	n := 0
 	for _, p := range walked {
 		if strings.HasSuffix(p, suffix) {
+			found = p
+			n++
+		}
+	}
+	return found, n == 1
+}
+
+// planSymlinkSupersessions is planRelativeSupersessions' twin for issue #88:
+// a projects root reachable by more than one absolute spelling (a
+// symlinked ~/.claude, say) produces a second, textually unrelated row for
+// the same real file rather than a relative one, so soleWalkedPathEndingIn's
+// suffix match can never find it - file identity (os.SameFile) can. Same
+// shape, same ambiguity rule, same wholeCorpus gate, and the same two-phase
+// plan/commit split for the same reason: deleting a row before its
+// replacement has actually read would lose the child rows with nothing to
+// re-attach them to if the read then failed.
+//
+// Only absolute rows the walk did not itself reproduce verbatim are
+// candidates - a row the walk returned under the exact same spelling is the
+// survivor, not something superseded by its own replacement.
+func planSymlinkSupersessions(db *ledger.DB, walked []string, wholeCorpus bool) (map[string][]string, error) {
+	if !wholeCorpus {
+		return nil, nil
+	}
+	known, err := db.KnownRuns()
+	if err != nil {
+		return nil, err
+	}
+	walkedSet := map[string]bool{}
+	for _, p := range walked {
+		walkedSet[p] = true
+	}
+
+	superseded := map[string][]string{}
+	for _, k := range known {
+		if !filepath.IsAbs(k.Path) || walkedSet[k.Path] {
+			continue
+		}
+		replacement, ok := soleWalkedPathSameFileAs(walked, k.Path)
+		if !ok {
+			continue
+		}
+		superseded[replacement] = append(superseded[replacement], k.Path)
+	}
+	return superseded, nil
+}
+
+// soleWalkedPathSameFileAs is soleWalkedPathEndingIn's twin, keyed on file
+// identity (device+inode via os.SameFile) instead of a path suffix: a
+// symlinked root's two absolute spellings share no textual relationship at
+// all, so a suffix match can never see the collision a stat can (issue
+// #88). Same ambiguity rule - zero or more than one candidate means old is
+// left alone rather than guessed at.
+func soleWalkedPathSameFileAs(walked []string, old string) (string, bool) {
+	oldInfo, err := os.Stat(old)
+	if err != nil {
+		// Nothing to compare identity against, so there is nothing to
+		// supersede with - not an error, old simply is not resolvable
+		// right now (see loom status's "in ledger, unreadable").
+		return "", false
+	}
+	var found string
+	n := 0
+	for _, p := range walked {
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if os.SameFile(oldInfo, fi) {
 			found = p
 			n++
 		}
