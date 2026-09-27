@@ -153,7 +153,7 @@ jobs:
       - name: govulncheck
         if: *gate
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           govulncheck ./...
 
   secrets:

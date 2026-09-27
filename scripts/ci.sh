@@ -37,15 +37,15 @@
 # without it, so a missing go exits 2 immediately rather than being
 # misreported as build/vet/test failing.
 #
-# golangci-lint runs at CI's own pinned version (v2.13.2 in ci.yml) if
-# that's what's on PATH, but nothing here enforces the match - a different
-# local version can pass here and fail in CI, or the reverse, with no
-# warning beyond the version this prints. govulncheck is not pinned by
-# either side: ci.yml installs it fresh at @latest every run, so there is
-# nothing to compare it against - this script does not install it itself,
-# only checks whether it is already on PATH and skips with a hint if not
-# (found by code review, before this shipped: an earlier version of this
-# comment claimed the script installs it too, which it never did).
+# golangci-lint and govulncheck both run at CI's own pinned versions
+# (golangci-lint v2.13.2, govulncheck v1.8.0 - see ci.yml and CONTRIBUTING.md's
+# "Local environment" section) if that's what's on PATH, but nothing here
+# enforces the match - a different local version can pass here and fail in
+# CI, or the reverse, with no warning beyond the version this prints. This
+# script does not install either tool itself, only checks whether it is
+# already on PATH and skips with a hint if not (found by code review, before
+# this shipped: an earlier version of this comment claimed the script
+# installs govulncheck too, which it never did).
 # Versions are informational, not enforced, so treat a clean run here as a
 # fast local check, not a substitute for watching the real CI run once
 # Actions is working again.
@@ -153,7 +153,7 @@ required_check test go test ./...
 optional_check lint golangci-lint "https://golangci-lint.run/welcome/install/" \
 	golangci-lint --version -- golangci-lint run ./...
 
-optional_check govulncheck govulncheck "go install golang.org/x/vuln/cmd/govulncheck@latest" \
+optional_check govulncheck govulncheck "go install golang.org/x/vuln/cmd/govulncheck@v1.8.0" \
 	govulncheck -version -- govulncheck ./...
 
 optional_check gitleaks gitleaks "https://github.com/gitleaks/gitleaks#installing" \

@@ -26,6 +26,24 @@ kept somewhere else.
   preference: the tool's only input is transcripts, which on any real machine contain confidential
   material.
 
+## Local environment
+
+What `.github/workflows/ci.yml` actually pins, so a local run and a CI run can't silently disagree
+with no way to tell why - `scripts/ci.sh` is the one command that exercises all of it:
+
+- **golangci-lint**: `v2.13.2`, pinned via the `golangci-lint-action`'s own `version:` input.
+- **govulncheck**: `v1.8.0`, pinned in the `go install` command CI runs directly (not the
+  `golang/govulncheck-action` - see the comment above that step for why).
+- **gitleaks**: the `gitleaks/gitleaks-action` itself is pinned to `v3.0.0`
+  (`e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e`); it bundles its own gitleaks binary rather than
+  taking a separately pinned CLI version, so there is no further version to state here.
+
+`scripts/ci.sh` does not install any of the three itself - golangci-lint, govulncheck and gitleaks
+must already be on `PATH` locally, at whatever version is installed, and it prints the version it
+finds so a mismatch against the pins above is visible rather than silent. CI does install
+govulncheck fresh at the pinned version on every run, since a runner starts with nothing on `PATH`;
+golangci-lint and gitleaks arrive through their own actions instead.
+
 ## Merging
 
 `main` is protected. A change reaches it through a pull request, never a direct push, and:
