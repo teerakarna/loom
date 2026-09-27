@@ -582,3 +582,84 @@ func TestGetCostSummaryLabelsUnattributedModel(t *testing.T) {
 		t.Errorf("ByModel = %+v, want one row labelled (unattributed)", out.ByModel)
 	}
 }
+
+// TestComputeLedgerFreshnessUnavailableOnDBError is the regression test for
+// a finding from /code-review high: an error reading the ledger (a stale
+// server process after a schema change, issue #74, or any other real
+// failure) must not answer the same zero value a genuinely new install with
+// nothing on disk gets. A closed DB is the simplest real error to induce
+// directly.
+func TestComputeLedgerFreshnessUnavailableOnDBError(t *testing.T) {
+	db, err := ledger.Open(filepath.Join(t.TempDir(), "loom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f := computeLedgerFreshness(db, t.TempDir())
+	if !f.Unavailable {
+		t.Error("Unavailable = false, want true for a real ledger read error")
+	}
+	if f.UnavailableReason == "" {
+		t.Error("UnavailableReason is blank, want it to name the real error")
+	}
+}
+
+// TestComputeLedgerFreshnessMissingRootIsNotUnavailable confirms the one
+// case that must still answer a confident zero: a projects root that does
+// not exist at all is a normal state for a new install, not a scan failure.
+func TestComputeLedgerFreshnessMissingRootIsNotUnavailable(t *testing.T) {
+	db, err := ledger.Open(filepath.Join(t.TempDir(), "loom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	f := computeLedgerFreshness(db, t.TempDir())
+	if f.Unavailable {
+		t.Errorf("Unavailable = true, want false - a missing projects root is a new install, not a failed scan: %+v", f)
+	}
+	if f.TranscriptsOnDisk != 0 {
+		t.Errorf("TranscriptsOnDisk = %d, want 0", f.TranscriptsOnDisk)
+	}
+}
+
+// TestFreshnessCacheBoundsRepeatedWalks is the regression test for
+// /code-review high's finding that get_recommendation - documented as the
+// hot-path tool a live session calls mid-task - was walking the entire
+// projects root on every single call. Two calls within the TTL must reuse
+// the first scan even though the ledger changed in between; forcing the
+// cache to expire must pick up the change.
+func TestFreshnessCacheBoundsRepeatedWalks(t *testing.T) {
+	home := t.TempDir()
+	projRoot := filepath.Join(home, ".claude", "projects", "proj-a")
+	if err := os.MkdirAll(projRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db, err := ledger.Open(filepath.Join(t.TempDir(), "loom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	fc := &freshnessCache{}
+
+	first := fc.get(db, home)
+	if first.TranscriptsOnDisk != 0 {
+		t.Fatalf("setup: TranscriptsOnDisk = %d, want 0", first.TranscriptsOnDisk)
+	}
+
+	if err := os.WriteFile(filepath.Join(projRoot, "new.jsonl"), []byte(`{"type":"user"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stillCached := fc.get(db, home)
+	if stillCached.TranscriptsOnDisk != 0 {
+		t.Errorf("TranscriptsOnDisk = %d within the TTL, want 0 (cached, not rewalked)", stillCached.TranscriptsOnDisk)
+	}
+
+	fc.at = time.Time{} // force expiry
+	fresh := fc.get(db, home)
+	if fresh.TranscriptsOnDisk != 1 {
+		t.Errorf("TranscriptsOnDisk = %d after cache expiry, want 1 (rewalked)", fresh.TranscriptsOnDisk)
+	}
+}
