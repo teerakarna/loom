@@ -72,18 +72,23 @@ func runPropose(args []string) error {
 	// pin_model/revert_policy/retire_asset are shown regardless: the policy
 	// they write is machine-global, so filtering them by lane would imply a
 	// per-lane policy that does not exist (issue #68).
-	var lane string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--lane" {
-			if i+1 >= len(args) {
-				return fmt.Errorf("--lane needs a value (see `loom status` for the lanes in your ledger)")
-			}
-			lane = args[i+1]
-			i++
-			continue
-		}
-		return fmt.Errorf("unknown argument %q (want: apply, dismiss, --lane <lane>, or nothing to list)", args[i])
+	//
+	// The apply/dismiss dispatch above, not this, is why runPropose as a
+	// whole doesn't take parseArgs' shape - a bare "apply"/"dismiss" selects
+	// a different argument grammar entirely (an id, not a flag). Once that
+	// dispatch has run and returned, what's left of propose's own grammar
+	// (only --lane, no positional) is exactly parseArgs' shape, the same
+	// call runContext makes, so it calls parseArgs directly instead of
+	// hand-rolling a second copy of the same loop (found by code review:
+	// an earlier version of this fix kept a hand-written loop here anyway,
+	// with wording that silently drifted from parseArgs' own the moment it
+	// was written).
+	_, _, flags, err := parseArgs(args, "usage: loom propose [apply <id>|dismiss <id>] [--lane <lane>]", false,
+		map[string]string{"--lane": "see `loom status` for the lanes in your ledger"}, "--lane")
+	if err != nil {
+		return err
 	}
+	lane := flags["--lane"]
 
 	now := time.Now()
 	generated, err := propose.Generate(db, now)
