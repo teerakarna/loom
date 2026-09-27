@@ -287,10 +287,12 @@ func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 			f.unreadableOnDisk++
 			continue
 		}
-		switch {
-		case fi.Size() != r.SizeBytes:
+		// issue #96: the same predicate NeedsIngest keys re-ingestion on,
+		// not an independently maintained copy of it.
+		switch r.Freshness(fi.Size()) {
+		case ledger.FreshnessStale:
 			f.stale++
-		case r.FeatureVersion < ledger.CurrentFeatureVersion:
+		case ledger.FreshnessNeedsReread:
 			f.behindVersion++
 		default:
 			f.current++

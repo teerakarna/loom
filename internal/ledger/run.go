@@ -35,6 +35,43 @@ import (
 // one, a ledger that took a narrowed report stays wrong for as long as it lives.
 const CurrentFeatureVersion = 2
 
+// FreshnessState is the three-way answer to "does this stored run need a
+// re-read, and for which of the two reasons" - NeedsIngest only needs the
+// yes/no half of this, but a caller reporting freshness (loom status,
+// get_recommendation's freshness block) needs to tell "grown since" apart
+// from "unchanged, but predates a loom upgrade", which is a different fact
+// about the file and a false reason if conflated (issue #89).
+type FreshnessState int
+
+const (
+	FreshnessCurrent FreshnessState = iota
+	// FreshnessStale means the file's size has changed since it was read.
+	FreshnessStale
+	// FreshnessNeedsReread means the size is unchanged but the stored row
+	// predates CurrentFeatureVersion.
+	FreshnessNeedsReread
+)
+
+// ClassifyFreshness is the one predicate NeedsIngest and every freshness-
+// reporting caller both key their answer on, so neither can drift from the
+// other the way two independently hand-written copies of this same switch
+// already had started to (issue #96, found by code review on both #89's
+// and #86's PRs: cmd/loom/status.go's freshness() and
+// internal/mcp/server.go's computeLedgerFreshness each re-implemented this
+// inline). storedSize and size are the size a run was ingested at and its
+// current size on disk; storedVersion is the feature_version the row was
+// stamped with.
+func ClassifyFreshness(storedSize, size, storedVersion int64) FreshnessState {
+	switch {
+	case storedSize != size:
+		return FreshnessStale
+	case storedVersion < CurrentFeatureVersion:
+		return FreshnessNeedsReread
+	default:
+		return FreshnessCurrent
+	}
+}
+
 // RunRecord is what gets written to the runs table for one ingested
 // transcript file. ReportedSubagentTokens/ReportedToolUses/ReportedDurationMs
 // are pointers so "not an agent run" and "agent run, but no notification
