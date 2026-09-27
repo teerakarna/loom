@@ -74,20 +74,25 @@ func (d *DB) Status() (LedgerStatus, error) {
 	return s, nil
 }
 
-// KnownRun is one transcript the ledger has already read, with the size it was
-// read at. Used to compare the ledger against what is currently on disk
-// without ingesting anything.
+// KnownRun is one transcript the ledger has already read, with the size and
+// feature version it was read at. Used to compare the ledger against what is
+// currently on disk without ingesting anything - both are the same two
+// inputs NeedsIngest itself keys re-ingestion on (issue #89), so a caller
+// comparing freshness sees the same two reasons a re-read would fire for,
+// not just the size half of it.
 type KnownRun struct {
-	Path      string
-	SizeBytes int64
+	Path           string
+	SizeBytes      int64
+	FeatureVersion int64
 }
 
 // KnownRuns returns every transcript path the ledger has ingested, with the
-// size recorded at the time. The caller stats the files itself: keeping the
-// filesystem out of the ledger package means this stays a pure query, and the
-// freshness comparison lives where the discovery logic already is.
+// size and feature version recorded at the time. The caller stats the files
+// itself: keeping the filesystem out of the ledger package means this stays
+// a pure query, and the freshness comparison lives where the discovery logic
+// already is.
 func (d *DB) KnownRuns() ([]KnownRun, error) {
-	rows, err := d.sql.Query(`SELECT path, size_bytes FROM runs`)
+	rows, err := d.sql.Query(`SELECT path, size_bytes, feature_version FROM runs`)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +101,7 @@ func (d *DB) KnownRuns() ([]KnownRun, error) {
 	var out []KnownRun
 	for rows.Next() {
 		var k KnownRun
-		if err := rows.Scan(&k.Path, &k.SizeBytes); err != nil {
+		if err := rows.Scan(&k.Path, &k.SizeBytes, &k.FeatureVersion); err != nil {
 			return nil, err
 		}
 		out = append(out, k)
