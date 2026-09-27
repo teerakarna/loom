@@ -251,7 +251,14 @@ func Recommend(desc TaskDescriptor, assets []ledger.AssetRow, policy *ledger.Pol
 	// scorers below threshold, not everything with any overlap at all -
 	// still capped and still ranked, just candidly labelled as weak.
 	belowThreshold := false
-	if len(matches) == 0 && len(all) > 0 {
+	// A degenerate case within the degenerate case (issue #87): every
+	// candidate tied at the exact same score, with more than one candidate
+	// to tie, is not several weak guesses worth a caveat - it's the scorer
+	// finding no real signal at all, the same shape a five-way tie across
+	// entirely unrelated domains produces. A single candidate, or any spread
+	// between the best and worst score, still gets #64's weak-but-real
+	// guess; only the fully flat set is suppressed.
+	if len(matches) == 0 && len(all) > 0 && (len(all) == 1 || all[0].Score != all[len(all)-1].Score) {
 		belowThreshold = true
 		matches = all
 	}
@@ -302,7 +309,30 @@ func policyOrColdStart(text string, policy *ledger.PolicyRow) (model, effort, ra
 // ordinary investigation and debugging phrasing, not a reliable planning
 // signal on its own.
 var planningWords = tokenize("design architecture plan decide tradeoff strategy approach should evaluate review analyze")
-var retrievalWords = tokenize("find search locate grep list where lookup rename bump update fix typo format")
+var retrievalWords = tokenize("find search locate grep list where lookup rename bump update typo format")
+
+// debugWords is its own class, not folded into planningWords or
+// retrievalWords (issue #87): "a bug of unknown cause is the opposite of
+// well-scoped, and a wrong patch costs more than a slow one" - the same
+// reasoning the planning class already gets, but "debug the parser and fix
+// it" matches none of planningWords' vocabulary and used to match
+// retrievalWords via "fix" alone, landing on the cheap tier for a task whose
+// actual cause is unknown.
+//
+// "fix" moved here from retrievalWords - "fix a typo" is mechanical, but
+// "fix" alone says nothing about whether the cause is known, and paired
+// with "debug"/"investigate" it means the opposite of well-scoped.
+//
+// "why" deliberately left out, unlike the issue's own suggested list -
+// tried it first, and it broke issue #63's own regression test:
+// "investigate why the iOS Device Farm leg fails" then hit "investigate" and
+// "why" as two distinct debugHits, clearing minDebugHits on what is one
+// natural phrasing of a single act of investigating, not two independent
+// signals. That is exactly the false escalation #63 removed "why" for in
+// the first place, just reached through a second word this time. Left out
+// rather than special-cased, so the two-distinct-signals rule minDebugHits
+// exists to enforce stays true in practice, not just in name.
+var debugWords = tokenize("debug diagnose fix investigate troubleshoot")
 
 // minPlanningHits is how many distinct planning-keyword hits it takes to
 // escalate to the expensive tier - deliberately more than one (issue #63).
@@ -314,6 +344,13 @@ var retrievalWords = tokenize("find search locate grep list where lookup rename 
 // words is a much more specific signal that the task is actually about
 // design or synthesis rather than mentioning one word in passing.
 const minPlanningHits = 2
+
+// minDebugHits mirrors minPlanningHits for the same reason: one incidental
+// debug-flavoured word is too weak a signal on its own, but two or more is
+// specific enough that the task is actually about an unknown cause rather
+// than mentioning one debugging word in
+// passing.
+const minDebugHits = 2
 
 // coldStartModel classifies free text into a model/effort suggestion using
 // only word overlap against the two keyword sets above. Text matching
@@ -333,8 +370,18 @@ func coldStartModel(text string) (model, effort, rationale string) {
 	words := tokenize(text)
 	planningHits := countOverlap(words, planningWords)
 	retrievalHits := countOverlap(words, retrievalWords)
+	debugHits := countOverlap(words, debugWords)
 
 	switch {
+	// Checked before the retrieval and planning cases below: debugWords
+	// shares no word with either set, but a task can still mention
+	// unrelated retrieval or planning words alongside its debugging ones
+	// ("debug why the search results are wrong"), and debug must win that
+	// comparison rather than fall through to a retrieval- or
+	// planning-keyed case (issue #87).
+	case debugHits >= minDebugHits && debugHits > retrievalHits:
+		return "opus", "high",
+			"task descriptor matches multiple debugging keywords, cold-start default favors a stronger model since the cause is unknown and a wrong patch costs more than a slow one (docs/design.md, Cold start)"
 	case retrievalHits > 0 && retrievalHits == planningHits:
 		return "haiku", "low",
 			"task descriptor matches planning and retrieval keywords equally, cold-start default favors the cheaper direction under conflicting signal (a wrong guess costs a retry, not a blown budget)"

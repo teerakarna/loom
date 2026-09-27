@@ -137,6 +137,27 @@ func TestRecommendFallsBackToWeakMatchesRatherThanNone(t *testing.T) {
 	}
 }
 
+// TestRecommendSuppressesFlatTieBelowThreshold is the regression test for
+// issue #87's second finding: five candidates from entirely unrelated
+// domains tied at the exact same score (0.0833...) were still surfaced as
+// "closest guesses", one of them a property-law skill against a debugging
+// query. A five-way exact tie is what "the scorer found no signal at all"
+// looks like on a 0-1 scale, not five weak-but-real guesses - unlike issue
+// #64's own case, where the single weak match has no other candidate to tie
+// against and is still shown.
+func TestRecommendSuppressesFlatTieBelowThreshold(t *testing.T) {
+	query := "chase outstanding invoices and confirm the vendor has been paid for last quarter's work"
+	assets := []ledger.AssetRow{
+		{Kind: "skill", Name: "unrelated-a", Path: "/skills/a.md", Description: "totally unrelated chase content"},
+		{Kind: "skill", Name: "unrelated-b", Path: "/skills/b.md", Description: "totally unrelated paid content"},
+		{Kind: "skill", Name: "unrelated-c", Path: "/skills/c.md", Description: "totally unrelated work content"},
+	}
+	rec := Recommend(TaskDescriptor{Text: query}, assets, nil)
+	if len(rec.Matches) != 0 || rec.BelowThreshold {
+		t.Errorf("got %+v, want no matches and BelowThreshold=false for an exact three-way tie", rec)
+	}
+}
+
 func TestRecommendNoMatchBelowThreshold(t *testing.T) {
 	assets := []ledger.AssetRow{
 		{Kind: "skill", Name: "records-management", Path: "/skills/b.md", Description: "manage drive files"},
@@ -188,6 +209,11 @@ func TestColdStartModelDefault(t *testing.T) {
 // escalated to opus/high. On real measured data, opus costs roughly 272x
 // sonnet's per-run cost, so a single weak word is too little evidence for
 // that jump - it now takes at least minPlanningHits distinct matches.
+//
+// Also guards issue #87's debugWords class: this same query now matches
+// "investigate", and "why" was deliberately left out of debugWords rather
+// than restored to it, exactly so this stays cheap - see debugWords' own
+// comment.
 func TestColdStartModelWeakPlanningSignalDoesNotEscalate(t *testing.T) {
 	model, effort, _ := coldStartModel("investigate why the iOS Device Farm full leg fails and post the evidence on the Jira ticket")
 	if model == "opus" || effort == "high" {
@@ -204,6 +230,30 @@ func TestColdStartModelSinglePlanningWordAloneIsNotEnough(t *testing.T) {
 	model, effort, _ := coldStartModel("decide what to have for lunch today")
 	if model == "opus" || effort == "high" {
 		t.Errorf("got model=%s effort=%s, want sonnet/medium - one planning word alone is too weak a signal", model, effort)
+	}
+}
+
+// TestColdStartModelDebugEscalates is the regression test for issue #87's
+// first finding: a bug of unknown cause was routed to haiku/low because
+// "fix" matched retrievalWords and nothing matched planningWords - the
+// opposite of what docs/design.md's "Cold start" section already says about
+// ambiguous work being expensive to get wrong.
+func TestColdStartModelDebugEscalates(t *testing.T) {
+	model, effort, _ := coldStartModel(
+		"Debug why the ingester extracts zero tokens from a 111 KB agent transcript and fix the parser.")
+	if model != "opus" || effort != "high" {
+		t.Errorf("got model=%s effort=%s, want opus/high - cause unknown, a wrong patch costs more than a slow one", model, effort)
+	}
+}
+
+// TestColdStartModelSingleDebugWordAloneIsNotEnough mirrors
+// TestColdStartModelSinglePlanningWordAloneIsNotEnough for debugWords: one
+// incidental debugging word must not escalate alone, the same reasoning
+// issue #63 established for planningWords.
+func TestColdStartModelSingleDebugWordAloneIsNotEnough(t *testing.T) {
+	model, effort, _ := coldStartModel("investigate the quarterly expenses report")
+	if model == "opus" || effort == "high" {
+		t.Errorf("got model=%s effort=%s, want sonnet/medium - one debugging word alone is too weak a signal", model, effort)
 	}
 }
 
