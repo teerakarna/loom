@@ -86,6 +86,16 @@ type KnownRun struct {
 	FeatureVersion int64
 }
 
+// Freshness is ClassifyFreshness for this already-loaded row against size,
+// the file's current size on disk - a method rather than a bare three-arg
+// call, so a caller cannot transpose SizeBytes and size, both plain int64
+// with nothing to tell them apart positionally at a call site (found by
+// code review on issue #96's own fix, the same class of drift risk that fix
+// was meant to close in the first place).
+func (r KnownRun) Freshness(size int64) FreshnessState {
+	return ClassifyFreshness(r.SizeBytes, size, r.FeatureVersion)
+}
+
 // KnownRuns returns every transcript path the ledger has ingested, with the
 // size and feature version recorded at the time. The caller stats the files
 // itself: keeping the filesystem out of the ledger package means this stays

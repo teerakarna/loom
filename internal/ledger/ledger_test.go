@@ -301,10 +301,6 @@ func laneOf(t *testing.T, db *DB, path string) string {
 	return lane
 }
 
-// TestNeedsIngestDetectsAGrownFile is the regression test for silent cost
-// under-counting. Ingest previously keyed on path alone, so a session
-// transcript that grew after being ingested was frozen at its first reading
-// forever. On a real corpus the largest run was understated by roughly half.
 // TestClassifyFreshness is the direct unit test for the shared predicate
 // issue #96 introduced: NeedsIngest and every freshness-reporting caller
 // (cmd/loom status.go's freshness(), internal/mcp's computeLedgerFreshness)
@@ -331,6 +327,29 @@ func TestClassifyFreshness(t *testing.T) {
 	}
 }
 
+// TestKnownRunFreshnessMatchesClassifyFreshness confirms the method wrapper
+// (added by code review on issue #96's own fix, so a caller cannot
+// transpose SizeBytes and size - both plain int64 - at a bare three-arg
+// call site) delegates its three fields in the same order ClassifyFreshness
+// itself expects.
+func TestKnownRunFreshnessMatchesClassifyFreshness(t *testing.T) {
+	r := KnownRun{Path: "a.jsonl", SizeBytes: 1000, FeatureVersion: CurrentFeatureVersion}
+	if got := r.Freshness(1000); got != FreshnessCurrent {
+		t.Errorf("Freshness(1000) = %v, want FreshnessCurrent", got)
+	}
+	if got := r.Freshness(1200); got != FreshnessStale {
+		t.Errorf("Freshness(1200) = %v, want FreshnessStale", got)
+	}
+	r.FeatureVersion = CurrentFeatureVersion - 1
+	if got := r.Freshness(1000); got != FreshnessNeedsReread {
+		t.Errorf("Freshness(1000) with an old FeatureVersion = %v, want FreshnessNeedsReread", got)
+	}
+}
+
+// TestNeedsIngestDetectsAGrownFile is the regression test for silent cost
+// under-counting. Ingest previously keyed on path alone, so a session
+// transcript that grew after being ingested was frozen at its first reading
+// forever. On a real corpus the largest run was understated by roughly half.
 func TestNeedsIngestDetectsAGrownFile(t *testing.T) {
 	db := openTestDB(t)
 	const path = "live-session.jsonl"

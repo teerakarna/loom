@@ -289,7 +289,7 @@ func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 		}
 		// issue #96: the same predicate NeedsIngest keys re-ingestion on,
 		// not an independently maintained copy of it.
-		switch ledger.ClassifyFreshness(r.SizeBytes, fi.Size(), r.FeatureVersion) {
+		switch r.Freshness(fi.Size()) {
 		case ledger.FreshnessStale:
 			f.stale++
 		case ledger.FreshnessNeedsReread:
