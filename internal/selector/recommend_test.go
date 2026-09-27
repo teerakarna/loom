@@ -278,6 +278,37 @@ func TestColdStartModelTieRationaleIsHonest(t *testing.T) {
 	}
 }
 
+// TestColdStartModelDebugRetrievalTieDefaultsCheap is the regression test
+// for a finding from /code-review high on issue #87's own PR: a genuine tie
+// between debugHits and retrievalHits (both clear their own bar) must
+// default cheap, the same conflicting-evidence reasoning the existing
+// planning/retrieval tie already gets - not escalate just because debug is
+// checked first in the switch. An earlier version of the debug case's
+// comment claimed debug "must win" any such comparison, which the code
+// never actually did.
+func TestColdStartModelDebugRetrievalTieDefaultsCheap(t *testing.T) {
+	model, effort, _ := coldStartModel("debug and diagnose this, then find and list the results")
+	if model == "opus" || effort == "high" {
+		t.Errorf("got model=%s effort=%s, want the cheaper direction - debugHits ties retrievalHits, conflicting evidence defaults cheap", model, effort)
+	}
+}
+
+// TestColdStartModelDebugPlanningTieIsHonest is the regression test for a
+// second, lower-severity finding from the same review: debugHits and
+// planningHits both clearing their thresholds equally got attributed solely
+// to debugging, since that case is checked first - a misleading rationale
+// even though the model/effort outcome (opus/high, either way) was already
+// correct.
+func TestColdStartModelDebugPlanningTieIsHonest(t *testing.T) {
+	model, effort, rationale := coldStartModel("debug and diagnose this design, and plan carefully")
+	if model != "opus" || effort != "high" {
+		t.Errorf("got model=%s effort=%s, want opus/high - both signals independently clear the expensive bar", model, effort)
+	}
+	if !strings.Contains(rationale, "equally") {
+		t.Errorf("Rationale = %q, want it to say debugging and planning matched equally, not attribute it to debugging alone", rationale)
+	}
+}
+
 func TestRecommendEmptyDescriptorNoMatches(t *testing.T) {
 	assets := []ledger.AssetRow{{Kind: "skill", Name: "x", Description: "y"}}
 	rec := Recommend(TaskDescriptor{Text: ""}, assets, nil)

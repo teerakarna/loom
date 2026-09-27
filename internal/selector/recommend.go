@@ -376,9 +376,23 @@ func coldStartModel(text string) (model, effort, rationale string) {
 	// Checked before the retrieval and planning cases below: debugWords
 	// shares no word with either set, but a task can still mention
 	// unrelated retrieval or planning words alongside its debugging ones
-	// ("debug why the search results are wrong"), and debug must win that
-	// comparison rather than fall through to a retrieval- or
-	// planning-keyed case (issue #87).
+	// ("debug and diagnose this, then find and list the results"), and
+	// debug is checked first so it is not silently outranked by a
+	// dominance test written for the other two classes (issue #87).
+	//
+	// This is ordering priority, not an escalate-on-any-tie rule: a genuine
+	// tie between debugHits and retrievalHits (both clear their own bar)
+	// falls through to the retrieval-tie case below and defaults cheap, the
+	// same conflicting-evidence reasoning minPlanningHits' own comment
+	// gives for the planning/retrieval tie - debug's own words carry no
+	// more weight than planning's do at a real tie, and cost asymmetry
+	// still means ambiguity should default cheap, not expensive. Found by
+	// code review: an earlier version of this comment claimed debug "must
+	// win that comparison" unconditionally, which the code never did and
+	// should not do.
+	case debugHits >= minDebugHits && planningHits >= minPlanningHits && debugHits == planningHits && debugHits > retrievalHits:
+		return "opus", "high",
+			"task descriptor matches debugging and planning/synthesis keywords equally, cold-start default favors a stronger model for either kind of ambiguous work (docs/design.md, Cold start)"
 	case debugHits >= minDebugHits && debugHits > retrievalHits:
 		return "opus", "high",
 			"task descriptor matches multiple debugging keywords, cold-start default favors a stronger model since the cause is unknown and a wrong patch costs more than a slow one (docs/design.md, Cold start)"
