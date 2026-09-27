@@ -24,11 +24,11 @@ func runStatus(args []string) error {
 	// command's own previously-nonexistent validation - any argument,
 	// including an unrecognized flag, used to be assigned straight into
 	// root with no check at all.
-	positional, _, err := parseArgs(args, "usage: loom status [path]", true)
+	positional, positionalGiven, _, err := parseArgs(args, "usage: loom status [path]", true, nil)
 	if err != nil {
 		return err
 	}
-	if positional != "" {
+	if positionalGiven {
 		root = positional
 	}
 	// See runReport: ledger paths are stored absolute, and every comparison

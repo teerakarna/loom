@@ -49,12 +49,13 @@ func runReport(args []string) error {
 	// `loom report --lane <lane>` narrows to one project directory; a bare
 	// argument is still the projects root, as before (issue #94: shared
 	// parseArgs, see cmd/loom/args.go).
-	positional, flags, err := parseArgs(args, "usage: loom report [path] [--lane <lane>]", true, "--lane")
+	positional, positionalGiven, flags, err := parseArgs(args, "usage: loom report [path] [--lane <lane>]", true,
+		map[string]string{"--lane": "see `loom report` for the lanes in your ledger"}, "--lane")
 	if err != nil {
 		return err
 	}
 	root := defaultRoot
-	if positional != "" {
+	if positionalGiven {
 		root = positional
 	}
 	lane := flags["--lane"]

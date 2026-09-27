@@ -16,7 +16,8 @@ func runContext(args []string) error {
 	// command's own loop, which silently ignored anything that wasn't
 	// "--lane" instead of rejecting it - a typo'd flag ran the command as
 	// if it had been given no lane at all, with no error.
-	_, flags, err := parseArgs(args, "usage: loom context [--lane <lane>]", false, "--lane")
+	_, _, flags, err := parseArgs(args, "usage: loom context [--lane <lane>]", false,
+		map[string]string{"--lane": "see `loom status` for the lanes in your ledger"}, "--lane")
 	if err != nil {
 		return err
 	}
