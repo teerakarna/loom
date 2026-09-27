@@ -26,6 +26,16 @@ import (
 // runs as a normal fast unit test.
 func connectTestClient(t *testing.T) (*gomcp.ClientSession, *ledger.DB) {
 	t.Helper()
+	session, db, _ := connectTestClientWithHome(t)
+	return session, db
+}
+
+// connectTestClientWithHome is connectTestClient plus the home it built the
+// server against, for tests that need to write real files under
+// <home>/.claude/projects (ledgerFreshness, memory findings) rather than
+// treat home as an opaque empty directory.
+func connectTestClientWithHome(t *testing.T) (*gomcp.ClientSession, *ledger.DB, string) {
+	t.Helper()
 	db, err := ledger.Open(filepath.Join(t.TempDir(), "loom.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +46,8 @@ func connectTestClient(t *testing.T) (*gomcp.ClientSession, *ledger.DB) {
 	// findings scan <home>/.claude/projects/*/memory; pointing that at
 	// whatever machine happens to run the test suite would make every test
 	// depend on that machine's real, private memory files.
-	server := NewServer(db, t.TempDir())
+	home := t.TempDir()
+	server := NewServer(db, home)
 	client := gomcp.NewClient(&gomcp.Implementation{Name: "test-client", Version: "v0.0.1"}, nil)
 
 	ctx := context.Background()
@@ -49,7 +60,7 @@ func connectTestClient(t *testing.T) (*gomcp.ClientSession, *ledger.DB) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = session.Close() })
-	return session, db
+	return session, db, home
 }
 
 func callTool[Out any](t *testing.T, session *gomcp.ClientSession, name string, args any) Out {
@@ -470,5 +481,185 @@ func TestListProposalsFallsBackToStoredEvidenceWhenProtected(t *testing.T) {
 	}
 	if !strings.Contains(p.Rationale, "Not rescanned this pass") {
 		t.Errorf("Rationale = %q, want an honest note that this pass could not confirm the finding", p.Rationale)
+	}
+}
+
+// TestLedgerFreshnessOverMCP is the regression test for issue #86's first
+// finding: an MCP client reading get_cost_summary/get_context_occupancy/
+// get_recommendation/list_proposals had no way to tell how stale the ledger
+// behind the answer was. Exercises the shared helper through one tool
+// (get_cost_summary); the other three wire the same LedgerFreshness value
+// and are not each re-tested for it.
+func TestLedgerFreshnessOverMCP(t *testing.T) {
+	session, db, home := connectTestClientWithHome(t)
+	projRoot := filepath.Join(home, ".claude", "projects", "proj-a")
+	if err := os.MkdirAll(projRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, content string) string {
+		p := filepath.Join(projRoot, name)
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	current := write("current.jsonl", `{"type":"user"}`+"\n")
+	stale := write("stale.jsonl", `{"type":"user"}`+"\n")
+	write("never.jsonl", `{"type":"user"}`+"\n") // never ingested
+
+	fi, err := os.Stat(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertRun(ledger.RunRecord{Path: current, Kind: "session", SizeBytes: fi.Size()}); err != nil {
+		t.Fatal(err)
+	}
+	// Stored at a size smaller than the real file, simulating growth since
+	// last ingested - the same setup cmd/loom's own freshness tests use.
+	if err := db.InsertRun(ledger.RunRecord{Path: stale, Kind: "session", SizeBytes: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := callTool[CostSummaryOutput](t, session, "get_cost_summary", map[string]any{})
+	f := out.Freshness
+	if f.TranscriptsOnDisk != 3 {
+		t.Errorf("TranscriptsOnDisk = %d, want 3", f.TranscriptsOnDisk)
+	}
+	if f.IngestedCurrent != 1 {
+		t.Errorf("IngestedCurrent = %d, want 1", f.IngestedCurrent)
+	}
+	if f.Stale != 1 {
+		t.Errorf("Stale = %d, want 1", f.Stale)
+	}
+	if f.NeverIngested != 1 {
+		t.Errorf("NeverIngested = %d, want 1", f.NeverIngested)
+	}
+}
+
+// TestGetCostSummaryCarriesUnitsAndReconciliationNote is the regression test
+// for issue #86's second finding: total_weighted_cost and
+// unreconciled_agents arrived over MCP with no unit and no explanation,
+// both of which the CLI prints as prose next to the same numbers. The
+// consumer here is a model that will paraphrase whatever it is handed, so a
+// caveat that exists only in the CLI's prose does not exist for this caller.
+func TestGetCostSummaryCarriesUnitsAndReconciliationNote(t *testing.T) {
+	session, db := connectTestClient(t)
+	if err := db.InsertRun(ledger.RunRecord{
+		Path: "agent.jsonl", Kind: "agent", Model: "sonnet", WeightedCost: 50,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := callTool[CostSummaryOutput](t, session, "get_cost_summary", map[string]any{})
+	if out.TotalWeightedCostUnits != "relative" {
+		t.Errorf("TotalWeightedCostUnits = %q, want %q", out.TotalWeightedCostUnits, "relative")
+	}
+	found := false
+	for _, n := range out.Notes {
+		if strings.Contains(n, "NOT reconciled") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Notes = %+v, want a reconciliation caveat since AgentRuns > 0", out.Notes)
+	}
+}
+
+// TestGetCostSummaryLabelsUnattributedModel is the regression test for issue
+// #86's third finding: by_model returned {"model":"","runs":N,...} for a run
+// with no model recorded, an unlabelled bucket the CLI's own "By agent
+// type:" table already has a convention for ("(unattributed)") that by_model
+// just did not follow.
+func TestGetCostSummaryLabelsUnattributedModel(t *testing.T) {
+	session, db := connectTestClient(t)
+	if err := db.InsertRun(ledger.RunRecord{Path: "a.jsonl", Kind: "session"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := callTool[CostSummaryOutput](t, session, "get_cost_summary", map[string]any{})
+	if len(out.ByModel) != 1 || out.ByModel[0].Model != "(unattributed)" {
+		t.Errorf("ByModel = %+v, want one row labelled (unattributed)", out.ByModel)
+	}
+}
+
+// TestComputeLedgerFreshnessUnavailableOnDBError is the regression test for
+// a finding from /code-review high: an error reading the ledger (a stale
+// server process after a schema change, issue #74, or any other real
+// failure) must not answer the same zero value a genuinely new install with
+// nothing on disk gets. A closed DB is the simplest real error to induce
+// directly.
+func TestComputeLedgerFreshnessUnavailableOnDBError(t *testing.T) {
+	db, err := ledger.Open(filepath.Join(t.TempDir(), "loom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f := computeLedgerFreshness(db, t.TempDir())
+	if !f.Unavailable {
+		t.Error("Unavailable = false, want true for a real ledger read error")
+	}
+	if f.UnavailableReason == "" {
+		t.Error("UnavailableReason is blank, want it to name the real error")
+	}
+}
+
+// TestComputeLedgerFreshnessMissingRootIsNotUnavailable confirms the one
+// case that must still answer a confident zero: a projects root that does
+// not exist at all is a normal state for a new install, not a scan failure.
+func TestComputeLedgerFreshnessMissingRootIsNotUnavailable(t *testing.T) {
+	db, err := ledger.Open(filepath.Join(t.TempDir(), "loom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	f := computeLedgerFreshness(db, t.TempDir())
+	if f.Unavailable {
+		t.Errorf("Unavailable = true, want false - a missing projects root is a new install, not a failed scan: %+v", f)
+	}
+	if f.TranscriptsOnDisk != 0 {
+		t.Errorf("TranscriptsOnDisk = %d, want 0", f.TranscriptsOnDisk)
+	}
+}
+
+// TestFreshnessCacheBoundsRepeatedWalks is the regression test for
+// /code-review high's finding that get_recommendation - documented as the
+// hot-path tool a live session calls mid-task - was walking the entire
+// projects root on every single call. Two calls within the TTL must reuse
+// the first scan even though the ledger changed in between; forcing the
+// cache to expire must pick up the change.
+func TestFreshnessCacheBoundsRepeatedWalks(t *testing.T) {
+	home := t.TempDir()
+	projRoot := filepath.Join(home, ".claude", "projects", "proj-a")
+	if err := os.MkdirAll(projRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db, err := ledger.Open(filepath.Join(t.TempDir(), "loom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	fc := &freshnessCache{}
+
+	first := fc.get(db, home)
+	if first.TranscriptsOnDisk != 0 {
+		t.Fatalf("setup: TranscriptsOnDisk = %d, want 0", first.TranscriptsOnDisk)
+	}
+
+	if err := os.WriteFile(filepath.Join(projRoot, "new.jsonl"), []byte(`{"type":"user"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stillCached := fc.get(db, home)
+	if stillCached.TranscriptsOnDisk != 0 {
+		t.Errorf("TranscriptsOnDisk = %d within the TTL, want 0 (cached, not rewalked)", stillCached.TranscriptsOnDisk)
+	}
+
+	fc.at = time.Time{} // force expiry
+	fresh := fc.get(db, home)
+	if fresh.TranscriptsOnDisk != 1 {
+		t.Errorf("TranscriptsOnDisk = %d after cache expiry, want 1 (rewalked)", fresh.TranscriptsOnDisk)
 	}
 }

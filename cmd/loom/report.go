@@ -398,7 +398,13 @@ func printReport(s ledger.Summary) {
 
 	printGroup(s, "By model:", len(s.ByModel), func(i int) (string, int, float64, float64) {
 		m := s.ByModel[i]
-		return m.Model, m.Runs, m.WeightedCost, m.PerRun
+		model := m.Model
+		if model == "" {
+			// Matches "By agent type:" below rather than a blank row a reader
+			// could mistake for a rendering bug (issue #86).
+			model = "(unattributed)"
+		}
+		return model, m.Runs, m.WeightedCost, m.PerRun
 	})
 
 	if len(s.ByLane) > 1 {
@@ -423,9 +429,13 @@ func printReport(s ledger.Summary) {
 		fmt.Println()
 		fmt.Println("Most expensive runs:")
 		for _, r := range s.TopRuns {
-			label := r.Model
+			model := r.Model
+			if model == "" {
+				model = "(unattributed)"
+			}
+			label := model
 			if r.AgentType != "" {
-				label = r.AgentType + " / " + r.Model
+				label = r.AgentType + " / " + model
 			}
 			fmt.Printf("  %5.1f%%  %-30s %12.0f  %s\n", r.Share*100, label, r.WeightedCost, filepath.Base(r.Path))
 		}
