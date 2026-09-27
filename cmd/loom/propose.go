@@ -72,17 +72,24 @@ func runPropose(args []string) error {
 	// pin_model/revert_policy/retire_asset are shown regardless: the policy
 	// they write is machine-global, so filtering them by lane would imply a
 	// per-lane policy that does not exist (issue #68).
+	//
+	// Not routed through the shared parseArgs (cmd/loom/args.go): apply and
+	// dismiss above are dispatched on a bare word before any flag is looked
+	// at, a different grammar than "one optional positional plus flags" -
+	// see parseArgs' own comment. Wording kept consistent with it by hand
+	// instead (issue #94).
+	const usage = "usage: loom propose [apply <id>|dismiss <id>] [--lane <lane>]"
 	var lane string
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--lane" {
 			if i+1 >= len(args) {
-				return fmt.Errorf("--lane needs a value (see `loom status` for the lanes in your ledger)")
+				return fmt.Errorf("--lane needs a value (%s)", usage)
 			}
 			lane = args[i+1]
 			i++
 			continue
 		}
-		return fmt.Errorf("unknown argument %q (want: apply, dismiss, --lane <lane>, or nothing to list)", args[i])
+		return fmt.Errorf("%s (unknown argument %q)", usage, args[i])
 	}
 
 	now := time.Now()

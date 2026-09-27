@@ -46,30 +46,18 @@ func runReport(args []string) error {
 	if err != nil {
 		return err
 	}
-	root := defaultRoot
 	// `loom report --lane <lane>` narrows to one project directory; a bare
-	// argument is still the projects root, as before.
-	const usage = "usage: loom report [path] [--lane <lane>]"
-	var lane string
-	rootSet := false
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--lane" {
-			if i+1 >= len(args) {
-				return fmt.Errorf("--lane needs a value (see `loom report` for the lanes in your ledger)")
-			}
-			lane = args[i+1]
-			i++
-			continue
-		}
-		if strings.HasPrefix(args[i], "-") {
-			return fmt.Errorf("%s (unknown flag %q)", usage, args[i])
-		}
-		if rootSet {
-			return fmt.Errorf("%s (unexpected second argument %q)", usage, args[i])
-		}
-		root = args[i]
-		rootSet = true
+	// argument is still the projects root, as before (issue #94: shared
+	// parseArgs, see cmd/loom/args.go).
+	positional, flags, err := parseArgs(args, "usage: loom report [path] [--lane <lane>]", true, "--lane")
+	if err != nil {
+		return err
 	}
+	root := defaultRoot
+	if positional != "" {
+		root = positional
+	}
+	lane := flags["--lane"]
 	// Absolute, always. The walked path is what gets stored as runs.path, so a
 	// relative root writes relative rows, and every later comparison against
 	// them is textual: `loom report .claude/projects` then `loom status

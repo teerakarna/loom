@@ -12,16 +12,15 @@ import (
 // as `loom status` - this answers "what does the ledger already know",
 // never "go find out"; run `loom report` first to ingest.
 func runContext(args []string) error {
-	var lane string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--lane" {
-			if i+1 >= len(args) {
-				return fmt.Errorf("--lane needs a value (see `loom status` for the lanes in your ledger)")
-			}
-			lane = args[i+1]
-			i++
-		}
+	// issue #94: shared parseArgs (cmd/loom/args.go), replacing this
+	// command's own loop, which silently ignored anything that wasn't
+	// "--lane" instead of rejecting it - a typo'd flag ran the command as
+	// if it had been given no lane at all, with no error.
+	_, flags, err := parseArgs(args, "usage: loom context [--lane <lane>]", false, "--lane")
+	if err != nil {
+		return err
 	}
+	lane := flags["--lane"]
 
 	ledgerPath, err := defaultLedgerPath()
 	if err != nil {

@@ -20,8 +20,16 @@ func runStatus(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(args) > 0 {
-		root = args[0]
+	// issue #94: shared parseArgs (cmd/loom/args.go), replacing this
+	// command's own previously-nonexistent validation - any argument,
+	// including an unrecognized flag, used to be assigned straight into
+	// root with no check at all.
+	positional, _, err := parseArgs(args, "usage: loom status [path]", true)
+	if err != nil {
+		return err
+	}
+	if positional != "" {
+		root = positional
 	}
 	// See runReport: ledger paths are stored absolute, and every comparison
 	// against them here is textual, so a relative root silently misreports
