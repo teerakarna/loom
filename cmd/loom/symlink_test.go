@@ -62,7 +62,19 @@ func realFile(t *testing.T, path string) string {
 	return path
 }
 
-func TestSoleWalkedPathSameFileAsFindsAnIdenticalFileUnderAnotherSpelling(t *testing.T) {
+// statOf is a small test helper: soleAmongSameFile takes an already-stat'd
+// os.FileInfo (planSymlinkSupersessions stats k.Path once, not per
+// candidate), so these tests need to produce one too.
+func statOf(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fi
+}
+
+func TestSoleAmongSameFileFindsAnIdenticalFileUnderAnotherSpelling(t *testing.T) {
 	home := t.TempDir()
 	underlying := realFile(t, filepath.Join(home, "real", "sess.jsonl"))
 	link := filepath.Join(home, "linked", "sess.jsonl")
@@ -73,13 +85,13 @@ func TestSoleWalkedPathSameFileAsFindsAnIdenticalFileUnderAnotherSpelling(t *tes
 		t.Fatal(err)
 	}
 
-	got, ok := soleWalkedPathSameFileAs([]string{link}, underlying)
+	got, ok := soleAmongSameFile([]string{link}, statOf(t, underlying))
 	if !ok || got != link {
-		t.Errorf("soleWalkedPathSameFileAs(%v, %q) = (%q, %v), want (%q, true)", []string{link}, underlying, got, ok, link)
+		t.Errorf("soleAmongSameFile([%q], stat(%q)) = (%q, %v), want (%q, true)", link, underlying, got, ok, link)
 	}
 }
 
-func TestSoleWalkedPathSameFileAsRejectsAmbiguity(t *testing.T) {
+func TestSoleAmongSameFileRejectsAmbiguity(t *testing.T) {
 	home := t.TempDir()
 	underlying := realFile(t, filepath.Join(home, "real", "sess.jsonl"))
 	linkA := filepath.Join(home, "a", "sess.jsonl")
@@ -93,17 +105,17 @@ func TestSoleWalkedPathSameFileAsRejectsAmbiguity(t *testing.T) {
 		}
 	}
 
-	if _, ok := soleWalkedPathSameFileAs([]string{linkA, linkB}, underlying); ok {
-		t.Error("two walked paths both resolve to the same file - ambiguous, must not guess")
+	if _, ok := soleAmongSameFile([]string{linkA, linkB}, statOf(t, underlying)); ok {
+		t.Error("two candidates both resolve to the same file - ambiguous, must not guess")
 	}
 }
 
-func TestSoleWalkedPathSameFileAsRejectsADifferentFile(t *testing.T) {
+func TestSoleAmongSameFileRejectsADifferentFile(t *testing.T) {
 	home := t.TempDir()
 	underlying := realFile(t, filepath.Join(home, "real", "sess.jsonl"))
 	other := realFile(t, filepath.Join(home, "other", "sess.jsonl")) // same name, different file
 
-	if _, ok := soleWalkedPathSameFileAs([]string{other}, underlying); ok {
+	if _, ok := soleAmongSameFile([]string{other}, statOf(t, underlying)); ok {
 		t.Error("same filename, different real file - must not match on identity it does not have")
 	}
 }
@@ -131,10 +143,7 @@ func TestPlanSymlinkSupersessionsOnlyTakesRowsTheWalkReplaces(t *testing.T) {
 	insertRun(t, db, untouched)  // walked under its own spelling: not superseded
 
 	walked := []string{linked, untouched}
-	plan, err := planSymlinkSupersessions(db, walked, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := planSymlinkSupersessions(mustKnownRuns(t, db), walked, true)
 	if len(plan) != 1 || len(plan[linked]) != 1 || plan[linked][0] != underlying {
 		t.Fatalf("plan = %v, want {%q: [%q]}", plan, linked, underlying)
 	}
@@ -158,20 +167,46 @@ func TestPlanSymlinkSupersessionsNeedsTheWholeCorpus(t *testing.T) {
 	db := openTestLedger(t)
 	insertRun(t, db, underlying)
 
-	plan, err := planSymlinkSupersessions(db, []string{linked}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	known := mustKnownRuns(t, db)
+	plan := planSymlinkSupersessions(known, []string{linked}, false)
 	if len(plan) != 0 {
 		t.Errorf("a narrowed walk planned %v; wholeCorpus=false must suppress this entirely", plan)
 	}
 
-	plan, err = planSymlinkSupersessions(db, []string{linked}, true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan = planSymlinkSupersessions(known, []string{linked}, true)
 	if len(plan) != 1 {
 		t.Fatalf("plan = %v over the whole corpus, want the one match", plan)
+	}
+}
+
+// TestPlanSymlinkSupersessionsIgnoresSameSizeUnrelatedFiles confirms the
+// size-bucketed pre-filter planSymlinkSupersessions uses (found by code
+// review: a naive per-row scan of the whole walked list turned this into
+// O(N*M) stats) does not degrade into a false match or a spurious ambiguity
+// just because an unrelated walked file happens to share old's size -
+// os.SameFile still makes the real decision inside the bucket.
+func TestPlanSymlinkSupersessionsIgnoresSameSizeUnrelatedFiles(t *testing.T) {
+	home := t.TempDir()
+	underlying := realFile(t, filepath.Join(home, "real", "sess.jsonl"))
+	linked := filepath.Join(home, "linked", "sess.jsonl")
+	if err := os.MkdirAll(filepath.Dir(linked), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(underlying, linked); err != nil {
+		t.Fatal(err)
+	}
+	// realFile always writes the same fixed content, so decoy lands in
+	// underlying's size bucket without sharing its identity - a genuinely
+	// different file, not a spelling of the same one.
+	decoy := realFile(t, filepath.Join(home, "decoy", "other.jsonl"))
+
+	db := openTestLedger(t)
+	insertRun(t, db, underlying)
+
+	walked := []string{linked, decoy}
+	plan := planSymlinkSupersessions(mustKnownRuns(t, db), walked, true)
+	if len(plan) != 1 || len(plan[linked]) != 1 || plan[linked][0] != underlying {
+		t.Fatalf("plan = %v, want {%q: [%q]} - the same-size decoy must not create ambiguity or a false match", plan, linked, underlying)
 	}
 }
 

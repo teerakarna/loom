@@ -242,17 +242,24 @@ func ingestAll(db *ledger.DB, root string, laneRoot string, wholeCorpus bool) er
 	// planRelativeSupersessions and commitSupersessions for why "delete it, the
 	// walk will bring it back" was three separate kinds of wrong when it ran above
 	// the walk.
-	superseded, err := planRelativeSupersessions(db, paths, wholeCorpus)
-	if err != nil {
-		return err
+	//
+	// known is fetched once, only when it can matter, and shared by both plan
+	// calls below (found by code review: two independent db.KnownRuns() calls
+	// ran the same query twice on every report). Both already no-op on
+	// !wholeCorpus, so a narrowed report skips the query entirely rather than
+	// fetching a slice neither of them will use.
+	var known []ledger.KnownRun
+	if wholeCorpus {
+		known, err = db.KnownRuns()
+		if err != nil {
+			return err
+		}
 	}
+	superseded := planRelativeSupersessions(known, paths, wholeCorpus)
 	// Same reasoning, same ordering, for issue #88's absolute-but-differently-
 	// spelled rows - see planSymlinkSupersessions. The two migrations partition
-	// KnownRuns by filepath.IsAbs, so they never compete for the same row.
-	symlinkSuperseded, err := planSymlinkSupersessions(db, paths, wholeCorpus)
-	if err != nil {
-		return err
-	}
+	// known by filepath.IsAbs, so they never compete for the same row.
+	symlinkSuperseded := planSymlinkSupersessions(known, paths, wholeCorpus)
 
 	// Size is what decides: a transcript that has grown since it was last
 	// ingested must be re-read, or a live session's cost stays frozen at
@@ -633,13 +640,14 @@ func pruneJournalRows(db *ledger.DB) error {
 // the replacements first and commit only the ones that read - see
 // commitSupersessions. Both halves are needed: deleting without the forced re-read
 // leaves the child rows gone, which is the first bullet above.
-func planRelativeSupersessions(db *ledger.DB, walked []string, wholeCorpus bool) (map[string][]string, error) {
+// known is fetched once by the caller and passed to both this and
+// planSymlinkSupersessions, rather than each querying it independently
+// (found by code review: ingestAll was running the same
+// `SELECT path, size_bytes, feature_version FROM runs` query twice on every
+// report).
+func planRelativeSupersessions(known []ledger.KnownRun, walked []string, wholeCorpus bool) map[string][]string {
 	if !wholeCorpus {
-		return nil, nil
-	}
-	known, err := db.KnownRuns()
-	if err != nil {
-		return nil, err
+		return nil
 	}
 
 	// Keyed on the replacement, valued on the rows it replaces: the caller needs
@@ -663,7 +671,7 @@ func planRelativeSupersessions(db *ledger.DB, walked []string, wholeCorpus bool)
 		}
 		superseded[replacement] = append(superseded[replacement], k.Path)
 	}
-	return superseded, nil
+	return superseded
 }
 
 // commitSupersessions deletes the superseded rows whose replacement actually
@@ -740,17 +748,28 @@ func soleWalkedPathEndingIn(walked []string, rel string) (string, bool) {
 // Only absolute rows the walk did not itself reproduce verbatim are
 // candidates - a row the walk returned under the exact same spelling is the
 // survivor, not something superseded by its own replacement.
-func planSymlinkSupersessions(db *ledger.DB, walked []string, wholeCorpus bool) (map[string][]string, error) {
+//
+// Bucketed by size before any identity check (found by code review): a
+// naive per-row scan of the whole walked list turned a report with N
+// absolute-but-unwalked rows (a relocated CLAUDE_CONFIG_DIR, a backup
+// mount, anything loom status already calls "in ledger, outside root" or
+// "unexplained") and M walked transcripts into N*M stat syscalls, every
+// report, forever. Two paths naming the same real file are stat-ing the
+// same inode, so they always report the same size - grouping walked paths
+// by size first is a lossless pre-filter (os.SameFile below still makes the
+// real decision) that costs one pass over the walk instead of one pass per
+// candidate row, and needs no platform-specific inode field to do it.
+func planSymlinkSupersessions(known []ledger.KnownRun, walked []string, wholeCorpus bool) map[string][]string {
 	if !wholeCorpus {
-		return nil, nil
-	}
-	known, err := db.KnownRuns()
-	if err != nil {
-		return nil, err
+		return nil
 	}
 	walkedSet := map[string]bool{}
+	bySize := map[int64][]string{}
 	for _, p := range walked {
 		walkedSet[p] = true
+		if fi, err := os.Stat(p); err == nil {
+			bySize[fi.Size()] = append(bySize[fi.Size()], p)
+		}
 	}
 
 	superseded := map[string][]string{}
@@ -758,37 +777,41 @@ func planSymlinkSupersessions(db *ledger.DB, walked []string, wholeCorpus bool) 
 		if !filepath.IsAbs(k.Path) || walkedSet[k.Path] {
 			continue
 		}
-		replacement, ok := soleWalkedPathSameFileAs(walked, k.Path)
+		oldInfo, err := os.Stat(k.Path)
+		if err != nil {
+			// Nothing to compare identity against, so there is nothing to
+			// supersede with - not an error, k.Path simply is not
+			// resolvable right now (see loom status's "in ledger,
+			// unreadable").
+			continue
+		}
+		replacement, ok := soleAmongSameFile(bySize[oldInfo.Size()], oldInfo)
 		if !ok {
 			continue
 		}
 		superseded[replacement] = append(superseded[replacement], k.Path)
 	}
-	return superseded, nil
+	return superseded
 }
 
-// soleWalkedPathSameFileAs is soleWalkedPathEndingIn's twin, keyed on file
-// identity (device+inode via os.SameFile) instead of a path suffix: a
-// symlinked root's two absolute spellings share no textual relationship at
-// all, so a suffix match can never see the collision a stat can (issue
-// #88). Same ambiguity rule - zero or more than one candidate means old is
-// left alone rather than guessed at.
-func soleWalkedPathSameFileAs(walked []string, old string) (string, bool) {
-	oldInfo, err := os.Stat(old)
-	if err != nil {
-		// Nothing to compare identity against, so there is nothing to
-		// supersede with - not an error, old simply is not resolvable
-		// right now (see loom status's "in ledger, unreadable").
-		return "", false
-	}
+// soleAmongSameFile is soleWalkedPathEndingIn's twin, keyed on file identity
+// (os.SameFile) instead of a path suffix: a symlinked root's two absolute
+// spellings share no textual relationship at all, so a suffix match can
+// never see the collision a stat can (issue #88). candidates is expected to
+// already be narrowed to paths sharing old's size - see
+// planSymlinkSupersessions, the only caller - so this only pays for a stat
+// per genuine candidate, not per walked path. Same ambiguity rule as its
+// sibling: zero or more than one match means old is left alone rather than
+// guessed at.
+func soleAmongSameFile(candidates []string, old os.FileInfo) (string, bool) {
 	var found string
 	n := 0
-	for _, p := range walked {
+	for _, p := range candidates {
 		fi, err := os.Stat(p)
 		if err != nil {
 			continue
 		}
-		if os.SameFile(oldInfo, fi) {
+		if os.SameFile(old, fi) {
 			found = p
 			n++
 		}
