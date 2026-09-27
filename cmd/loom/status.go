@@ -76,6 +76,13 @@ func runStatus(args []string) error {
 	} else {
 		fmt.Printf("  ingested but stale        0\n")
 	}
+	// A separate bucket from stale, deliberately (issue #89): right after
+	// CurrentFeatureVersion moves, every row here is unchanged in size and
+	// still due for a re-read, and "grown since" would be a false reason for
+	// a file that has not grown at all.
+	if fresh.behindVersion > 0 {
+		fmt.Printf("  ingested, needs re-read   %d  (loom upgraded; run `loom report`)\n", fresh.behindVersion)
+	}
 	if fresh.unseen > 0 {
 		fmt.Printf("  never ingested            %d  (run `loom report`)\n", fresh.unseen)
 	} else {
@@ -199,10 +206,15 @@ func statusRest(db *ledger.DB, st ledger.LedgerStatus) error {
 
 type freshnessCounts struct {
 	onDisk, current, stale, unseen int
+	// A row unchanged in size but stored under an older CurrentFeatureVersion
+	// (issue #89): NeedsIngest re-reads it for the same reason it re-reads a
+	// grown file, but the two are not the same fact about the file, and
+	// folding this into stale would misreport the reason.
+	behindVersion int
 	// A file Walk returned that could not be stat'd, so its size cannot be
-	// compared. Counted so current+stale+unseen+this equals onDisk; a state
-	// that vanishes from a set of totals that are read against each other is
-	// worse than one with an awkward name.
+	// compared. Counted so current+stale+behindVersion+unseen+this equals
+	// onDisk; a state that vanishes from a set of totals that are read
+	// against each other is worse than one with an awkward name.
 	unreadableOnDisk int
 	// The five ways a ledger row can fail to come back from Walk. Four are
 	// keyed on a positive signal; unexplained is the honest remainder, and is
@@ -218,13 +230,13 @@ type freshnessCounts struct {
 func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 	var f freshnessCounts
 
-	known := map[string]int64{}
+	known := map[string]ledger.KnownRun{}
 	rows, err := db.KnownRuns()
 	if err != nil {
 		return f, err
 	}
 	for _, r := range rows {
-		known[r.Path] = r.SizeBytes
+		known[r.Path] = r
 	}
 
 	paths, err := ingest.Walk(root)
@@ -257,7 +269,7 @@ func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 	for _, p := range paths {
 		onDisk[p] = true
 		f.onDisk++
-		size, ok := known[p]
+		r, ok := known[p]
 		if !ok {
 			f.unseen++
 			continue
@@ -267,9 +279,12 @@ func freshness(db *ledger.DB, root string) (freshnessCounts, error) {
 			f.unreadableOnDisk++
 			continue
 		}
-		if fi.Size() != size {
+		switch {
+		case fi.Size() != r.SizeBytes:
 			f.stale++
-		} else {
+		case r.FeatureVersion < ledger.CurrentFeatureVersion:
+			f.behindVersion++
+		default:
 			f.current++
 		}
 	}
