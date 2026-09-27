@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/teerakarna/loom/internal/ingest"
 	"github.com/teerakarna/loom/internal/ledger"
@@ -38,7 +39,9 @@ func runReport(args []string) error {
 	}
 	// `loom report --lane <lane>` narrows to one project directory; a bare
 	// argument is still the projects root, as before.
+	const usage = "usage: loom report [path] [--lane <lane>]"
 	var lane string
+	rootSet := false
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--lane" {
 			if i+1 >= len(args) {
@@ -48,7 +51,14 @@ func runReport(args []string) error {
 			i++
 			continue
 		}
+		if strings.HasPrefix(args[i], "-") {
+			return fmt.Errorf("%s (unknown flag %q)", usage, args[i])
+		}
+		if rootSet {
+			return fmt.Errorf("%s (unexpected second argument %q)", usage, args[i])
+		}
 		root = args[i]
+		rootSet = true
 	}
 
 	ledgerPath, err := defaultLedgerPath()
