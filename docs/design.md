@@ -114,9 +114,11 @@ assistant turn carries:
 - `userFeedback` where the user corrected something
 - `isSidechain` to distinguish delegated turns
 
-Subagent runs get their own files at `<session-id>/subagents/agent-<id>.jsonl`, and task-completion
-notifications in the parent transcript record `subagent_tokens`, `tool_uses` and `duration_ms`,
-which gives an independent figure to reconcile computed costs against.
+Subagent runs get their own files at `<session-id>/subagents/agent-<id>.jsonl` (a workflow's own
+agents nest a level deeper, and that directory also holds a non-transcript `journal.jsonl` - see
+`docs/transcript-schema.md`, "Location"), and task-completion notifications in the parent transcript
+record `subagent_tokens`, `tool_uses` and `duration_ms`, which gives an independent figure to
+reconcile computed costs against.
 
 So the measurement layer requires **no instrumentation at all**. Ingest is retroactive over whatever
 history a user already has, then follows. This is what makes the tool useful on the day it is

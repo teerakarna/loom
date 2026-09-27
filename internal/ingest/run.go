@@ -250,16 +250,62 @@ func applyEvent(rs *RunSummary, ev Event) {
 	rs.FileTouches = append(rs.FileTouches, ev.FileTouches...)
 }
 
+// kindForPath asks whether any directory in path is named subagents, by segment
+// rather than by substring. The substring version required a leading separator
+// ("/subagents/"), so it answered "session" for a path that merely starts with the
+// directory - subagents/workflows/wf-1/agent-9.jsonl, which is what a walk rooted
+// inside a session directory hands back, and what a ledger row written by
+// `loom report .` from there looks like. That made the same file an agent run or a
+// session run depending on where the command was run from: the wrong kind, no
+// agent_type, and a workflow journal reading as a real transcript because
+// IsTranscript only requires the agent- prefix for agent-kinded paths.
 func kindForPath(path string) string {
-	if strings.Contains(filepath.ToSlash(path), "/subagents/") {
-		return "agent"
+	for _, seg := range strings.Split(filepath.ToSlash(path), "/") {
+		if seg == "subagents" {
+			return "agent"
+		}
 	}
 	return "session"
 }
 
-// Walk discovers transcript files under a Claude Code projects root
-// (typically ~/.claude/projects): every top-level session .jsonl file, plus
-// every subagent's own agent-*.jsonl file under <session-id>/subagents/.
+// IsTranscript reports whether path is a file loom should ingest as one run:
+// a session .jsonl anywhere under the projects root, or a subagent's own
+// agent-<id>.jsonl under <session-id>/subagents/.
+//
+// Not every .jsonl under the root is a transcript. A workflow run writes
+// subagents/workflows/<wf-id>/journal.jsonl, which carries orchestration
+// records ("started"/"result" keyed by agentId), no assistant turns and no
+// usage. Ingesting it yields a run with no model, no tokens and no tool
+// calls - a phantom that inflates the run count, adds an unlabelled bucket
+// to the by-model breakdown, and skews the per-run figures derived from those
+// totals. (Not the per-agent-type policy figures: those filter on a non-empty
+// agent_type, which a journal has no .meta.json to supply. Reporting numbers,
+// not policy ones.) So under subagents/ the agent- prefix is required, and
+// the check is AgentIDFromPath's rather than a second copy of it: discovery
+// and id extraction must agree on what a subagent filename looks like, or a
+// later convention change fixes one and silently breaks the other.
+//
+// Depth deliberately does not enter into it: a workflow's own subagents live
+// at subagents/workflows/<wf-id>/agent-<id>.jsonl, two levels down, and are
+// real transcripts. On the corpus this was measured against, requiring the
+// file to sit directly inside subagents/ would have dropped 42 of them.
+//
+// This is also what the ledger prunes against, so it has to be a predicate
+// on a path alone - it is applied to rows whose file may no longer exist.
+func IsTranscript(path string) bool {
+	if !strings.HasSuffix(path, ".jsonl") {
+		return false
+	}
+	if kindForPath(path) != "agent" {
+		return true
+	}
+	_, ok := AgentIDFromPath(path)
+	return ok
+}
+
+// Walk discovers every transcript file under a Claude Code projects root
+// (typically ~/.claude/projects). See IsTranscript for what qualifies.
+//
 // Files are returned in no particular order; the caller decides ingest order.
 func Walk(root string) ([]string, error) {
 	var files []string
@@ -267,10 +313,7 @@ func Walk(root string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".jsonl") {
+		if d.IsDir() || !IsTranscript(path) {
 			return nil
 		}
 		files = append(files, path)

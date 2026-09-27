@@ -29,6 +29,20 @@ kept out of the ledger by constraint 6).
 A missing or unparseable companion leaves the agent type empty rather than failing the ingest:
 the run's cost is still real and worth recording, it just cannot be attributed.
 
+**The subagents directory is not flat, and not everything in it is a transcript.** A workflow run
+nests its own agents one level deeper, at `subagents/workflows/<wf-id>/agent-<id>.jsonl`, alongside
+a `subagents/workflows/<wf-id>/journal.jsonl` that is **not** a transcript: it holds orchestration
+records only (`started` / `result`, keyed by `agentId`), no assistant turns and no `usage`.
+
+Measured on a real corpus 2026-09-25: 169 flat `agent-<id>.jsonl`, 42 nested under
+`workflows/<wf-id>/`, 1 `journal.jsonl`, and nothing under `subagents/` lacking the `agent-` prefix
+that was a real transcript. So the discriminator is the **filename prefix**, not the nesting depth -
+a depth rule would have silently dropped all 42 workflow subagent runs. `ingest.IsTranscript` is
+where that lives, and ingesting the journal by mistake produced a run with no model, no tokens and
+no tool calls that then inflated the run count and added an unlabelled row to the by-model breakdown.
+Not the per-agent-type policy figures, which filter on a non-empty `agent_type` a journal has no
+`.meta.json` to supply - reporting numbers, not policy ones.
+
 ## Top-level line types
 
 Observed `type` values in one real transcript, beyond the two the design doc named
