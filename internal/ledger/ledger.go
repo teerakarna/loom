@@ -494,6 +494,12 @@ func (d *DB) Close() error {
 // of the size check and belongs with the fsnotify-following work. Re-reading a
 // changed file is the obviously correct version, and ingest is fast enough
 // that correctness is the better trade today.
+//
+// The size-vs-version decision itself lives in ClassifyFreshness, not here,
+// so a freshness-reporting caller needing the three-way answer (stale vs
+// needs-reread vs current, not just a yes/no) reads the same predicate this
+// re-ingest decision does, rather than an independently maintained copy of
+// it drifting from this one (issue #96).
 func (d *DB) NeedsIngest(path string, size int64) (bool, error) {
 	var storedSize, storedVersion int64
 	err := d.sql.QueryRow(`SELECT size_bytes, feature_version FROM runs WHERE path = ?`, path).
@@ -504,5 +510,5 @@ func (d *DB) NeedsIngest(path string, size int64) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return storedSize != size || storedVersion < CurrentFeatureVersion, nil
+	return ClassifyFreshness(storedSize, size, storedVersion) != FreshnessCurrent, nil
 }

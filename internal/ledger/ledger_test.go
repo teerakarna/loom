@@ -305,6 +305,32 @@ func laneOf(t *testing.T, db *DB, path string) string {
 // under-counting. Ingest previously keyed on path alone, so a session
 // transcript that grew after being ingested was frozen at its first reading
 // forever. On a real corpus the largest run was understated by roughly half.
+// TestClassifyFreshness is the direct unit test for the shared predicate
+// issue #96 introduced: NeedsIngest and every freshness-reporting caller
+// (cmd/loom status.go's freshness(), internal/mcp's computeLedgerFreshness)
+// now key their answer on this one function instead of independently
+// maintained copies of the same switch.
+func TestClassifyFreshness(t *testing.T) {
+	cases := []struct {
+		name                        string
+		storedSize, size, storedVer int64
+		want                        FreshnessState
+	}{
+		{"unchanged and current", 1000, 1000, CurrentFeatureVersion, FreshnessCurrent},
+		{"grown", 1000, 1200, CurrentFeatureVersion, FreshnessStale},
+		{"shrunk", 1000, 800, CurrentFeatureVersion, FreshnessStale},
+		{"unchanged but behind version", 1000, 1000, CurrentFeatureVersion - 1, FreshnessNeedsReread},
+		{"grown and behind version - size wins", 1000, 1200, CurrentFeatureVersion - 1, FreshnessStale},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := ClassifyFreshness(c.storedSize, c.size, c.storedVer); got != c.want {
+				t.Errorf("ClassifyFreshness(%d, %d, %d) = %v, want %v", c.storedSize, c.size, c.storedVer, got, c.want)
+			}
+		})
+	}
+}
+
 func TestNeedsIngestDetectsAGrownFile(t *testing.T) {
 	db := openTestDB(t)
 	const path = "live-session.jsonl"
