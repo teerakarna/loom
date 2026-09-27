@@ -28,11 +28,7 @@ func TestFreshnessBehindVersionIsNotStale(t *testing.T) {
 	}
 	size := fi.Size()
 
-	db, err := ledger.Open(filepath.Join(t.TempDir(), "loom.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Close() }()
+	db := openTestLedger(t)
 
 	if err := db.InsertRun(ledger.RunRecord{Path: current, Kind: "session", SizeBytes: size}); err != nil {
 		t.Fatal(err)
