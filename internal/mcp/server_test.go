@@ -150,6 +150,14 @@ func TestGetCostSummaryEmpty(t *testing.T) {
 	}
 }
 
+// TestGetCostSummaryReflectsRuns also carries the counterpoints to two
+// later tests that only check their own positive case: a named model must
+// pass through unchanged (TestGetCostSummaryLabelsUnattributedModel only
+// checks the blank-model fallback fires, never that a real model survives
+// it untouched), and a ledger with no agent runs must not carry the
+// reconciliation note at all (TestGetCostSummaryCarriesUnitsAndReconciliationNote
+// only checks the note appears when there are agent runs, never that it's
+// absent when there aren't - found by re-review, not by a tool).
 func TestGetCostSummaryReflectsRuns(t *testing.T) {
 	session, db := connectTestClient(t)
 	if err := db.InsertRun(ledger.RunRecord{Path: "a.jsonl", Kind: "session", Model: "sonnet", WeightedCost: 100}); err != nil {
@@ -158,6 +166,12 @@ func TestGetCostSummaryReflectsRuns(t *testing.T) {
 	out := callTool[CostSummaryOutput](t, session, "get_cost_summary", map[string]any{})
 	if out.TotalRuns != 1 || out.TotalWeightedCost != 100 {
 		t.Errorf("got %+v, want 1 run / cost 100", out)
+	}
+	if len(out.ByModel) != 1 || out.ByModel[0].Model != "sonnet" {
+		t.Errorf("ByModel = %+v, want one row labelled sonnet, not relabelled by the unattributed fallback", out.ByModel)
+	}
+	if len(out.Notes) != 0 {
+		t.Errorf("Notes = %+v, want none - this ledger has zero agent runs, so the reconciliation caveat does not apply", out.Notes)
 	}
 }
 
