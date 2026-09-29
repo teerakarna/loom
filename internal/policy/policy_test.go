@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teerakarna/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/ledger"
 )
 
 func TestResolveDefaultWithNoRuns(t *testing.T) {

@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/teerakarna/loom/internal/ledger"
-	"github.com/teerakarna/loom/internal/propose"
+	"github.com/azva-co/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/propose"
 )
 
 // TestFilterPendingByLane is the regression test for issue #68: the four

@@ -5,7 +5,7 @@ This directory is the plugin. It registers Loom's MCP server with Claude Code an
 ## Install
 
 ```
-/plugin marketplace add teerakarna/loom
+/plugin marketplace add azva-co/loom
 /plugin install loom@loom
 ```
 

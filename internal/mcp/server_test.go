@@ -15,10 +15,10 @@ import (
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	_ "modernc.org/sqlite"
 
-	"github.com/teerakarna/loom/internal/ingest"
-	"github.com/teerakarna/loom/internal/ledger"
-	"github.com/teerakarna/loom/internal/policy"
-	"github.com/teerakarna/loom/internal/propose"
+	"github.com/azva-co/loom/internal/ingest"
+	"github.com/azva-co/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/policy"
+	"github.com/azva-co/loom/internal/propose"
 )
 
 // connectTestClient wires an in-process client to a fresh Loom MCP server

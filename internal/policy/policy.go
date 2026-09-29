@@ -3,7 +3,7 @@ package policy
 import (
 	"fmt"
 
-	"github.com/teerakarna/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/ledger"
 )
 
 // CriteriaVersion stamps every decision this package produces, so a policy

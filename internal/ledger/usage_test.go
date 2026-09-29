@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/teerakarna/loom/internal/ingest"
+	"github.com/azva-co/loom/internal/ingest"
 )
 
 func TestBuildAssetLookup(t *testing.T) {

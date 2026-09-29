@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/teerakarna/loom/internal/asset"
+	"github.com/azva-co/loom/internal/asset"
 )
 
 // Proposal kinds for B7c (#41): promotion rules as read-only proposals.

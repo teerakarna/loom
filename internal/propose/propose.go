@@ -21,9 +21,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/teerakarna/loom/internal/asset"
-	"github.com/teerakarna/loom/internal/ledger"
-	"github.com/teerakarna/loom/internal/policy"
+	"github.com/azva-co/loom/internal/asset"
+	"github.com/azva-co/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/policy"
 )
 
 // Proposal kinds.

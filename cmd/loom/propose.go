@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/teerakarna/loom/internal/ingest"
-	"github.com/teerakarna/loom/internal/ledger"
-	"github.com/teerakarna/loom/internal/propose"
+	"github.com/azva-co/loom/internal/ingest"
+	"github.com/azva-co/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/propose"
 )
 
 // filterPendingByLane keeps every proposal whose kind isn't lane-scoped

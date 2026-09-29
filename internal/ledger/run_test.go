@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/teerakarna/loom/internal/ingest"
+	"github.com/azva-co/loom/internal/ingest"
 )
 
 // Child rows are the risk here: there is no ON DELETE CASCADE and foreign

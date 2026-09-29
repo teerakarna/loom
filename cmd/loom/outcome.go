@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/teerakarna/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/ledger"
 )
 
 // runRecordOutcome is the CLI counterpart to what used to be the MCP tool

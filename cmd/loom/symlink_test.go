@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/teerakarna/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/ledger"
 )
 
 // TestResolveRootFollowsASymlink is the direct unit test for issue #88's

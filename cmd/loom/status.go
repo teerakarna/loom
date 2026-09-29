@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/teerakarna/loom/internal/ingest"
-	"github.com/teerakarna/loom/internal/ledger"
-	"github.com/teerakarna/loom/internal/policy"
+	"github.com/azva-co/loom/internal/ingest"
+	"github.com/azva-co/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/policy"
 )
 
 // runStatus reports on Loom itself: what it knows, how current it is, and what

@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/teerakarna/loom/internal/asset"
-	"github.com/teerakarna/loom/internal/ledger"
-	"github.com/teerakarna/loom/internal/selector"
+	"github.com/azva-co/loom/internal/asset"
+	"github.com/azva-co/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/selector"
 )
 
 // staleAfter is how long an asset can go unseen by a discovery pass

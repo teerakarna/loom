@@ -3,7 +3,7 @@
 ## Reporting a Vulnerability
 
 Please report security issues privately using
-[GitHub Security Advisories](https://github.com/teerakarna/loom/security/advisories/new) for this
+[GitHub Security Advisories](https://github.com/azva-co/loom/security/advisories/new) for this
 repository, rather than opening a public issue.
 
 If you're unable to use Security Advisories, email 21040807+teerakarna@users.noreply.github.com

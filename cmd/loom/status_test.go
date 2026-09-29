@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/teerakarna/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/ledger"
 )
 
 // TestFreshnessBehindVersionIsNotStale is the regression test for issue #89:

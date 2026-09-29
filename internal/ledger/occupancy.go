@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"strings"
 
-	"github.com/teerakarna/loom/internal/ingest"
+	"github.com/azva-co/loom/internal/ingest"
 )
 
 // RunIDByPath returns the id of the runs row for path, so a caller that just

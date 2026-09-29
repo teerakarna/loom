@@ -12,10 +12,10 @@ import (
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/teerakarna/loom/internal/ingest"
-	"github.com/teerakarna/loom/internal/ledger"
-	"github.com/teerakarna/loom/internal/propose"
-	"github.com/teerakarna/loom/internal/selector"
+	"github.com/azva-co/loom/internal/ingest"
+	"github.com/azva-co/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/propose"
+	"github.com/azva-co/loom/internal/selector"
 )
 
 // version is the MCP server's own implementation version, independent of the

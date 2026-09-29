@@ -1233,7 +1233,7 @@ than trusting the commit message. Two lower-severity observations kept: `LaneSco
 now says explicitly that a future per-store finding kind must be added there too, since nothing
 else enforces it. The other, that `needsProtection`'s protection has no expiry - a persistently
 wrong `$HOME`, not just a one-pass blip, protects a proposal forever instead of ever letting it
-withdraw - is filed as [#76](https://github.com/teerakarna/loom/issues/76), deliberately deferred:
+withdraw - is filed as [#76](https://github.com/azva-co/loom/issues/76), deliberately deferred:
 the failure direction is the safe one (stuck pending, bounded by the cap, not wrongly discarding a
 real finding), and a real fix needs new ledger state (a staleness bound), not a line here.
 
@@ -1313,7 +1313,7 @@ wrong. Fixed by filtering to `KindSkill` only.
 
 One deferred rather than fixed here at the time: the identical silence gap for agents and plans,
 which have the same global-plus-per-project shape as skills in `asset.DefaultLocations` - filed as
-[#78](https://github.com/teerakarna/loom/issues/78), since no real corpus evidence existed yet for
+[#78](https://github.com/azva-co/loom/issues/78), since no real corpus evidence existed yet for
 that shape the way #66 itself had for skills, and building it speculatively would be exactly the
 kind of guess constraint 11 warns against. The same round also noted the three-way classification
 logic was duplicated in structurally different shapes between `detectBrokenLinks` and `SummaryFor`,

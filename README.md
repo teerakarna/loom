@@ -1,6 +1,6 @@
 # Loom
 
-[![CI](https://github.com/teerakarna/loom/actions/workflows/ci.yml/badge.svg)](https://github.com/teerakarna/loom/actions/workflows/ci.yml)
+[![CI](https://github.com/azva-co/loom/actions/workflows/ci.yml/badge.svg)](https://github.com/azva-co/loom/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/go-1.27-blue.svg)](go.mod)
 
@@ -66,20 +66,20 @@ public", for the reasoning. Until then, `go install ...@latest` needs read acces
 both:
 
 ```sh
-GOPRIVATE=github.com/teerakarna go install github.com/teerakarna/loom/cmd/loom@latest
+GOPRIVATE=github.com/azva-co go install github.com/azva-co/loom/cmd/loom@latest
 ```
 
 Or build from a clone, which needs neither:
 
 ```sh
-git clone https://github.com/teerakarna/loom
+git clone https://github.com/azva-co/loom
 cd loom && go build -o ~/go/bin/loom ./cmd/loom
 ```
 
 Optionally register the MCP server with Claude Code, so a session can query its own cost history:
 
 ```
-/plugin marketplace add teerakarna/loom
+/plugin marketplace add azva-co/loom
 /plugin install loom@loom
 ```
 

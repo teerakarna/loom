@@ -3,7 +3,7 @@ package selector
 import (
 	"testing"
 
-	"github.com/teerakarna/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/ledger"
 )
 
 func TestLooksSuspicious(t *testing.T) {

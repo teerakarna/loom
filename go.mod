@@ -1,4 +1,4 @@
-module github.com/teerakarna/loom
+module github.com/azva-co/loom
 
 go 1.27.1
 

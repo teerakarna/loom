@@ -72,7 +72,7 @@ loom-mcp: could not find the `loom` binary.
 The plugin registers Loom's MCP server but does not contain Loom itself.
 Install it, then restart Claude Code:
 
-    go install github.com/teerakarna/loom/cmd/loom@latest
+    go install github.com/azva-co/loom/cmd/loom@latest
 
 If it is installed somewhere unusual, point at it directly:
 

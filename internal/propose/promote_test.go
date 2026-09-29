@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/teerakarna/loom/internal/asset"
+	"github.com/azva-co/loom/internal/asset"
 )
 
 // writeMemoryFile mirrors internal/asset's own unexported writeFile

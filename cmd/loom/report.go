@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/teerakarna/loom/internal/ingest"
-	"github.com/teerakarna/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/ingest"
+	"github.com/azva-co/loom/internal/ledger"
 )
 
 // defaultProjectsRoot is where Claude Code writes session transcripts.

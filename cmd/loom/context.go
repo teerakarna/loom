@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/teerakarna/loom/internal/ingest"
-	"github.com/teerakarna/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/ingest"
+	"github.com/azva-co/loom/internal/ledger"
 )
 
 // runContext reports on context occupancy: what filled the window, and what

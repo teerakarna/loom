@@ -1,7 +1,7 @@
 package ledger
 
 import (
-	"github.com/teerakarna/loom/internal/ingest"
+	"github.com/azva-co/loom/internal/ingest"
 )
 
 // AssetLookup is what an ingest pass's raw usage signals get resolved

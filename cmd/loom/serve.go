@@ -6,8 +6,8 @@ import (
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/teerakarna/loom/internal/ledger"
-	"github.com/teerakarna/loom/internal/mcp"
+	"github.com/azva-co/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/mcp"
 )
 
 // runServe starts Loom's MCP server on stdio and blocks until the client

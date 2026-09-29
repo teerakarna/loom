@@ -8,8 +8,8 @@
     "name": "Bertie",
     "url": "https://github.com/teerakarna"
   },
-  "repository": "https://github.com/teerakarna/loom",
-  "homepage": "https://github.com/teerakarna/loom/blob/main/docs/design.md",
+  "repository": "https://github.com/azva-co/loom",
+  "homepage": "https://github.com/azva-co/loom/blob/main/docs/design.md",
   "license": "Apache-2.0",
   "keywords": ["cost", "observability", "mcp", "local-first"],
   "mcpServers": "./.mcp.json"

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/teerakarna/loom/internal/ledger"
-	"github.com/teerakarna/loom/internal/policy"
+	"github.com/azva-co/loom/internal/ledger"
+	"github.com/azva-co/loom/internal/policy"
 )
 
 func runPolicy(args []string) error {
