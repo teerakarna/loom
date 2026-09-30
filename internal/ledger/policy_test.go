@@ -86,6 +86,38 @@ func TestStatsByAgentTypeUsesMedianAndExcludesUnattributed(t *testing.T) {
 	if s.ObservedModel != "claude-haiku-4-5" {
 		t.Errorf("ObservedModel = %q", s.ObservedModel)
 	}
+	// Counterpoint to TestStatsByAgentTypeObservesEffortMode: none of these
+	// runs set Effort, so ObservedEffort must stay empty rather than
+	// reporting a mode over nothing.
+	if s.ObservedEffort != "" {
+		t.Errorf("ObservedEffort = %q, want empty - no run here recorded an effort", s.ObservedEffort)
+	}
+}
+
+// TestStatsByAgentTypeObservesEffortMode is the regression test for issue
+// #106: runs.effort was never selected or grouped on, so AgentTypeStats had
+// no way to say what effort these runs actually used, even though the raw
+// signal was on disk the whole time (see policy.Resolve for why this is
+// surfaced in rationale text only, never written into a Decision's Effort
+// field the way ObservedModel is into Model).
+func TestStatsByAgentTypeObservesEffortMode(t *testing.T) {
+	db := openTestDB(t)
+	efforts := []string{"high", "high", "medium", ""} // "" (unset) must not win or count
+	for i, e := range efforts {
+		if err := db.InsertRun(RunRecord{
+			Path: fmt.Sprintf("a-%d.jsonl", i), Kind: "agent", AgentType: "Plan", Effort: e,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stats, err := db.StatsByAgentType()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 || stats[0].ObservedEffort != "high" {
+		t.Fatalf("got %+v, want ObservedEffort = high (2 of 4 runs, the unset one excluded from the count)", stats)
+	}
 }
 
 func TestMedian(t *testing.T) {
