@@ -91,6 +91,14 @@ type AgentTypeStats struct {
 	DenialRate    float64 // denials per run
 	FeedbackRate  float64 // user corrections per run
 	ObservedModel string  // most common model seen for this agent type
+	// ObservedEffort is the most common effort seen for this agent type -
+	// measured the same way ObservedModel is, but deliberately not written
+	// into a Decision's Effort field the way ObservedModel is into Model
+	// (see policy.Resolve): whether effort should ever be pinned from
+	// evidence is a separate design call this issue does not make (#106).
+	// Surfaced in rationale text only, so the evidence is visible without
+	// being acted on.
+	ObservedEffort string
 }
 
 // StatsByAgentTypeSince is StatsByAgentType restricted to runs that started
@@ -121,7 +129,7 @@ func (d *DB) StatsByAgentType() ([]AgentTypeStats, error) {
 // how they measure.
 func (d *DB) statsByAgentType(extra string, args ...any) ([]AgentTypeStats, error) {
 	rows, err := d.sql.Query(`
-		SELECT agent_type, weighted_cost, tool_use_count, denial_count, feedback_count, COALESCE(model, '')
+		SELECT agent_type, weighted_cost, tool_use_count, denial_count, feedback_count, COALESCE(model, ''), effort
 		FROM runs WHERE kind = 'agent' AND agent_type != ''`+extra+` ORDER BY agent_type`, args...)
 	if err != nil {
 		return nil, err
@@ -132,21 +140,22 @@ func (d *DB) statsByAgentType(extra string, args ...any) ([]AgentTypeStats, erro
 		costs, tools   []float64
 		denials, backs int
 		modelCounts    map[string]int
+		effortCounts   map[string]int
 		agentType      string
 	}
 	byType := map[string]*acc{}
 	var order []string
 
 	for rows.Next() {
-		var at, model string
+		var at, model, effort string
 		var cost float64
 		var tools, denials, backs int
-		if err := rows.Scan(&at, &cost, &tools, &denials, &backs, &model); err != nil {
+		if err := rows.Scan(&at, &cost, &tools, &denials, &backs, &model, &effort); err != nil {
 			return nil, err
 		}
 		a, ok := byType[at]
 		if !ok {
-			a = &acc{modelCounts: map[string]int{}, agentType: at}
+			a = &acc{modelCounts: map[string]int{}, effortCounts: map[string]int{}, agentType: at}
 			byType[at] = a
 			order = append(order, at)
 		}
@@ -156,6 +165,9 @@ func (d *DB) statsByAgentType(extra string, args ...any) ([]AgentTypeStats, erro
 		a.backs += backs
 		if model != "" {
 			a.modelCounts[model]++
+		}
+		if effort != "" {
+			a.effortCounts[effort]++
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -167,11 +179,12 @@ func (d *DB) statsByAgentType(extra string, args ...any) ([]AgentTypeStats, erro
 		a := byType[at]
 		n := len(a.costs)
 		s := AgentTypeStats{
-			AgentType:     at,
-			Runs:          n,
-			MedianCost:    median(a.costs),
-			MedianTools:   median(a.tools),
-			ObservedModel: mostCommon(a.modelCounts),
+			AgentType:      at,
+			Runs:           n,
+			MedianCost:     median(a.costs),
+			MedianTools:    median(a.tools),
+			ObservedModel:  mostCommon(a.modelCounts),
+			ObservedEffort: mostCommon(a.effortCounts),
 		}
 		if n > 0 {
 			s.DenialRate = float64(a.denials) / float64(n)

@@ -79,6 +79,33 @@ func TestResolveEvidenceAtThresholdIsUsed(t *testing.T) {
 	if d.Model != "claude-haiku-4-5" {
 		t.Errorf("Model = %q, want the observed model once evidence is trusted", d.Model)
 	}
+	// Counterpoint to TestResolveSurfacesObservedEffortWithoutActingOnIt:
+	// this stats has no ObservedEffort set, so the rationale must not claim
+	// one was observed.
+	if strings.Contains(d.Rationale, "effort") {
+		t.Errorf("Rationale = %q, want no effort claim - stats.ObservedEffort was never set", d.Rationale)
+	}
+}
+
+// TestResolveSurfacesObservedEffortWithoutActingOnIt is the regression test
+// for issue #106's actual design intent, not just the aggregation gap: an
+// observed effort belongs in the rationale as visible evidence, but must
+// never overwrite d.Effort the way ObservedModel overwrites d.Model -
+// whether effort should ever be pinned from evidence is a separate design
+// call this does not make.
+func TestResolveSurfacesObservedEffortWithoutActingOnIt(t *testing.T) {
+	stats := &ledger.AgentTypeStats{
+		AgentType: "Explore", Runs: MinSampleSize,
+		MedianCost: 1234, MedianTools: 7, ObservedEffort: "high", // Explore's shipped default is "low"
+	}
+	d := Resolve("Explore", nil, stats)
+
+	if d.Effort != "low" {
+		t.Errorf("Effort = %q, want the shipped default (low) untouched - ObservedEffort must never be written into it", d.Effort)
+	}
+	if !strings.Contains(d.Rationale, "high effort") {
+		t.Errorf("Rationale = %q, want it to say the runs mostly used high effort", d.Rationale)
+	}
 }
 
 func TestResolveStoredPolicyWins(t *testing.T) {

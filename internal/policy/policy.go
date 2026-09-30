@@ -116,5 +116,13 @@ func Resolve(agentType string, stored *ledger.PolicyRow, stats *ledger.AgentType
 		d.Model = stats.ObservedModel
 		d.Rationale += "; model is what these runs actually used"
 	}
+	// Reported, not acted on (issue #106): unlike ObservedModel, this never
+	// overwrites d.Effort - whether effort should ever be pinned from
+	// evidence the way model is is a separate design call this does not
+	// make. The evidence is visible in the rationale either way, instead of
+	// existing on disk with no way to see it.
+	if stats.ObservedEffort != "" {
+		d.Rationale += fmt.Sprintf("; runs mostly used %s effort", stats.ObservedEffort)
+	}
 	return d
 }
