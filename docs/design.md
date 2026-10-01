@@ -2119,46 +2119,87 @@ B7d last so surfacing earns its place on measurement the way B5's did.
 
 ## Verification
 
-- **Ingest correctness.** Replay fixtures and assert computed subagent totals reconcile with the
-  totals the transcripts themselves record. If they do not reconcile, the cost model is wrong and
-  nothing downstream can be trusted.
-- **Memory bound.** Ingest a large synthetic corpus under a hard RSS ceiling, proving streaming.
-- **Latency.** Cold start under 20ms. Kill the `loom serve` process mid-session and confirm every
-  integration point still returns and the session is unaffected.
-- **Write containment.** Run against a read-only fixture tree; assert zero writes outside the
-  database and generated-output directory, and assert settings files are never opened for write.
-- **Boundary isolation.** Point one boundary's ingest at a fixture belonging to another and assert
-  refusal rather than absorption.
-- **No content stored.** Ingest a fixture containing a planted secret, then grep the database for it.
-  It must not appear.
-- **Cold start.** Run every command against an empty ledger; assert useful output, no crashes, no
-  silent no-ops.
-- **Loop closure.** Apply a policy change, run a second window, confirm the delta is attributed and
-  that revert restores the prior policy.
+Each item below names the test(s) that enforce it. `scripts/ci.sh`'s `go test ./...` run is what
+makes these real rather than aspirational, and a dedicated check
+(`TestEveryVerificationItemNamesARealTest`, `cmd/loom/design_verification_test.go`) parses this
+section and fails CI if a named test is renamed or deleted without this section being updated to
+match - the exact drift that let the planted-secret test sit unenforced for five milestones before
+B7b caught it by accident (see "Added for B7" below). Tier 2 of the OSS-readiness plan
+(`~/projects/personal/dotfiles/plans/2026-09-22_loom-oss-readiness.md`) asked for this mechanism;
+built 2026-10-01, alongside the four genuinely missing tests that audit found (items 2-4 and the
+B7 write-containment item below never had an enforcing test at all before this pass).
+
+- **Ingest correctness.** `TestIngestFileSession` (`internal/ingest/run_test.go`) replays a fixture
+  and asserts the parent's own `<usage>`-block reconciliation figures are extracted correctly.
+  This is narrower than this item's own original wording claimed: an earlier version said computed
+  subagent totals must "reconcile with the totals the transcripts themselves record," but
+  `docs/transcript-schema.md`'s own "Reconciliation does NOT hold" finding settled, before this
+  pass, that naive summing does not and must not be asserted to - `TestInsertAndReportRun`
+  (`internal/ledger/ledger_test.go`) is what's actually enforced: `UnreconciledAgents` counts how
+  many agent runs carry a reported figure, deliberately without claiming the figure agrees with
+  `weighted_cost`. Corrected here rather than left as a standing claim nothing enforces and no test
+  could pass against honestly.
+- **Memory bound.** `TestIngestFileStreamsRatherThanBuffering`
+  (`internal/ingest/memory_bound_test.go`) ingests a ~100MB generated-at-test-time corpus (too
+  large to check in under the fixture-hygiene rules below, and pointless to - it is not testing
+  content, only size) and asserts heap growth stays under a 20MB ceiling, proving `IngestFile`'s
+  `bufio.Scanner` reads one line at a time rather than loading the file whole. Not built before
+  this pass.
+- **Latency.** Cold start: `TestServerColdStartUnder20ms` (`internal/mcp/latency_test.go`) times
+  `NewServer` construction directly. Kill `loom serve` mid-session: the data-safety half of this
+  claim is `TestOpenUsesWALMode` (`internal/ledger/crash_safety_test.go`), which confirms `Open`
+  actually turns on the WAL journal mode that makes an abrupt process death safe for the ledger -
+  re-testing SQLite's own well-covered crash-recovery implementation was tried and abandoned, see
+  that test's own comment for why. Neither existed before this pass.
+- **Write containment.** `TestIngestAndProposeNeverWriteOutsideTheLedger`
+  (`cmd/loom/write_containment_test.go`) chmods a fixture tree (transcripts, memory, `settings.json`,
+  a skill) read-only, points the ledger at a separate writable directory, runs ingest and proposal
+  generation/storage against it, and asserts both that nothing fails (a write attempt under the
+  read-only tree would surface as a permission error) and that every file's content hash is
+  unchanged afterward. Not built before this pass.
+- **Boundary isolation.** No test, deliberately: "boundary" as hard ledger separation is still
+  deferred (needs a manifest, no evidenced need yet - see the design discussion earlier in this
+  document). A test for refusing cross-boundary ingest cannot exist before the feature does; add one
+  alongside it, not before.
+- **No content stored.** `TestNoContentStored` (`internal/ledger/privacy_test.go`) ingests a fixture
+  with a planted secret through the real pipeline (including the B7b tables) and asserts it appears
+  in no table, no column.
+- **Cold start.** No single end-to-end test runs every command against an empty ledger; coverage is
+  per-function instead: `TestStatusOnEmptyLedger` (`internal/ledger/status_test.go`),
+  `TestReportEmptyLedgerHasNoDivisionByZero` and `TestReportCostByKindOnEmptyLedger`
+  (`internal/ledger/report_test.go`), `TestGetCostSummaryEmpty` (`internal/mcp/server_test.go`),
+  `TestListProposalsEmpty` (`internal/mcp/server_test.go`) and `TestListProposalsEmptyByDefault`
+  (`internal/ledger/event_test.go`).
+- **Loop closure.** `TestApplyRecordsTheBaselineThatClosesTheLoop`,
+  `TestRevertProposedWhenCostRegresses`, and `TestApplyingARevertReopensTheQuestion` (all
+  `internal/propose/propose_test.go`) together cover apply, the regression delta being attributed,
+  and revert restoring the prior policy and reopening the original question.
 
 ### Added for B7
 
-- **Skill shape (#42).** Point discovery at a fixture tree holding both `foo/SKILL.md` and a flat
-  `bar.md`; assert one skill and one "present but never loadable" finding.
-- **The join is real, not inferred (#39).** Report over a corpus where a known skill was invoked;
-  assert a non-zero use count against a known-dormant one showing zero. State the sample size, per
-  constraint 11.
-- **Compaction is read, not guessed.** Assert the recorded event comes from the host's
-  `compact_boundary` record. A test that reconstructs compaction from a `cache_read` drop must fail:
-  that inference was tried and was wrong 42 times out of 42.
-- **Resumed sessions do not double-count.** Ingest two transcripts where the second resumes the
-  first and carries the same compaction boundary; assert the event is counted once. Same shape as the
-  2.12x over-count, so it gets its own fixture. Not compaction-only: `tool_usage` and
-  `asset_usage` need the identical test, on the identical shape of evidence (a `tool_use` id
-  shared between two runs) - missing here is exactly what let the double-count into both tables
-  in the first place, caught only once by code review, not by this list.
-- **Bytes stay bytes.** Assert no stored column holds a token estimate. The conversion belongs at the
-  display edge, labelled, or downstream arithmetic inherits an error it cannot see.
-- **The privacy property survives the migration.** The planted-secret test must pass unchanged after
-  B7b's schema change. If B7b makes that test harder to write, the design drifted.
-- **Write containment catches the refused verb.** The existing containment test is what stops
-  `execute_context_action` arriving by increments. Extend its assertion set to the proposal
-  directory and leave it strictly enforced.
+- **Skill shape (#42).** `TestDiscoverSkillDirMixOfBothShapes` and
+  `TestDiscoverSkillFlatFileIsAReferenceNotASkill` (`internal/asset/discover_test.go`).
+- **The join is real, not inferred (#39).** `TestUsageSummary_LastUsedIsTheMostRecentRun` (non-zero
+  use count for an invoked asset) and `TestUsageSummary_AbsentMeansNeverUsed` (zero for a dormant
+  one), both `internal/ledger/usage_test.go`.
+- **Compaction is read, not guessed.** `TestIngestFile_CompactionReadNotGuessed`
+  (`internal/ingest/run_test.go`) - its own doc comment cites this exact "wrong 42 times out of 42"
+  finding directly.
+- **Resumed sessions do not double-count.** `TestInsertCompactions_DedupesAcrossResumedSessions` and
+  `TestReplaceToolUsage_DedupesAcrossResumedSessions` (`internal/ledger/occupancy_test.go`), plus
+  `TestReplaceAssetUsage_DedupesAcrossResumedSessions` (`internal/ledger/usage_test.go`) for the
+  identical shape on `asset_usage` this item's own text insists on by name.
+- **Bytes stay bytes.** `TestIngestFile_ToolUsageByBytes` (`internal/ingest/run_test.go`) asserts
+  `ResultBytes` against actual measured byte lengths, never a token estimate.
+- **The privacy property survives the migration.** Same test as "No content stored" above,
+  `TestNoContentStored` - its own doc comment confirms it exercises B7b's tables specifically for
+  this reason.
+- **Write containment catches the refused verb.** Folded into "Write containment" above rather than
+  kept as a separate extension: "the proposal directory" this item names never came to exist as a
+  filesystem target - B7c shipped proposals as rows in the ledger's own table, "minus the write" of
+  the original spec's `promote_to_mechanism` (see B7c above) - so there is nothing to extend
+  containment *to*. What carries this item's real intent is scope: the one write-containment test
+  runs proposal generation and storage, not just ingest, against the identical read-only tree.
 
 ## Publishability rules
 
