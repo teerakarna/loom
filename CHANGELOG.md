@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Tier 3 of the OSS-readiness plan, the parts that don't require going public first: `GOVERNANCE.md`
+  and `.github/CODEOWNERS` (mirroring candor's own single-maintainer shape, dashes converted to
+  loom's plain-hyphen convention), repo topics, and signed releases with an SBOM
+  (`.goreleaser.yaml` + `.github/workflows/release.yml`, triggered on a `v*.*.*` tag). One static
+  binary per platform (linux/darwin, amd64/arm64, no container image - candor's
+  Kubernetes-shaped release machinery would be cargo cult here), a syft-generated SPDX SBOM per
+  archive, and `checksums.txt` keyless-signed with cosign (Fulcio/Rekor via OIDC, no stored key).
+  Verified with a real local `goreleaser release --snapshot` run, not just config validation - caught
+  one real mismatch this way: the first draft's release notes claimed a CycloneDX SBOM, but syft's
+  actual default output is SPDX JSON.
+- Resolved the dogfooding-figure provenance question `docs/design.md` had left open: checked this
+  machine's real ledger directly rather than assuming, confirmed every lane is under
+  `~/projects/personal/*` with no employer-machine path ever present, so no corpus any published
+  figure was drawn from has ever included an employer session.
+
 - `docs/design.md`'s Verification section is now machine-checkable (OSS-readiness plan, tier 2):
   every item names the real test(s) that enforce it, and `TestEveryVerificationItemNamesARealTest`
   (`cmd/loom/design_verification_test.go`) parses the section and fails CI if a named test is
