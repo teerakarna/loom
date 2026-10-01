@@ -2,7 +2,7 @@
 /loom
 /dist/
 
-# Local ledger (SQLite) — never commit real usage data
+# Local ledger (SQLite) - never commit real usage data
 *.db
 *.db-wal
 *.db-shm

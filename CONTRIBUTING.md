@@ -85,6 +85,10 @@ too high" is not.
 
 Conventional commits (`feat:`, `fix:`, `docs:`, `chore:`) where practical.
 
+## Governance
+
+See [GOVERNANCE.md](GOVERNANCE.md) for how decisions get made.
+
 ## Reporting a security issue
 
 See [SECURITY.md](SECURITY.md).

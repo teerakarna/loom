@@ -2104,12 +2104,17 @@ permanently self-contradictory against the code for no real benefit. This is dif
 how the MCP server shape section above treats its own history, where the actual tool inventory
 genuinely differed at different points in time and preserving that is the accurate record.
 
-#### Open, and deliberately not decided here
+#### Provenance of the dogfooding figures - RESOLVED 2026-10-01
 
-- **Provenance of the dogfooding figures already committed to this doc.** If any were measured on a
-  corpus including employer sessions, that needs adjudicating before B6d rather than after. Aggregate
-  derived metrics are a far weaker exposure than content and the figures are unattributable on their
-  face, so this is probably fine. It should be a decision with a date on it, not an assumption.
+Checked rather than assumed, as this section originally asked for: every dogfooding figure in this
+document (B7b's 11 compactions / 6.82M tokens / Read 561 calls, the lane-corruption find of 82 of
+85 runs, every other measurement cited throughout) was taken against this machine's own real
+ledger, `~/.loom/loom.db` - machine-local by design and never synced (constraint 12). `loom report`
+confirms its lane breakdown is exclusively `~/projects/personal/*` paths (dotfiles, loom, candor,
+glidepath) - no work or employer-machine path has ever appeared in it, because employer sessions
+run on a different machine entirely with their own separate ledger. No corpus this document's
+figures were ever drawn from included an employer session, so the question this section raised
+does not arise. Nothing to adjudicate, and no change to any of the figures already published.
 
 #### Order
 

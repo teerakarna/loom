@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+# Least-privilege default so a job added later without its own block doesn't inherit the repo's
+# default token scope.
+permissions: {}
+
+jobs:
+  binaries:
+    name: Build binaries + GitHub Release
+    runs-on: ubuntu-latest
+    # Generous relative to a normal run (goreleaser's own snapshot build here took well under a
+    # minute), but this is a tag push, not a PR - rare enough that a wide bound costs nothing, and
+    # the point is only to stop a stalled OIDC call to Fulcio/Rekor or a network stall from running
+    # to GitHub's own 360-minute default with nothing watching, the same reason ci.yml's jobs are
+    # bounded (found by code review: this job had none).
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write # keyless cosign signing of checksums.txt (Fulcio/Rekor via OIDC)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # goreleaser's changelog needs full history
+          persist-credentials: false # nothing after this step needs git push access
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v3.0.6" # pinned explicitly, not left to the action's own default
+
+      - name: goreleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: "v2.18.2" # the action's own default ("~> v2") floats within v2.x - pinned exactly instead
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
