@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `docs/design.md`'s Verification section is now machine-checkable (OSS-readiness plan, tier 2):
+  every item names the real test(s) that enforce it, and `TestEveryVerificationItemNamesARealTest`
+  (`cmd/loom/design_verification_test.go`) parses the section and fails CI if a named test is
+  renamed or deleted without the doc being updated to match - the exact drift that let the
+  planted-secret test sit unenforced for five milestones before B7b caught it by accident. Four
+  items had no enforcing test at all before this pass, now built: `TestIngestFileStreamsRatherThanBuffering`
+  (memory bound - a ~100MB generated-at-test-time corpus, asserting heap growth stays under 20MB,
+  proving `IngestFile` streams rather than buffers), `TestServerColdStartUnder20ms` and
+  `TestOpenUsesWALMode` (latency - cold-start timing, and the WAL journal mode that makes a killed
+  `loom serve` process safe for the ledger; a two-in-process-connections crash simulation was tried
+  first and found unreliable, see that test's own comment), and
+  `TestIngestAndProposeNeverWriteOutsideTheLedger` (write containment - chmods a fixture tree
+  read-only, runs ingest and proposal generation/storage against it, asserts nothing fails and
+  every file's content hash is unchanged). Also corrected two stale items found while auditing the
+  rest: "ingest correctness" previously claimed subagent totals must reconcile, which
+  `docs/transcript-schema.md`'s own "Reconciliation does NOT hold" finding already settled is not
+  true; "write containment catches the refused verb" named extending containment to "the proposal
+  directory," which never came to exist as a filesystem target since B7c shipped proposals as
+  ledger rows instead.
+
 ### Changed
 
 - CI reduced from five billed jobs to two: `test`/`lint`/`govulncheck`/`plugin` merged into one `ci`
