@@ -143,7 +143,6 @@ func hashTree(t *testing.T, root string) map[string]string {
 // at the end.
 func TestIngestAndProposeNeverWriteOutsideTheLedger(t *testing.T) {
 	root, before := buildReadOnlyFixtureTree(t)
-	t.Setenv("HOME", root) // propose.GenerateMemoryFindings reads os.UserHomeDir()
 
 	ledgerDir := t.TempDir() // deliberately outside root: the one place writes belong
 	db, err := ledger.Open(filepath.Join(ledgerDir, "loom.db"))
