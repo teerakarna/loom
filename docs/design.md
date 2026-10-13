@@ -843,7 +843,7 @@ going public rather than a prerequisite for the plugin.
 All four pieces are done: B6b and B6c were done regardless of the publish decision; B6a and B6d
 closed together 2026-10-01, once the evidence gate fired. B6 is closed.
 
-#### The README's install command does not work, filed and fixed - BUILT 2026-09-23
+#### The README's install command does not work, filed and fixed - BUILT 2026-09-23, resolved 2026-10-01
 
 Found on the first real trial on a second machine (AMC), filed as loom #57: `go install
 github.com/teerakarna/loom/cmd/loom@latest`, the README's headline command, fails for everyone while
@@ -854,13 +854,15 @@ real question correctly: this is a symptom of "go public or stay private", not a
 either way, so it stayed unimplemented pending a decision rather than getting a quick unprincipled
 fix.
 
-Checked directly against this section's own gate before deciding: `pin_model`/`retire_asset`/
+At the time, checked directly against this section's own gate: `pin_model`/`retire_asset`/
 `revert_policy` proposal counts and the `policies` table, on this machine's real ledger, all still
-zero. The gate is unmet, so **stay private**, consistent with what this section already committed to
-rather than a fresh call. README and `plugin/README.md` now lead with a private-install path
+zero. The gate was unmet, so README and `plugin/README.md` led with a private-install path
 (`GOPRIVATE=github.com/teerakarna go install ...`, or build from a clone) instead of the command that
-does not work, and say plainly that this is deliberate, not a stale README - it goes back to a
-one-liner once B6d actually fires.
+did not work, and said plainly that this was deliberate, not a stale README.
+
+The gate fired 2026-09-30 (see B6d above) and the repo went public 2026-10-01. README and
+`plugin/README.md` now lead with the plain one-liner again - the command loom #57 originally filed
+against now works for a stranger as written.
 
 #### A pending proposal never withdraws itself - BUILT 2026-09-23
 

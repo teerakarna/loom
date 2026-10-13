@@ -44,7 +44,7 @@ evidence_rows=$(printf '%s\n' "$policy" | grep '^\*' | sed -E 's/^\* +([^ ]+) +(
   echo "## Proposals"
   echo
   echo "- Pending model-pin proposals: ${pins}"
-  echo "- Proposals that have fired on real data are the gate this project is waiting on; see docs/design.md, B6d."
+  echo "- A proposal firing on real data was the gate for going public (B6d); it fired 2026-09-30, see docs/design.md."
   echo
   echo "The second half of the loop (a pin applied, then re-measured, then reverted if it regressed) is not yet exercised on real data."
 } > docs/evidence.md

@@ -1,6 +1,6 @@
 # Evidence so far
 
-Generated 2026-10-05 by `scripts/evidence.sh` from one machine's local ledger.
+Generated 2026-10-13 by `scripts/evidence.sh` from one machine's local ledger.
 Aggregate numbers only: no lane names, proposal subjects or memory content.
 
 ## Corpus
@@ -19,6 +19,6 @@ Aggregate numbers only: no lane names, proposal subjects or memory content.
 ## Proposals
 
 - Pending model-pin proposals: 2
-- Proposals that have fired on real data are the gate this project is waiting on; see docs/design.md, B6d.
+- A proposal firing on real data was the gate for going public (B6d); it fired 2026-09-30, see docs/design.md.
 
 The second half of the loop (a pin applied, then re-measured, then reverted if it regressed) is not yet exercised on real data.
