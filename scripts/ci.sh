@@ -38,7 +38,7 @@
 # misreported as build/vet/test failing.
 #
 # golangci-lint and govulncheck both run at CI's own pinned versions
-# (golangci-lint v2.13.2, govulncheck v1.8.0 - see ci.yml and CONTRIBUTING.md's
+# (golangci-lint v2.14.0, govulncheck v1.8.0 - see ci.yml and CONTRIBUTING.md's
 # "Local environment" section) if that's what's on PATH, but nothing here
 # enforces the match - a different local version can pass here and fail in
 # CI, or the reverse, with no warning beyond the version this prints. This
