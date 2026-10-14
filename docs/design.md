@@ -715,15 +715,17 @@ Each stage is independently useful. Stopping after any of them leaves something 
 Four pieces, and they are not equally justified. Two are clearly needed, one is thinner than this
 doc has been claiming, and one is a decision rather than a build.
 
-#### B6a. Signed releases - needed, and coupled to publishing
+#### B6a. Signed releases - BUILT 2026-10-01
 
-goreleaser, SHA256 checksums, cosign keyless signing, SBOM per release, binaries for darwin/arm64,
-darwin/amd64, linux/amd64, linux/arm64. None of it exists today: there is no `.goreleaser.yml` and
-no release workflow.
+goreleaser, SHA256 checksums, cosign keyless signing (Fulcio/Rekor via OIDC, no stored key), an
+SPDX SBOM per archive, binaries for darwin/amd64, darwin/arm64, linux/amd64, linux/arm64 - no
+container image, since there is no Kubernetes-shaped deployment here that would make one anything
+but cargo cult. `.goreleaser.yaml` builds it, `.github/workflows/release.yml` triggers it on a
+`v*.*.*` tag push. Verified with a real local `goreleaser release --snapshot` run, not just
+`goreleaser check` - caught one real mismatch along the way: the first draft's release notes
+claimed a CycloneDX SBOM, but syft's actual default output is SPDX JSON.
 
-A tool that asks people to download a binary is a supply chain and should behave like one. Note the
-coupling though: nobody downloads a binary until there is a public release, so this is worth
-building *as part of* going public rather than before deciding to.
+A tool that asks people to download a binary is a supply chain and should behave like one.
 
 #### B6b. Fixture-hygiene check - BUILT 2026-09-13
 
@@ -792,30 +794,32 @@ Three things came out of building it that the scope above did not anticipate:
   `internal/mcp/plugin_test.go` covers those three and the validator covers the schema. The two are
   complementary rather than redundant.
 
-#### B6d. Going public - a decision, with prerequisites
+#### B6d. Going public - DECIDED yes, 2026-10-01
 
-Not a build. The prerequisites are already written down in the publishability rules:
+The prerequisites were written down in the publishability rules, and all of them cleared:
 
 - secret scanning green in CI - **done** (gitleaks, 2026-09-12)
 - fixture-hygiene check green - **done 2026-09-13**
-- a manual pass for real names in docs, README and examples - currently clean, checked 2026-09-13,
-  and worth re-checking immediately before rather than trusting this line
-- signed releases actually working - **B6a**
-- **at least one evidence path has fired on real data.** Not a build, a precondition. Every
-  evidence-driven behaviour in this tool - pin proposals, retirement, regression detection - has so
-  far only run against synthetic fixtures and seeded demos. On a real corpus they all correctly
-  report insufficient evidence, which is right, and which means the interesting half of the tool is
-  unproven outside its own tests. Publishing something whose headline behaviour has never been
-  demonstrated on real data would be the thing this project spends four blog posts criticising.
+- a manual pass for real names in docs, README and examples - checked 2026-09-13, re-checked clean
+  before the flip
+- signed releases actually working - **done, B6a**
+- **at least one evidence path fired on real data.** Confirmed 2026-09-30 via `list_proposals`
+  against this machine's real ledger: two genuine `pin_model` proposals, not placeholders -
+  `pin fork to claude-sonnet-5` (58 runs, median cost 340099, denial rate 3.4%) and
+  `pin general-purpose to claude-sonnet-5` (87 runs, median cost 189065, denial rate 4.6%). Real
+  sample sizes, real effect sizes, each with a concrete reversible action attached. That is the
+  interesting half of the tool actually firing for a real reason, which is what this gate asked
+  for - not that a proposal had also been applied and re-measured; B6d's own text above never
+  required that second step, only that one appear.
 
-  This gate costs nothing to add and is satisfied by patience: keep it installed, let the corpus
-  grow past a threshold, and watch one proposal appear for a real reason. The thresholds themselves
-  (`MinSampleSize` 20, `StaleAfter` 90 days, `MinPostApplyRuns` 10, `RegressionCostRatio` 1.25,
-  `RegressionReworkDelta` 0.2) are every one of them a reasoned guess, and cannot be calibrated
-  without exactly that corpus.
+The repo went public once this was confirmed. The thresholds behind that evidence
+(`MinSampleSize` 20, `StaleAfter` 90 days, `MinPostApplyRuns` 10, `RegressionCostRatio` 1.25,
+`RegressionReworkDelta` 0.2) remain reasoned guesses, recalibratable as the corpus grows -
+see `docs/evidence.md` for the aggregate snapshot kept current for exactly that.
 
 There is also the owner's own standing rule that a repo goes public only for a concrete demonstrated
-benefit, never to unblock a feature.
+benefit, never to unblock a feature. That benefit is distribution to people the owner does not know,
+named below.
 
 This section used to claim the benefit was that **the plugin marketplace requires a public
 repository**, and called that the forcing argument. Checked against the documentation while building
@@ -836,11 +840,10 @@ reverses their coupling: a private marketplace works today, so the plugin is usa
 signed releases only matter once there are strangers downloading binaries. B6a is therefore part of
 going public rather than a prerequisite for the plugin.
 
-Remaining: **B6a** if and when B6d is decided yes, and **B6d** itself, still gated on at least one
-evidence path firing on real data. Both of the pieces worth having regardless of that decision -
-B6b and B6c - are done.
+All four pieces are done: B6b and B6c were done regardless of the publish decision; B6a and B6d
+closed together 2026-10-01, once the evidence gate fired. B6 is closed.
 
-#### The README's install command does not work, filed and fixed - BUILT 2026-09-23
+#### The README's install command does not work, filed and fixed - BUILT 2026-09-23, resolved 2026-10-01
 
 Found on the first real trial on a second machine (AMC), filed as loom #57: `go install
 github.com/teerakarna/loom/cmd/loom@latest`, the README's headline command, fails for everyone while
@@ -851,13 +854,15 @@ real question correctly: this is a symptom of "go public or stay private", not a
 either way, so it stayed unimplemented pending a decision rather than getting a quick unprincipled
 fix.
 
-Checked directly against this section's own gate before deciding: `pin_model`/`retire_asset`/
+At the time, checked directly against this section's own gate: `pin_model`/`retire_asset`/
 `revert_policy` proposal counts and the `policies` table, on this machine's real ledger, all still
-zero. The gate is unmet, so **stay private**, consistent with what this section already committed to
-rather than a fresh call. README and `plugin/README.md` now lead with a private-install path
+zero. The gate was unmet, so README and `plugin/README.md` led with a private-install path
 (`GOPRIVATE=github.com/teerakarna go install ...`, or build from a clone) instead of the command that
-does not work, and say plainly that this is deliberate, not a stale README - it goes back to a
-one-liner once B6d actually fires.
+did not work, and said plainly that this was deliberate, not a stale README.
+
+The gate fired 2026-09-30 (see B6d above) and the repo went public 2026-10-01. README and
+`plugin/README.md` now lead with the plain one-liner again - the command loom #57 originally filed
+against now works for a stranger as written.
 
 #### A pending proposal never withdraws itself - BUILT 2026-09-23
 
