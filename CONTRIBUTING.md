@@ -31,7 +31,7 @@ kept somewhere else.
 What `.github/workflows/ci.yml` actually pins, so a local run and a CI run can't silently disagree
 with no way to tell why - `scripts/ci.sh` is the one command that exercises all of it:
 
-- **golangci-lint**: `v2.13.2`, pinned via the `golangci-lint-action`'s own `version:` input.
+- **golangci-lint**: `v2.14.0`, pinned via the `golangci-lint-action`'s own `version:` input.
 - **govulncheck**: `v1.8.0`, pinned in the `go install` command CI runs directly (not the
   `golang/govulncheck-action` - see the comment above that step for why).
 - **gitleaks**: the `gitleaks/gitleaks-action` itself is pinned to `v3.0.0`
