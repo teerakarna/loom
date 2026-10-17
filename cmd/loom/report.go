@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,6 +93,13 @@ func runReport(args []string) error {
 func runIngest(args []string) error {
 	db, _, err := ingestFromArgs(args, "usage: loom ingest [path]", false)
 	if err != nil {
+		// No projects directory yet (a fresh machine, before any session has
+		// run) means nothing to ingest, not a failure a hook should surface.
+		// Only for the default root: a path the caller typed that does not
+		// exist is still an error.
+		if len(args) == 0 && errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		return err
 	}
 	return db.Close()

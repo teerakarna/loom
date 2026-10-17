@@ -37,11 +37,12 @@ func captureStdout(t *testing.T, f func() error) (string, error) {
 		t.Fatal(err)
 	}
 	os.Stdout = w
+	done := make(chan string)
+	go func() { b, _ := io.ReadAll(r); done <- string(b) }()
+	defer func() { os.Stdout = old }()
 	runErr := f()
-	os.Stdout = old
 	_ = w.Close()
-	out, _ := io.ReadAll(r)
-	return string(out), runErr
+	return <-done, runErr
 }
 
 func ledgerRuns(t *testing.T) int {
@@ -94,5 +95,36 @@ func TestRunIngestRejectsLaneAndExtraArgs(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "usage: loom ingest") {
 			t.Errorf("runIngest(%v) err = %v, want the ingest usage string", args, err)
 		}
+	}
+}
+
+func TestRunIngestWithNoProjectsDirIsANoOp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	out, err := captureStdout(t, func() error { return runIngest(nil) })
+	if err != nil || out != "" {
+		t.Errorf("err = %v, stdout = %q, want a silent no-op", err, out)
+	}
+}
+
+// The counterpoint: a path the caller typed that does not exist is still an error.
+func TestRunIngestWithMissingExplicitPathStillFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := runIngest([]string{filepath.Join(t.TempDir(), "nope")}); err == nil {
+		t.Error("want an error for a nonexistent explicit path, got nil")
+	}
+}
+
+func TestRunIngestAcceptsAnExplicitPathAndReportKeepsLane(t *testing.T) {
+	scratchHome(t)
+	root := filepath.Join(os.Getenv("HOME"), ".claude", "projects")
+	if err := runIngest([]string{root}); err != nil {
+		t.Fatal(err)
+	}
+	if n := ledgerRuns(t); n == 0 {
+		t.Error("explicit-path ingest left the ledger empty")
+	}
+	// report still accepts --lane, which ingest rejects.
+	if _, err := captureStdout(t, func() error { return runReport([]string{"--lane", "-scratch-proj"}) }); err != nil {
+		t.Errorf("report --lane: %v", err)
 	}
 }
