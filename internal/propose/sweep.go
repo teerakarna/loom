@@ -59,14 +59,14 @@ var safeName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 //
 // The default is TierDecide. Only a kind that is named here and passes every
 // check becomes safe, so a new proposal kind is never swept by accident.
-func Classify(home string, row ledger.ProposalRow, ev map[string]any) SweepItem {
+func Classify(home string, row ledger.ProposalRow, ev map[string]any, slugs map[string]string) SweepItem {
 	it := SweepItem{
 		ID: row.ID, Kind: row.Kind,
 		Summary: SummaryFor(row.Kind, row.Subject, ev),
 		Tier:    TierDecide,
 	}
 	if row.Kind == KindUnreachableAsset {
-		line, script, why := checkUnreachableSafe(home, ev)
+		line, script, why := checkUnreachableSafe(home, ev, slugs)
 		if why == "" {
 			it.Tier, it.Line, it.Script = TierSafe, line, script
 			it.Why = "adds one line to MEMORY.md and changes nothing else"
@@ -82,18 +82,23 @@ func Classify(home string, row ledger.ProposalRow, ev map[string]any) SweepItem 
 // its store's MEMORY.md can lose nothing, and returns the line and the script
 // that add it. A non-empty why means it is not safe, and says which check
 // failed.
-func checkUnreachableSafe(home string, ev map[string]any) (line, script, why string) {
+func checkUnreachableSafe(home string, ev map[string]any, slugs map[string]string) (line, script, why string) {
 	store, _ := ev["store"].(string)
 	filename, _ := ev["filename"].(string)
-	if store == "" || filename == "" || store != filepath.Base(store) {
+	if store == "" || filename == "" || store == "." || store == ".." || store != filepath.Base(store) {
 		return "", "", "the proposal does not name a store and file"
 	}
 	if !safeName.MatchString(filename) {
 		return "", "", "the filename has characters that are not safe to write unescaped"
 	}
 
-	memDir := filepath.Join(home, ".claude", "projects", store, "memory")
-	if !isRegularFile(filepath.Join(memDir, filename+".md")) {
+	storeDir := filepath.Join(home, ".claude", "projects", store)
+	memDir := filepath.Join(storeDir, "memory")
+	if !isRealDir(storeDir) || !isRealDir(memDir) {
+		return "", "", "the store or its memory directory is missing or is a symlink"
+	}
+	target := filepath.Join(memDir, filename+".md")
+	if !isRegularFile(target) {
 		return "", "", "the memory file is gone or is not a regular file"
 	}
 	index := filepath.Join(memDir, "MEMORY.md")
@@ -105,25 +110,23 @@ func checkUnreachableSafe(home string, ev map[string]any) (line, script, why str
 	}
 
 	title := filename
-	for _, f := range memoryFilesIn(home, store) {
-		if f.Filename == filename && safeName.MatchString(f.Slug) {
-			title = f.Slug
-		}
+	if slug := slugs[store+"/"+filename]; safeName.MatchString(slug) {
+		title = slug
 	}
 	line = fmt.Sprintf("- [%s](%s.md)", title, filename)
-	return line, indexAppendScript(index, filename+".md", line), ""
+	return line, indexAppendScript(index, target, filename+".md", line), ""
 }
 
-func memoryFilesIn(home, store string) []asset.MemoryFile {
+// SlugIndex maps "store/filename" to the frontmatter name of every memory
+// file, scanned once so a sweep does not rescan the corpus per item.
+func SlugIndex(home string) map[string]string {
 	all, _, err := asset.DiscoverAllMemory(home)
+	out := map[string]string{}
 	if err != nil {
-		return nil
+		return out
 	}
-	var out []asset.MemoryFile
 	for _, f := range all {
-		if f.Store == store {
-			out = append(out, f)
-		}
+		out[f.Store+"/"+f.Filename] = f.Slug
 	}
 	return out
 }
@@ -136,14 +139,27 @@ func isRegularFile(path string) bool {
 	return err == nil && fi.Mode().IsRegular()
 }
 
+// isRealDir is false for a symlink, a file and a missing path, for the same
+// reason isRegularFile is: a symlinked store could point outside the stores.
+func isRealDir(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.IsDir()
+}
+
 // indexAppendScript is idempotent: it does nothing if the index already
 // links the file, adds the missing newline if the index lacks a trailing one,
-// and only ever appends, so every existing byte is kept.
-func indexAppendScript(index, target, line string) string {
-	q := shellQuote(index)
+// and only ever appends, so every existing byte is kept. It repeats the
+// file and symlink checks when it runs, because the script is read and run
+// later than Classify's checks were.
+func indexAppendScript(index, memFile, target, line string) string {
+	idx, mf := shellQuote(index), shellQuote(memFile)
 	return fmt.Sprintf(
-		"grep -qF %s %s || { [ -z \"$(tail -c1 %s)\" ] || echo >> %s; echo %s >> %s; }",
-		shellQuote("("+target+")"), q, q, q, shellQuote(line), q)
+		"if [ -f %s ] && [ ! -L %s ] && [ -f %s ] && [ ! -L %s ]; then\n"+
+			"  grep -qF %s %s || { [ -z \"$(tail -c1 %s)\" ] || printf '\\n' >> %s; printf '%%s\\n' %s >> %s; }\n"+
+			"else\n  echo %s >&2\nfi",
+		mf, mf, idx, idx,
+		shellQuote("]("+target+")"), idx, idx, idx, shellQuote(line), idx,
+		shellQuote("skipped "+target+": the files changed since this script was generated"))
 }
 
 func shellQuote(s string) string {

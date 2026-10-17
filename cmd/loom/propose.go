@@ -115,7 +115,7 @@ func runPropose(args []string) error {
 	// an earlier version of this fix kept a hand-written loop here anyway,
 	// with wording that silently drifted from parseArgs' own the moment it
 	// was written).
-	_, _, flags, err := parseArgs(args, "usage: loom propose [apply <id>|dismiss <id>|sweep [--script]] [--lane <lane>]", false,
+	_, _, flags, err := parseArgs(args, "usage: loom propose [apply <id>|dismiss <id>] [--lane <lane>] (or: loom propose sweep [--script])", false,
 		map[string]string{"--lane": "see `loom status` for the lanes in your ledger"}, "--lane")
 	if err != nil {
 		return err

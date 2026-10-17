@@ -43,6 +43,14 @@ func TestPrintSweepSaysWhenNothingIsSafe(t *testing.T) {
 	}
 }
 
+func TestPrintSweepAllSafeHasNoEmptyDecisionSection(t *testing.T) {
+	var b bytes.Buffer
+	printSweep(&b, []propose.SweepItem{{ID: 1, Tier: propose.TierSafe, Summary: "s", Line: "- [a](a.md)"}})
+	if strings.Contains(b.String(), "Needs a decision") {
+		t.Errorf("empty decision section printed:\n%s", b.String())
+	}
+}
+
 func TestSweepRejectsUnknownFlag(t *testing.T) {
 	if err := runSweep(nil, []string{"--bogus"}); err == nil {
 		t.Fatal("want a usage error")

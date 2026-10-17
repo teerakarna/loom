@@ -33,11 +33,12 @@ func runSweep(db *ledger.DB, args []string) error {
 	if err != nil {
 		return err
 	}
+	slugs := propose.SlugIndex(home)
 	items := make([]propose.SweepItem, 0, len(pending))
 	for _, p := range pending {
 		var ev map[string]any
 		_ = json.Unmarshal([]byte(p.Evidence), &ev)
-		items = append(items, propose.Classify(home, p, ev))
+		items = append(items, propose.Classify(home, p, ev, slugs))
 	}
 
 	if scriptOnly {
@@ -75,6 +76,9 @@ func printSweep(w io.Writer, items []propose.SweepItem) {
 		_, _ = fmt.Fprintln(w, "    loom propose sweep --script > sweep.sh   # read it, then: sh sweep.sh")
 	}
 
+	if len(decide) == 0 {
+		return
+	}
 	_, _ = fmt.Fprintf(w, "\nNeeds a decision: %d\n", len(decide))
 	// Items with the same advice print it once: eight "only the separator
 	// differs" findings read as one decision, not eight.

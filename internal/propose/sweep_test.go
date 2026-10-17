@@ -41,7 +41,7 @@ func TestClassifyUnreachableIsSafeWhenEveryCheckPasses(t *testing.T) {
 	writeSweepFile(t, filepath.Join(mem, "MEMORY.md"), "- [other](other.md)\n")
 
 	row, ev := unreachableRow("note_a")
-	it := Classify(home, row, ev)
+	it := Classify(home, row, ev, SlugIndex(home))
 	if it.Tier != TierSafe {
 		t.Fatalf("tier = %s (%s), want safe", it.Tier, it.Why)
 	}
@@ -97,7 +97,7 @@ func TestClassifyUnreachableIsNotSafeWhenAnyCheckFails(t *testing.T) {
 			home, mem := sweepHome(t)
 			filename := setup(t, mem)
 			row, ev := unreachableRow(filename)
-			it := Classify(home, row, ev)
+			it := Classify(home, row, ev, nil)
 			if it.Tier == TierSafe {
 				t.Fatalf("classified safe, want decide")
 			}
@@ -117,7 +117,7 @@ func TestClassifyNeverSweepsOtherKinds(t *testing.T) {
 		KindFilenameSlugDrift, KindBrokenLink, KindPromoteMemoryDuplicate,
 		KindRetireAsset, KindPinModel, KindRevertPolicy, "a_kind_added_later",
 	} {
-		it := Classify(home, ledger.ProposalRow{ID: 1, Kind: kind}, map[string]any{"store": sweepStore, "filename": "n"})
+		it := Classify(home, ledger.ProposalRow{ID: 1, Kind: kind}, map[string]any{"store": sweepStore, "filename": "n"}, nil)
 		if it.Tier != TierDecide || it.Script != "" {
 			t.Errorf("%s: tier %s, script %q - only unreachable_asset may be swept", kind, it.Tier, it.Script)
 		}
@@ -160,7 +160,7 @@ func TestSweepScriptLinksTheFileAndKeepsEveryExistingByte(t *testing.T) {
 			writeSweepFile(t, filepath.Join(mem, "MEMORY.md"), existing)
 
 			row, ev := unreachableRow("note_a")
-			script := SweepScript([]SweepItem{Classify(home, row, ev)})
+			script := SweepScript([]SweepItem{Classify(home, row, ev, nil)})
 			runScript(t, script)
 
 			got, _ := os.ReadFile(filepath.Join(mem, "MEMORY.md"))
@@ -191,5 +191,115 @@ func TestShellQuoteSurvivesAQuote(t *testing.T) {
 	out, err := exec.Command("sh", "-c", "printf %s "+shellQuote("a'b c")).Output()
 	if err != nil || string(out) != "a'b c" {
 		t.Fatalf("got %q, %v", out, err)
+	}
+}
+
+func TestClassifyRejectsStoreNamesThatEscapeTheStores(t *testing.T) {
+	home, mem := sweepHome(t)
+	// A real index and file one level above the stores, where ".." would land.
+	up := filepath.Join(home, ".claude", "memory")
+	if err := os.MkdirAll(up, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSweepFile(t, filepath.Join(up, "n.md"), "---\nname: n\n---\n")
+	writeSweepFile(t, filepath.Join(up, "MEMORY.md"), "x\n")
+	writeSweepFile(t, filepath.Join(mem, "n.md"), "---\nname: n\n---\n")
+	writeSweepFile(t, filepath.Join(mem, "MEMORY.md"), "x\n")
+
+	for _, store := range []string{"..", ".", "a/b", "../x"} {
+		row := ledger.ProposalRow{ID: 1, Kind: KindUnreachableAsset}
+		it := Classify(home, row, map[string]any{"store": store, "filename": "n"}, nil)
+		if it.Tier == TierSafe {
+			t.Errorf("store %q classified safe", store)
+		}
+	}
+}
+
+func TestClassifyRejectsASymlinkedStoreDirectory(t *testing.T) {
+	home, _ := sweepHome(t)
+	outside := filepath.Join(t.TempDir(), "memory")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSweepFile(t, filepath.Join(outside, "n.md"), "---\nname: n\n---\n")
+	writeSweepFile(t, filepath.Join(outside, "MEMORY.md"), "x\n")
+	linked := filepath.Join(home, ".claude", "projects", "-tmp-linked")
+	if err := os.MkdirAll(linked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(linked, "memory")); err != nil {
+		t.Fatal(err)
+	}
+	it := Classify(home, ledger.ProposalRow{ID: 1, Kind: KindUnreachableAsset},
+		map[string]any{"store": "-tmp-linked", "filename": "n"}, nil)
+	if it.Tier == TierSafe {
+		t.Fatal("a symlinked memory directory was classified safe")
+	}
+}
+
+// The script is read and run after Classify's checks, so it must hold up when
+// the files changed in between.
+func TestSweepScriptSkipsWhenTheFilesChangedAfterItWasGenerated(t *testing.T) {
+	gen := func(t *testing.T) (home, mem, script string) {
+		home, mem = sweepHome(t)
+		writeSweepFile(t, filepath.Join(mem, "n.md"), "---\nname: n\n---\n")
+		writeSweepFile(t, filepath.Join(mem, "MEMORY.md"), "x\n")
+		row, ev := unreachableRow("n")
+		return home, mem, SweepScript([]SweepItem{Classify(home, row, ev, nil)})
+	}
+
+	t.Run("file deleted", func(t *testing.T) {
+		_, mem, script := gen(t)
+		if err := os.Remove(filepath.Join(mem, "n.md")); err != nil {
+			t.Fatal(err)
+		}
+		runScript(t, script)
+		if got, _ := os.ReadFile(filepath.Join(mem, "MEMORY.md")); string(got) != "x\n" {
+			t.Errorf("a dangling link was written: %q", got)
+		}
+	})
+
+	t.Run("index swapped for a symlink", func(t *testing.T) {
+		_, mem, script := gen(t)
+		outside := filepath.Join(t.TempDir(), "elsewhere.md")
+		writeSweepFile(t, outside, "untouched\n")
+		if err := os.Remove(filepath.Join(mem, "MEMORY.md")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(mem, "MEMORY.md")); err != nil {
+			t.Fatal(err)
+		}
+		runScript(t, script)
+		if got, _ := os.ReadFile(outside); string(got) != "untouched\n" {
+			t.Errorf("the script wrote through a symlink: %q", got)
+		}
+	})
+
+	t.Run("nothing changed", func(t *testing.T) {
+		home, mem, script := gen(t)
+		runScript(t, script)
+		if !asset.MemoryIndex(home, sweepStore)["n"] {
+			got, _ := os.ReadFile(filepath.Join(mem, "MEMORY.md"))
+			t.Errorf("the unchanged case did not link the file: %q", got)
+		}
+	})
+}
+
+// A parenthesised mention in prose is not a link. The script's guard must
+// agree with the classifier on that, or the item is reported swept while the
+// file stays unreachable.
+func TestSweepScriptGuardAgreesWithTheClassifierOnProse(t *testing.T) {
+	home, mem := sweepHome(t)
+	writeSweepFile(t, filepath.Join(mem, "n.md"), "---\nname: n\n---\n")
+	writeSweepFile(t, filepath.Join(mem, "MEMORY.md"), "see (n.md) for details\n")
+
+	row, ev := unreachableRow("n")
+	it := Classify(home, row, ev, nil)
+	if it.Tier != TierSafe {
+		t.Fatalf("prose is not a link, want safe: %s", it.Why)
+	}
+	runScript(t, SweepScript([]SweepItem{it}))
+	if !asset.MemoryIndex(home, sweepStore)["n"] {
+		t.Fatal("the classifier said safe, the script skipped it, and the file is still unreachable")
 	}
 }

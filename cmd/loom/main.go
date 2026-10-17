@@ -77,7 +77,7 @@ Usage:
                              (checked against the files just now) and what needs a
                              decision, with a bottom line and options for each. Prints
                              only; --script emits the safe group as a shell script to
-                             review and run yourself.
+                             review and run yourself. Global, not lane-scoped: it covers every store.
   loom policy               Show the effective model/effort per agent type, with the
                              source and sample size behind each decision.
   loom policy set <agent-type> <model> <effort>
