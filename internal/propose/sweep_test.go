@@ -206,7 +206,7 @@ func TestClassifyRejectsStoreNamesThatEscapeTheStores(t *testing.T) {
 	writeSweepFile(t, filepath.Join(mem, "n.md"), "---\nname: n\n---\n")
 	writeSweepFile(t, filepath.Join(mem, "MEMORY.md"), "x\n")
 
-	for _, store := range []string{"..", ".", "a/b", "../x"} {
+	for _, store := range []string{"..", ".", "a/b", "../x", "/", ""} {
 		row := ledger.ProposalRow{ID: 1, Kind: KindUnreachableAsset}
 		it := Classify(home, row, map[string]any{"store": store, "filename": "n"}, nil)
 		if it.Tier == TierSafe {
@@ -215,7 +215,39 @@ func TestClassifyRejectsStoreNamesThatEscapeTheStores(t *testing.T) {
 	}
 }
 
-func TestClassifyRejectsASymlinkedStoreDirectory(t *testing.T) {
+func TestClassifyRejectsASymlinkedStoreDir(t *testing.T) {
+	home, _ := sweepHome(t)
+	realDir := filepath.Join(t.TempDir(), "store")
+	if err := os.MkdirAll(filepath.Join(realDir, "memory"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSweepFile(t, filepath.Join(realDir, "memory", "n.md"), "---\nname: n\n---\n")
+	writeSweepFile(t, filepath.Join(realDir, "memory", "MEMORY.md"), "x\n")
+	if err := os.Symlink(realDir, filepath.Join(home, ".claude", "projects", "-tmp-linkedstore")); err != nil {
+		t.Fatal(err)
+	}
+	it := Classify(home, ledger.ProposalRow{ID: 1, Kind: KindUnreachableAsset},
+		map[string]any{"store": "-tmp-linkedstore", "filename": "n"}, nil)
+	if it.Tier == TierSafe {
+		t.Fatal("a symlinked store directory was classified safe")
+	}
+}
+
+func TestClassifyFallsBackToFilenameForAnUnsafeSlug(t *testing.T) {
+	home, mem := sweepHome(t)
+	writeSweepFile(t, filepath.Join(mem, "n.md"), "---\nname: \"bad name'\"\n---\n")
+	writeSweepFile(t, filepath.Join(mem, "MEMORY.md"), "x\n")
+	row, ev := unreachableRow("n")
+	slugs := SlugIndex(home)
+	if slugs[sweepStore+"/n"] == "" {
+		t.Fatal("fixture slug was not read, so this test would pass vacuously")
+	}
+	if it := Classify(home, row, ev, slugs); it.Line != "- [n](n.md)" {
+		t.Errorf("unsafe slug leaked into the line: %q", it.Line)
+	}
+}
+
+func TestClassifyRejectsASymlinkedMemoryDirectory(t *testing.T) {
 	home, _ := sweepHome(t)
 	outside := filepath.Join(t.TempDir(), "memory")
 	if err := os.MkdirAll(outside, 0o755); err != nil {
@@ -253,7 +285,7 @@ func TestSweepScriptSkipsWhenTheFilesChangedAfterItWasGenerated(t *testing.T) {
 		if err := os.Remove(filepath.Join(mem, "n.md")); err != nil {
 			t.Fatal(err)
 		}
-		runScript(t, script)
+		_ = exec.Command("sh", "-c", script).Run()
 		if got, _ := os.ReadFile(filepath.Join(mem, "MEMORY.md")); string(got) != "x\n" {
 			t.Errorf("a dangling link was written: %q", got)
 		}
@@ -269,9 +301,39 @@ func TestSweepScriptSkipsWhenTheFilesChangedAfterItWasGenerated(t *testing.T) {
 		if err := os.Symlink(outside, filepath.Join(mem, "MEMORY.md")); err != nil {
 			t.Fatal(err)
 		}
-		runScript(t, script)
+		_ = exec.Command("sh", "-c", script).Run()
 		if got, _ := os.ReadFile(outside); string(got) != "untouched\n" {
 			t.Errorf("the script wrote through a symlink: %q", got)
+		}
+	})
+
+	t.Run("memory dir swapped for a symlink", func(t *testing.T) {
+		_, mem, script := gen(t)
+		outside := filepath.Join(t.TempDir(), "memory")
+		if err := os.MkdirAll(outside, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeSweepFile(t, filepath.Join(outside, "n.md"), "---\nname: n\n---\n")
+		writeSweepFile(t, filepath.Join(outside, "MEMORY.md"), "untouched\n")
+		if err := os.RemoveAll(mem); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, mem); err != nil {
+			t.Fatal(err)
+		}
+		_ = exec.Command("sh", "-c", script).Run()
+		if got, _ := os.ReadFile(filepath.Join(outside, "MEMORY.md")); string(got) != "untouched\n" {
+			t.Errorf("the script wrote through a symlinked directory: %q", got)
+		}
+	})
+
+	t.Run("a skipped item makes the script fail", func(t *testing.T) {
+		_, mem, script := gen(t)
+		if err := os.Remove(filepath.Join(mem, "n.md")); err != nil {
+			t.Fatal(err)
+		}
+		if err := exec.Command("sh", "-c", script).Run(); err == nil {
+			t.Error("script exited 0 although it skipped an item")
 		}
 	})
 
