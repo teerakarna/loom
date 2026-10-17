@@ -298,6 +298,9 @@ func ingestAll(db *ledger.DB, root string, laneRoot string, wholeCorpus bool) er
 			fmt.Fprintf(os.Stderr, "loom: skipping %s: %v\n", p, err)
 			continue
 		}
+		if rs.OversizeLines > 0 {
+			fmt.Fprintf(os.Stderr, "loom: %s: dropped %d line(s) over the size limit; this run's figures may be short\n", p, rs.OversizeLines)
+		}
 		summaries[p] = rs
 	}
 

@@ -107,6 +107,11 @@ type RunSummary struct {
 	// toolNames maps a tool_use id to its tool name, for this file only -
 	// bookkeeping for resolving ToolResults, not part of the output.
 	toolNames map[string]string
+
+	// OversizeLines is how many lines exceeded maxLineSize and were dropped.
+	// The file's other lines are still ingested; this is what lets the caller
+	// say the figures may be short by those lines rather than look complete.
+	OversizeLines int
 }
 
 // maxLineSize allows for very large lines - a "thinking" block's signature
@@ -114,6 +119,33 @@ type RunSummary struct {
 // is cheaper than a mysterious bufio.Scanner "token too long" failure on a
 // real transcript.
 const maxLineSize = 16 * 1024 * 1024
+
+// readBoundedLine returns the next line without its newline, holding at most
+// limit bytes. A longer line is consumed to its newline and reported as
+// oversize, so one huge line (a 19MB tool result was seen) costs that line
+// and not the rest of the file, which bufio.Scanner could not do: its
+// ErrTooLong is terminal. Memory stays bounded by limit either way. At EOF it
+// returns any final unterminated line together with io.EOF.
+func readBoundedLine(br *bufio.Reader, limit int) (line []byte, oversize bool, err error) {
+	for {
+		chunk, rerr := br.ReadSlice('\n')
+		if !oversize {
+			if len(line)+len(chunk) > limit+1 { // +1: the newline is not content
+				oversize = true
+				line = nil
+			} else {
+				line = append(line, chunk...)
+			}
+		}
+		if errors.Is(rerr, bufio.ErrBufferFull) {
+			continue
+		}
+		if len(line) > 0 && line[len(line)-1] == '\n' {
+			line = line[:len(line)-1]
+		}
+		return line, oversize, rerr
+	}
+}
 
 // IngestFile reads one JSONL transcript file end to end and produces a
 // RunSummary. It never fails on an individual malformed line - ParseLine's
@@ -133,24 +165,28 @@ func IngestFile(path string) (RunSummary, error) {
 		toolNames:            map[string]string{},
 	}
 
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), maxLineSize)
-
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
+	br := bufio.NewReaderSize(f, 64*1024)
+	var readErr error
+	for {
+		line, oversize, err := readBoundedLine(br, maxLineSize)
+		if oversize {
+			rs.OversizeLines++
+		} else if len(line) > 0 {
+			if ev, ok := ParseLine(line); ok {
+				applyEvent(&rs, ev)
+			}
 		}
-		ev, ok := ParseLine(line)
-		if !ok {
-			continue
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				readErr = err
+			}
+			break
 		}
-		applyEvent(&rs, ev)
 	}
-	// A line-too-long or read error partway through still leaves everything
-	// ingested so far intact - report it, don't discard the partial result.
-	if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
-		return rs, err
+	// A read error partway through still leaves everything ingested so far
+	// intact - report it, don't discard the partial result.
+	if readErr != nil {
+		return rs, readErr
 	}
 
 	rs.WeightedCost = WeightedCost(rs.Usage)
