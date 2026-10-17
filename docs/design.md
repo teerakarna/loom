@@ -576,6 +576,9 @@ user's files. The safe group comes out as a shell script (`--script`) for the us
   kind is never swept by accident. `filename_slug_drift` is deliberately not safe: renaming a file
   can break links, and most of the real cases are a separator style choice, not a defect.
 - **Decide items** carry a bottom line and options. Items with identical advice print once.
+- A retire proposal's bottom line says what "unused" rests on: last recorded use, or never used since
+  loom first saw it, plus the date the ledger's run window starts, so a reader can tell a dead asset
+  from a rarely used one or one used before the ledger began. It states evidence, not a recommendation.
 
 #### Surfacing, in the order it earns
 

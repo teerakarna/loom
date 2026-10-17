@@ -35,18 +35,21 @@ func runSweep(db *ledger.DB, args []string) error {
 	}
 	// Only an unreachable_asset item reads a slug, so only scan when one is
 	// pending. A failed scan leaves titles as filenames, which is still valid.
-	var slugs map[string]string
+	var ctx propose.SweepContext
 	for _, p := range pending {
 		if p.Kind == propose.KindUnreachableAsset {
-			slugs = propose.SlugIndex(home)
+			ctx.Slugs = propose.SlugIndex(home)
 			break
 		}
+	}
+	if st, err := db.Status(); err == nil {
+		ctx.LedgerSince = st.EarliestRun
 	}
 	items := make([]propose.SweepItem, 0, len(pending))
 	for _, p := range pending {
 		var ev map[string]any
 		_ = json.Unmarshal([]byte(p.Evidence), &ev)
-		items = append(items, propose.Classify(home, p, ev, slugs))
+		items = append(items, propose.Classify(home, p, ev, ctx))
 	}
 
 	if scriptOnly {
