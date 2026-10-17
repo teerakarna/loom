@@ -76,3 +76,30 @@ func TestIngestFileSurvivesAnOversizeLine(t *testing.T) {
 		t.Errorf("OutputTokens = %d, want 14: lines either side of the oversize one must both count", rs.Usage.OutputTokens)
 	}
 }
+
+func TestReadBoundedLineBoundaries(t *testing.T) {
+	big := strings.Repeat("a", 41)
+	cases := []struct {
+		name, in string
+		want     []gotLine
+	}{
+		{"oversize at EOF without newline", "k\n" + big, []gotLine{{"k", false}, {"", true}}},
+		{"one over, with newline", big + "\nnext\n", []gotLine{{"", true}, {"next", false}}},
+		{"one over, no newline", big, []gotLine{{"", true}}},
+		{"exactly at limit, no newline", big[:40], []gotLine{{big[:40], false}}},
+		{"CRLF stripped", "a\r\nb\r\n", []gotLine{{"a", false}, {"b", false}}},
+		{"oversize spanning buffers then normal", strings.Repeat("q", 500) + "\nok\n", []gotLine{{"", true}, {"ok", false}}},
+	}
+	for _, c := range cases {
+		got := readAll(t, c.in, 40)
+		if len(got) != len(c.want) {
+			t.Errorf("%s: got %+v, want %+v", c.name, got, c.want)
+			continue
+		}
+		for i := range c.want {
+			if got[i] != c.want[i] {
+				t.Errorf("%s line %d: got %+v, want %+v", c.name, i, got[i], c.want[i])
+			}
+		}
+	}
+}

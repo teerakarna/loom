@@ -2153,7 +2153,8 @@ B7 write-containment item below never had an enforcing test at all before this p
   (`internal/ingest/memory_bound_test.go`) ingests a ~100MB generated-at-test-time corpus (too
   large to check in under the fixture-hygiene rules below, and pointless to - it is not testing
   content, only size) and asserts heap growth stays under a 20MB ceiling, proving `IngestFile`'s
-  `bufio.Scanner` reads one line at a time rather than loading the file whole. Not built before
+  bounded line reader reads one line at a time rather than loading the file whole. A line over
+  16MB is dropped and counted, not fatal to its file. Not built before
   this pass.
 - **Latency.** Cold start: `TestServerColdStartUnder20ms` (`internal/mcp/latency_test.go`) times
   `NewServer` construction directly. Kill `loom serve` mid-session: the data-safety half of this

@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"io"
 	"os"
@@ -114,34 +115,47 @@ type RunSummary struct {
 	OversizeLines int
 }
 
-// maxLineSize allows for very large lines - a "thinking" block's signature
-// field alone was observed to be tens of kilobytes; a generous ceiling here
-// is cheaper than a mysterious bufio.Scanner "token too long" failure on a
-// real transcript.
+// maxLineSize is the longest line IngestFile will parse. A "thinking" block's
+// signature field alone was observed to be tens of kilobytes, and a single
+// 19MB tool result has been seen, so the ceiling is generous. A longer line
+// is dropped and counted in RunSummary.OversizeLines; the rest of the file is
+// still ingested.
 const maxLineSize = 16 * 1024 * 1024
 
-// readBoundedLine returns the next line without its newline, holding at most
-// limit bytes. A longer line is consumed to its newline and reported as
-// oversize, so one huge line (a 19MB tool result was seen) costs that line
-// and not the rest of the file, which bufio.Scanner could not do: its
-// ErrTooLong is terminal. Memory stays bounded by limit either way. At EOF it
-// returns any final unterminated line together with io.EOF.
+// readBoundedLine returns the next line without its line ending, holding at
+// most limit content bytes. A longer line is consumed to its newline and
+// reported as oversize, so one huge line costs that line and not the rest of
+// the file, which bufio.Scanner could not do: its ErrTooLong is terminal.
+// At EOF it returns any final unterminated line together with io.EOF; on
+// any other error the partial line is discarded. The returned slice is only
+// valid until the next call.
 func readBoundedLine(br *bufio.Reader, limit int) (line []byte, oversize bool, err error) {
 	for {
 		chunk, rerr := br.ReadSlice('\n')
+		if errors.Is(rerr, bufio.ErrBufferFull) {
+			if !oversize {
+				if len(line)+len(chunk) > limit {
+					oversize, line = true, nil
+				} else {
+					line = append(line, chunk...)
+				}
+			}
+			continue
+		}
+		chunk = bytes.TrimSuffix(bytes.TrimSuffix(chunk, []byte("\n")), []byte("\r"))
 		if !oversize {
-			if len(line)+len(chunk) > limit+1 { // +1: the newline is not content
-				oversize = true
-				line = nil
-			} else {
+			switch {
+			case len(line)+len(chunk) > limit:
+				oversize, line = true, nil
+			case line == nil:
+				// The whole line sat in the reader's buffer: no copy.
+				line = chunk
+			default:
 				line = append(line, chunk...)
 			}
 		}
-		if errors.Is(rerr, bufio.ErrBufferFull) {
-			continue
-		}
-		if len(line) > 0 && line[len(line)-1] == '\n' {
-			line = line[:len(line)-1]
+		if rerr != nil && !errors.Is(rerr, io.EOF) {
+			return nil, false, rerr
 		}
 		return line, oversize, rerr
 	}
