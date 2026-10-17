@@ -72,6 +72,12 @@ Usage:
                              --lane narrows the memory-finding kinds to one project's
                              own store; pin_model/revert_policy/retire_asset always
                              show, since the policy they write is not lane-scoped.
+  loom propose sweep [--script]
+                             Group proposals into what is safe to clean up in one pass
+                             (checked against the files just now) and what needs a
+                             decision, with a bottom line and options for each. Prints
+                             only; --script emits the safe group as a shell script to
+                             review and run yourself. Global, not lane-scoped: it covers every store.
   loom policy               Show the effective model/effort per agent type, with the
                              source and sample size behind each decision.
   loom policy set <agent-type> <model> <effort>
