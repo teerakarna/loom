@@ -16,7 +16,7 @@ import (
 // for every other fixture, and would bloat the repo for no reason a
 // generated-on-demand file doesn't already serve.
 //
-// IngestFile uses bufio.Scanner (see maxLineSize's own comment above
+// IngestFile uses readBoundedLine (see its own comment above
 // IngestFile), which reads one line at a time rather than the whole file -
 // this test is what turns "the code happens to use a streaming API" into a
 // property that fails loudly if a future change replaces it with

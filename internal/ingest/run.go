@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"io"
 	"os"
@@ -107,13 +108,58 @@ type RunSummary struct {
 	// toolNames maps a tool_use id to its tool name, for this file only -
 	// bookkeeping for resolving ToolResults, not part of the output.
 	toolNames map[string]string
+
+	// OversizeLines is how many lines exceeded maxLineSize and were dropped.
+	// The file's other lines are still ingested; this is what lets the caller
+	// say the figures may be short by those lines rather than look complete.
+	OversizeLines int
 }
 
-// maxLineSize allows for very large lines - a "thinking" block's signature
-// field alone was observed to be tens of kilobytes; a generous ceiling here
-// is cheaper than a mysterious bufio.Scanner "token too long" failure on a
-// real transcript.
+// maxLineSize is the longest line IngestFile will parse. A "thinking" block's
+// signature field alone was observed to be tens of kilobytes, and a single
+// 19MB tool result has been seen, so the ceiling is generous. A longer line
+// is dropped and counted in RunSummary.OversizeLines; the rest of the file is
+// still ingested.
 const maxLineSize = 16 * 1024 * 1024
+
+// readBoundedLine returns the next line without its line ending, holding at
+// most limit content bytes. A longer line is consumed to its newline and
+// reported as oversize, so one huge line costs that line and not the rest of
+// the file, which bufio.Scanner could not do: its ErrTooLong is terminal.
+// At EOF it returns any final unterminated line together with io.EOF; on
+// any other error the partial line is discarded. The returned slice is only
+// valid until the next call.
+func readBoundedLine(br *bufio.Reader, limit int) (line []byte, oversize bool, err error) {
+	for {
+		chunk, rerr := br.ReadSlice('\n')
+		if errors.Is(rerr, bufio.ErrBufferFull) {
+			if !oversize {
+				if len(line)+len(chunk) > limit {
+					oversize, line = true, nil
+				} else {
+					line = append(line, chunk...)
+				}
+			}
+			continue
+		}
+		chunk = bytes.TrimSuffix(bytes.TrimSuffix(chunk, []byte("\n")), []byte("\r"))
+		if !oversize {
+			switch {
+			case len(line)+len(chunk) > limit:
+				oversize, line = true, nil
+			case line == nil:
+				// The whole line sat in the reader's buffer: no copy.
+				line = chunk
+			default:
+				line = append(line, chunk...)
+			}
+		}
+		if rerr != nil && !errors.Is(rerr, io.EOF) {
+			return nil, false, rerr
+		}
+		return line, oversize, rerr
+	}
+}
 
 // IngestFile reads one JSONL transcript file end to end and produces a
 // RunSummary. It never fails on an individual malformed line - ParseLine's
@@ -133,24 +179,28 @@ func IngestFile(path string) (RunSummary, error) {
 		toolNames:            map[string]string{},
 	}
 
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), maxLineSize)
-
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
+	br := bufio.NewReaderSize(f, 64*1024)
+	var readErr error
+	for {
+		line, oversize, err := readBoundedLine(br, maxLineSize)
+		if oversize {
+			rs.OversizeLines++
+		} else if len(line) > 0 {
+			if ev, ok := ParseLine(line); ok {
+				applyEvent(&rs, ev)
+			}
 		}
-		ev, ok := ParseLine(line)
-		if !ok {
-			continue
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				readErr = err
+			}
+			break
 		}
-		applyEvent(&rs, ev)
 	}
-	// A line-too-long or read error partway through still leaves everything
-	// ingested so far intact - report it, don't discard the partial result.
-	if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
-		return rs, err
+	// A read error partway through still leaves everything ingested so far
+	// intact - report it, don't discard the partial result.
+	if readErr != nil {
+		return rs, readErr
 	}
 
 	rs.WeightedCost = WeightedCost(rs.Usage)
