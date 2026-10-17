@@ -17,6 +17,8 @@ func main() {
 	switch os.Args[1] {
 	case "report":
 		err = runReport(os.Args[2:])
+	case "ingest":
+		err = runIngest(os.Args[2:])
 	case "advise":
 		err = runAdvise(os.Args[2:])
 	case "status":
@@ -50,6 +52,9 @@ Usage:
                             Ingest transcripts under path (default ~/.claude/projects)
                              and print an aggregate cost/usage report, optionally
                              narrowed to one lane (the project directory a session ran in).
+  loom ingest [path]        Bring the ledger up to date from transcripts and print
+                             nothing on success. For hooks; "loom report" does the
+                             same ingest and then prints the report.
   loom advise [--agent-type <type>] <task text>
                              Discover skills/agents/plans/hooks, and recommend which
                              are relevant plus a model/effort choice. With --agent-type,

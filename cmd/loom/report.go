@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,64 +64,11 @@ func defaultLedgerPath() (string, error) {
 }
 
 func runReport(args []string) error {
-	defaultRoot, err := defaultProjectsRoot()
-	if err != nil {
-		return err
-	}
-	// Resolved for the same reason root is below, and it is not redundant:
-	// os.UserHomeDir returns $HOME unvalidated, so a relative HOME makes every
-	// filepath.Rel against this error out, and outsideRoot answers false on error
-	// by contract - which would send the whole corpus down the "inside the
-	// default" branch with a relative lane root and lose every lane.
-	defaultRoot, err = resolveRoot(defaultRoot)
-	if err != nil {
-		return err
-	}
-	// `loom report --lane <lane>` narrows to one project directory; a bare
-	// argument is still the projects root, as before (issue #94: shared
-	// parseArgs, see cmd/loom/args.go).
-	positional, positionalGiven, flags, err := parseArgs(args, "usage: loom report [path] [--lane <lane>]", true,
-		map[string]string{"--lane": "see `loom report` for the lanes in your ledger"}, "--lane")
-	if err != nil {
-		return err
-	}
-	root := defaultRoot
-	if positionalGiven {
-		root = positional
-	}
-	lane := flags["--lane"]
-	// Resolved, always. The walked path is what gets stored as runs.path, so a
-	// relative root writes relative rows, and every later comparison against
-	// them is textual: `loom report .claude/projects` then `loom status
-	// ~/.claude/projects` reported the same ingested, unchanged file as both
-	// "never ingested" and "in ledger, outside root". Normalising at the two
-	// entry points is what makes the ledger's paths comparable at all - and,
-	// since resolveRoot, comparable even across two spellings of the same
-	// symlinked directory (issue #88), not just across relative vs absolute.
-	root, err = resolveRoot(root)
-	if err != nil {
-		return err
-	}
-
-	ledgerPath, err := defaultLedgerPath()
-	if err != nil {
-		return err
-	}
-	db, err := ledger.Open(ledgerPath)
+	db, lane, err := ingestFromArgs(args, "usage: loom report [path] [--lane <lane>]", true)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = db.Close() }()
-
-	// root == defaultRoot is the whole-corpus test, stated rather than inferred.
-	// Both sides are absolutised above, so this is a straight text compare, and
-	// the cases where it answers false wrongly - a case variant of the real path
-	// on a case-insensitive filesystem, a symlinked home - all fail in the
-	// direction that skips supersession, which is the direction that cannot
-	// destroy a row.
-	if err := ingestAll(db, root, laneRootFor(defaultRoot, root), root == defaultRoot); err != nil {
-		return err
-	}
 
 	summary, err := db.Report()
 	if lane != "" {
@@ -137,6 +86,93 @@ func runReport(args []string) error {
 	}
 	printReport(summary)
 	return nil
+}
+
+// runIngest is runReport without the report: bring the ledger up to date and
+// print nothing on success, so a hook can call it. Warnings still go to stderr.
+func runIngest(args []string) error {
+	db, _, err := ingestFromArgs(args, "usage: loom ingest [path]", false)
+	if err != nil {
+		// No projects directory yet (a fresh machine, before any session has
+		// run) means nothing to ingest, not a failure a hook should surface.
+		// Only for the default root: a path the caller typed that does not
+		// exist is still an error.
+		if len(args) == 0 && errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return db.Close()
+}
+
+// ingestFromArgs is the walk-and-ingest half shared by report and ingest: it
+// resolves the root, opens the ledger, ingests, and returns the open ledger
+// (the caller closes it) with the --lane filter when withLane allows one.
+func ingestFromArgs(args []string, usage string, withLane bool) (*ledger.DB, string, error) {
+	defaultRoot, err := defaultProjectsRoot()
+	if err != nil {
+		return nil, "", err
+	}
+	// Resolved for the same reason root is below, and it is not redundant:
+	// os.UserHomeDir returns $HOME unvalidated, so a relative HOME makes every
+	// filepath.Rel against this error out, and outsideRoot answers false on error
+	// by contract - which would send the whole corpus down the "inside the
+	// default" branch with a relative lane root and lose every lane.
+	defaultRoot, err = resolveRoot(defaultRoot)
+	if err != nil {
+		return nil, "", err
+	}
+	// `loom report --lane <lane>` narrows to one project directory; a bare
+	// argument is still the projects root, as before (issue #94: shared
+	// parseArgs, see cmd/loom/args.go).
+	var knownFlags []string
+	hints := map[string]string{}
+	if withLane {
+		knownFlags = []string{"--lane"}
+		hints["--lane"] = "see `loom report` for the lanes in your ledger"
+	}
+	positional, positionalGiven, flags, err := parseArgs(args, usage, true, hints, knownFlags...)
+	if err != nil {
+		return nil, "", err
+	}
+	root := defaultRoot
+	if positionalGiven {
+		root = positional
+	}
+	lane := flags["--lane"]
+	// Resolved, always. The walked path is what gets stored as runs.path, so a
+	// relative root writes relative rows, and every later comparison against
+	// them is textual: `loom report .claude/projects` then `loom status
+	// ~/.claude/projects` reported the same ingested, unchanged file as both
+	// "never ingested" and "in ledger, outside root". Normalising at the two
+	// entry points is what makes the ledger's paths comparable at all - and,
+	// since resolveRoot, comparable even across two spellings of the same
+	// symlinked directory (issue #88), not just across relative vs absolute.
+	root, err = resolveRoot(root)
+	if err != nil {
+		return nil, "", err
+	}
+
+	ledgerPath, err := defaultLedgerPath()
+	if err != nil {
+		return nil, "", err
+	}
+	db, err := ledger.Open(ledgerPath)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// root == defaultRoot is the whole-corpus test, stated rather than inferred.
+	// Both sides are absolutised above, so this is a straight text compare, and
+	// the cases where it answers false wrongly - a case variant of the real path
+	// on a case-insensitive filesystem, a symlinked home - all fail in the
+	// direction that skips supersession, which is the direction that cannot
+	// destroy a row.
+	if err := ingestAll(db, root, laneRootFor(defaultRoot, root), root == defaultRoot); err != nil {
+		_ = db.Close()
+		return nil, "", err
+	}
+	return db, lane, nil
 }
 
 // laneRootFor picks the root that lanes are derived from, given the machine's

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite" // pure-Go driver - keeps the single-static-binary,
 	// cross-compile-from-one-machine property from docs/design.md ("Core
@@ -202,7 +203,27 @@ CREATE TABLE IF NOT EXISTS memory_root_scan (
 // mode, and applies the schema. Safe to call repeatedly - every statement is
 // idempotent (CREATE TABLE IF NOT EXISTS).
 func Open(path string) (*DB, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)")
+	// Creating the ledger is the one moment concurrent openers can still lose:
+	// SQLite answers SQLITE_BUSY at once, ignoring busy_timeout, when waiting
+	// would deadlock a read-to-write upgrade. Two `loom ingest` hooks starting
+	// on a fresh machine hit this, so retry briefly; once the file exists the
+	// timeout below is enough.
+	var db *DB
+	var err error
+	for attempt := 1; ; attempt++ {
+		db, err = openOnce(path)
+		if err == nil || attempt == 4 || !strings.Contains(err.Error(), "SQLITE_BUSY") {
+			return db, err
+		}
+		time.Sleep(time.Duration(attempt) * 150 * time.Millisecond)
+	}
+}
+
+func openOnce(path string) (*DB, error) {
+	// busy_timeout comes first: pragmas apply in order, and switching a fresh
+	// file to WAL itself needs the lock. It makes a second writer wait for the
+	// first instead of failing at once with SQLITE_BUSY.
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
