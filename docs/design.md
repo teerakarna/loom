@@ -560,6 +560,23 @@ The split falls straight out of constraint 8 and decides everything else:
 database. Inside it, automation is a convenience over an action the user could already take, and it
 is revertible.
 
+#### Sweep tiers, added 2026-10-17
+
+`loom propose sweep` groups pending proposals so a reader can clear the easy ones in one pass and
+spend attention only on the rest. It does not change the table above: loom still never writes to the
+user's files. The safe group comes out as a shell script (`--script`) for the user to read and run.
+
+- **Safe** means the fix only adds, and `propose.Classify` re-checked it against the files on disk
+  at call time, not just against stored evidence. Today only `unreachable_asset` can qualify: link
+  the file from its store's MEMORY.md. It stays safe only if the file and the index are regular
+  files (no symlinks), the index already exists, the filename is inside the character set that is
+  safe to write unescaped, and the index does not already link it. Any failed check demotes the item
+  and names the check.
+- **Everything else defaults to decide.** A kind is swept only if it is named in `Classify`, so a new
+  kind is never swept by accident. `filename_slug_drift` is deliberately not safe: renaming a file
+  can break links, and most of the real cases are a separator style choice, not a defect.
+- **Decide items** carry a bottom line and options. Items with identical advice print once.
+
 #### Surfacing, in the order it earns
 
 Loom has no terminal of its own. It is a CLI and an MCP server; Claude Code owns the keyboard and

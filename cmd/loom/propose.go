@@ -26,6 +26,34 @@ func filterPendingByLane(pending []ledger.ProposalRow, lane string) []ledger.Pro
 	return out
 }
 
+// refreshPending regenerates proposals from the ledger and the memory stores,
+// stores them, and returns what is pending. Shared by the list and the sweep,
+// so both show the same ids.
+func refreshPending(db *ledger.DB, now time.Time) ([]ledger.ProposalRow, error) {
+	generated, err := propose.Generate(db, now)
+	if err != nil {
+		return nil, err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	memoryFindings, scannedStores, err := propose.GenerateMemoryFindings(home)
+	if err != nil {
+		return nil, err
+	}
+	generated = append(generated, memoryFindings...)
+	// Store always sees the full, unfiltered set, lane or no lane: Store
+	// withdraws any pending proposal the generated set it's given does not
+	// contain (issue #40), so passing it a lane-filtered subset would
+	// wrongly withdraw every other lane's still-valid proposals as a side
+	// effect of narrowing one invocation's own display.
+	if _, err := propose.Store(db, generated, &scannedStores, now); err != nil {
+		return nil, err
+	}
+	return db.ListProposals(true)
+}
+
 func runPropose(args []string) error {
 	ledgerPath, err := defaultLedgerPath()
 	if err != nil {
@@ -51,6 +79,10 @@ func runPropose(args []string) error {
 		}
 		fmt.Println(msg)
 		return nil
+	}
+
+	if len(args) > 0 && args[0] == "sweep" {
+		return runSweep(db, args[1:])
 	}
 
 	if len(args) > 0 && args[0] == "dismiss" {
@@ -83,37 +115,14 @@ func runPropose(args []string) error {
 	// an earlier version of this fix kept a hand-written loop here anyway,
 	// with wording that silently drifted from parseArgs' own the moment it
 	// was written).
-	_, _, flags, err := parseArgs(args, "usage: loom propose [apply <id>|dismiss <id>] [--lane <lane>]", false,
+	_, _, flags, err := parseArgs(args, "usage: loom propose [apply <id>|dismiss <id>|sweep [--script]] [--lane <lane>]", false,
 		map[string]string{"--lane": "see `loom status` for the lanes in your ledger"}, "--lane")
 	if err != nil {
 		return err
 	}
 	lane := flags["--lane"]
 
-	now := time.Now()
-	generated, err := propose.Generate(db, now)
-	if err != nil {
-		return err
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	memoryFindings, scannedStores, err := propose.GenerateMemoryFindings(home)
-	if err != nil {
-		return err
-	}
-	generated = append(generated, memoryFindings...)
-	// Store always sees the full, unfiltered set, lane or no lane: Store
-	// withdraws any pending proposal the generated set it's given does not
-	// contain (issue #40), so passing it a lane-filtered subset would
-	// wrongly withdraw every other lane's still-valid proposals as a side
-	// effect of narrowing this one invocation's own display.
-	if _, err := propose.Store(db, generated, &scannedStores, now); err != nil {
-		return err
-	}
-
-	pending, err := db.ListProposals(true)
+	pending, err := refreshPending(db, time.Now())
 	if err != nil {
 		return err
 	}
