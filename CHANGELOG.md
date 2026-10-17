@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-17
+
 ### Added
+
+- `loom ingest [path]`: report's ingest with no report, printing nothing on success. The shared
+  walk-and-ingest is now `ingestFromArgs`; `ingest` takes no `--lane`. A missing default projects
+  directory is a silent no-op, while an explicit missing path still errors.
+- The plugin registers an async `Stop` hook (`plugin/hooks/hooks.json`, `plugin/bin/loom-ingest`)
+  that runs `loom ingest` after each turn, so the ledger stays current without anyone running
+  `loom report`. It always exits 0, prints nothing, does nothing without the binary or with
+  `LOOM_NO_HOOK=1`, and kills a hung ingest after two minutes (`LOOM_HOOK_TIMEOUT`). Ingest only:
+  proposals, pins, applies and reverts stay manual. Recorded in `docs/design.md`, "Unattended
+  ingest". The plugin version is bumped to 0.5.0 so `plugin update` picks the hook up; the MCP
+  tool contract itself is unchanged.
 
 - Tier 3 of the OSS-readiness plan, the parts that don't require going public first: `GOVERNANCE.md`
   and `.github/CODEOWNERS` (mirroring candor's own single-maintainer shape, dashes converted to
@@ -43,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   true; "write containment catches the refused verb" named extending containment to "the proposal
   directory," which never came to exist as a filesystem target since B7c shipped proposals as
   ledger rows instead.
+
+### Fixed
+
+- A transcript line over 16MB made ingest skip the whole session (`bufio.Scanner`'s `ErrTooLong` is
+  terminal); one real 19MB tool result kept a session out of the ledger. Ingest now drops only the
+  oversize line, counts it and warns. The count is not stored, so the warning prints once.
+- `ledger.Open` failed with `SQLITE_BUSY` when several processes opened a fresh ledger together
+  (8 parallel ingests mostly failed). It now sets a 5s busy timeout and retries briefly while the
+  file is created. Also helps the MCP server, which opens the same ledger.
 
 ### Changed
 
