@@ -83,13 +83,14 @@ The plugin does not contain the binary and does not fetch one - install it first
 
 ```sh
 loom report     # ingest ~/.claude/projects, print a cost/usage report
+loom ingest     # the same ingest, printing nothing (for hooks and scripts)
 loom status     # what Loom knows, how stale it is, and what it cannot answer
 loom advise "task text"   # recommend which skills/agents/plans fit, plus a model/effort choice
 ```
 
 ## Commands
 
-**Report** `loom report` `loom status` `loom context`
+**Report** `loom report` `loom ingest` `loom status` `loom context`
 **Recommend** `loom advise` `loom policy`
 **Act on evidence** `loom propose` `loom propose apply` `loom propose dismiss`
 **Integrate** `loom serve`
