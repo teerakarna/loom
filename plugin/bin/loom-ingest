@@ -12,9 +12,13 @@
 # rather than shared because loom-mcp's lookup reports to the user and exits,
 # which is right for a server that failed to start and wrong for a hook.
 #
-# Set LOOM_NO_HOOK=1 to turn the hook off without uninstalling the plugin.
+# Set LOOM_NO_HOOK=1 to turn the hook off without uninstalling the plugin (0, false
+# and empty leave it on). LOOM_HOOK_TIMEOUT overrides the two-minute cap, in seconds.
 
-[ -n "${LOOM_NO_HOOK:-}" ] && exit 0
+case "${LOOM_NO_HOOK:-}" in
+	"" | 0 | false) ;;
+	*) exit 0 ;;
+esac
 
 loom_bin=""
 if [ -n "${LOOM_BIN:-}" ]; then
@@ -50,7 +54,7 @@ ingest_pid=$!
 # ingest finishing instead of lingering for two minutes after every turn.
 (
 	i=0
-	while [ "$i" -lt 120 ]; do
+	while [ "$i" -lt "${LOOM_HOOK_TIMEOUT:-120}" ]; do
 		kill -0 "$ingest_pid" 2>/dev/null || exit 0
 		sleep 1
 		i=$((i + 1))

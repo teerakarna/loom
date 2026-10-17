@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The ingest hook runs after every turn in every session, so what it must
@@ -118,6 +119,13 @@ func TestHookDoesNothingWhenOptedOutOrBinaryMissing(t *testing.T) {
 	if out, code := runHook(t, []string{"LOOM_BIN=/does/not/exist"}); code != 0 || out != "" {
 		t.Errorf("bad LOOM_BIN: exit %d, output %q, want a silent exit 0", code, out)
 	}
+	// The script also checks two absolute paths that the test cannot redirect;
+	// on a machine with a real install there, this case would pass vacuously.
+	for _, p := range []string{"/usr/local/bin/loom", "/opt/homebrew/bin/loom"} {
+		if _, err := os.Stat(p); err == nil {
+			t.Skipf("%s exists, so the no-binary case cannot be tested here", p)
+		}
+	}
 	if out, code := runHook(t, nil); code != 0 || out != "" {
 		t.Errorf("no binary anywhere: exit %d, output %q, want a silent exit 0", code, out)
 	}
@@ -143,5 +151,38 @@ func TestHookAndServerLookInTheSamePlaces(t *testing.T) {
 		if !strings.Contains(hook, loc) {
 			t.Errorf("loom-ingest does not list %s, which loom-mcp does", loc)
 		}
+	}
+}
+
+// 0 and false are the values a user reaches for to mean "enabled".
+func TestHookOptOutOnlyForRealValues(t *testing.T) {
+	for _, v := range []string{"0", "false", ""} {
+		bin, record := fakeLoom(t, "")
+		runHook(t, []string{"LOOM_NO_HOOK=" + v, "LOOM_BIN=" + bin})
+		if _, err := os.Stat(record); err != nil {
+			t.Errorf("LOOM_NO_HOOK=%q turned the hook off", v)
+		}
+	}
+}
+
+// The cap is the only thing stopping a wedged ingest from piling up one process
+// per turn, since Claude Code enforces no timeout on async hooks.
+func TestHookKillsAHungIngest(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	bin, _ := fakeLoom(t, "echo $$ > "+pidFile+"\nexec sleep 60")
+	start := time.Now()
+	out, code := runHook(t, []string{"LOOM_BIN=" + bin, "LOOM_HOOK_TIMEOUT=2"})
+	if code != 0 || out != "" {
+		t.Errorf("exit %d, output %q, want a silent exit 0", code, out)
+	}
+	if d := time.Since(start); d > 15*time.Second {
+		t.Errorf("hook took %s with a 2s cap, so the hung ingest was not killed", d)
+	}
+	b, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command("kill", "-0", strings.TrimSpace(string(b))).Run(); err == nil {
+		t.Error("the hung ingest process is still running")
 	}
 }
