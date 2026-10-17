@@ -471,7 +471,8 @@ pointer; `session start` reads it back as the briefing. It never decides what Cl
 compaction keeps or drops. Same reasoning as "It measures and recommends. The human applies." above:
 a hook that prunes or rewrites context has the same blast-radius shape as a hook that denies or
 rewrites tool calls (Axis 2, cost shape) - cheap-if-wrong stays the only kind of hook Loom ships.
-Not yet built - B2 shipped selector + MCP server only, no hooks.
+Not built at B2, which shipped selector + MCP server only. The only hook that exists is the plugin's
+silent ingest hook, see "Unattended ingest".
 
 **CLI** for humans: `report`, `status`, `advise`, `policy`, `serve`, and `lane` once B4 lands.
 
@@ -680,7 +681,8 @@ applying it removes the policy; and because the policy is gone, the original pin
 again. The loop closes *and* re-opens, which is what makes it a loop.
 
 **Automatic revert was considered and is not needed**, for a reason that only became clear once the
-nudge was cut: **nothing triggers Loom unattended.** There is no daemon and no hook. "Auto-revert"
+nudge was cut: **nothing triggered Loom unattended.** There was no daemon and no hook (an ingest-only
+hook came later, see "Unattended ingest"; it does not touch policies or proposals). "Auto-revert"
 would mean "revert the next time you run `loom propose`" - at which point you are looking at the
 proposal anyway, and applying it is one command. The automation would buy nothing that the surface
 does not already give.
@@ -755,8 +757,8 @@ violation rather than assumed to work: an undeclared fixture, a `/Users/<name>` 
 The plugin was specified as shipping "the MCP server registration, the optional hooks, the Advisor
 skill and a manifest". Two of those four no longer exist:
 
-- **The hooks.** The session-start nudge was cut on measurement, and no other hook was ever built.
-  There are no hooks to ship.
+- **The hooks.** The session-start nudge was cut on measurement, and no other hook was built at the
+  time. (A silent ingest-only `Stop` hook was added later, 2026-10-17: see "Unattended ingest".)
 - **The Advisor skill.** Described as reading proposals and walking the user through accepting or
   rejecting them. `list_proposals`, `dismiss_proposal` and `loom propose apply` already do exactly
   that, through surfaces that exist. A skill wrapping them would be a third way to do the same
@@ -2120,6 +2122,39 @@ glidepath) - no work or employer-machine path has ever appeared in it, because e
 run on a different machine entirely with their own separate ledger. No corpus this document's
 figures were ever drawn from included an employer session, so the question this section raised
 does not arise. Nothing to adjudicate, and no change to any of the figures already published.
+
+#### Unattended ingest - BUILT 2026-10-17
+
+The nudge was cut because it printed text at session start. B6c and B7d then wrote "nothing triggers
+Loom unattended", which was true and was being read as a rule, but what it protected was the
+session's context and start-up time, not a ban on keeping the ledger fresh. Measured on a real
+machine, the cost of not doing so: 94 of 630 transcripts never ingested and a run window that had
+stopped two weeks earlier, so every cost figure and every proposal described the past.
+
+**DECIDED 2026-10-17 by the owner: ingest only may run unattended.** Proposals, pins, applies and
+reverts stay pull-and-manual; that half of the earlier position is unchanged.
+
+Shape, and why:
+
+- **`loom ingest`**, report's ingest with no report. A hook's output can reach the model's context,
+  so it prints nothing on success.
+- **`Stop`, async, from the plugin's `hooks/hooks.json`.** Not `SessionStart` (the 960ms cold
+  start that sank the nudge). Not `SessionEnd`: Claude Code gives it a 1.5s budget that a plugin's
+  own `timeout` cannot raise, and a loaded machine would cut ingest off. `Stop` is async so it never
+  delays a turn, fires every turn so a long session stays fresh, and a no-op costs about 10ms.
+  It does not fire on a user interrupt; the next turn catches up.
+- **Degrade, never block (constraint 7).** `bin/loom-ingest` always exits 0, prints nothing, does
+  nothing when the binary is absent or `LOOM_NO_HOOK` is set, and caps itself at two minutes
+  because async hooks get no timeout from Claude Code.
+- **A brake in the same change (constraint 10).** Ingest is incremental and idempotent, so it
+  grows the ledger only by new data, exactly as `loom report` does. Concurrent runs were the new
+  risk: eight parallel ingests on a fresh ledger mostly failed with `SQLITE_BUSY`. `ledger.Open`
+  now sets a busy timeout and retries briefly while the file is being created.
+- **No write to a human-authored file (constraint 8).** The hook ships inside the plugin; nothing
+  is added to any `settings.json`.
+
+Known gap: a line over the size limit is dropped and warned about once, and that count is not
+stored, so a session with one reads as complete afterwards. Needs a schema change.
 
 #### Order
 

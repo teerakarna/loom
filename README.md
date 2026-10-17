@@ -5,7 +5,7 @@
 [![Go](https://img.shields.io/badge/go-1.27-blue.svg)](go.mod)
 
 An asset lifecycle and cost/routing engine for [Claude Code](https://claude.com/claude-code)
-that needs no instrumentation, no hooks, and no write access to anything you own. It reads the
+that needs no instrumentation and no write access to anything you own. It reads the
 session transcripts Claude Code already writes, and never touches a file it did not create itself.
 
 **Status: pre-1.0, under active development.** Ingest, ledger and reporting; asset discovery,
@@ -42,8 +42,9 @@ entries; that class of failure is designed out here, not carefully avoided.
 ## How it works
 
 1. **Ingest.** Read every session transcript under `~/.claude/projects`, retroactively over
-   whatever history already exists, then incrementally as new lines are appended. No hooks, no
-   instrumentation - the measurement layer needs none, because the data already exists.
+   whatever history already exists, then incrementally as new lines are appended. No
+   instrumentation - the measurement layer needs none, because the data already exists. The plugin
+   can keep the ledger current for you with a silent background hook; see `plugin/README.md`.
 2. **Store, as derived metrics only.** Token usage, tool calls, denials, timestamps, byte counts,
    file paths. Never message content. A planted-secret test in CI enforces this on every change,
    not just on the day it was written.
@@ -83,7 +84,7 @@ The plugin does not contain the binary and does not fetch one - install it first
 
 ```sh
 loom report     # ingest ~/.claude/projects, print a cost/usage report
-loom ingest     # the same ingest, printing nothing (for hooks and scripts; no hook ships yet)
+loom ingest     # the same ingest, printing nothing (for hooks and scripts)
 loom status     # what Loom knows, how stale it is, and what it cannot answer
 loom advise "task text"   # recommend which skills/agents/plans fit, plus a model/effort choice
 ```
