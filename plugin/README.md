@@ -16,8 +16,8 @@ Then restart Claude Code. `/mcp` should list `loom` as connected, and `loom` gai
 `get_recommendation`. Everything else (cost reports, proposals, recording an outcome) is
 CLI-only - a session that needs one runs the `loom` binary directly via its shell tool.
 
-Nothing is ingested by installing. Run `loom report` at least once, or the ledger is empty and
-every answer correctly says so.
+Installing the plugin does not ingest anything by itself. The first finished turn after install
+does, through the hook below; or run `loom report` once by hand.
 
 ## What it ships, and what it does not
 
@@ -25,18 +25,29 @@ every answer correctly says so.
 |---|---|
 | MCP server registration | yes, `.mcp.json` |
 | Manifest | yes, `.claude-plugin/plugin.json` |
-| Hooks | none exist |
+| Hooks | one: a `Stop` hook that runs `loom ingest` in the background, see below |
 | Skills | none |
 | Commands | none |
 | The binary | no |
 
+## The ingest hook
+
+`hooks/hooks.json` registers one `Stop` hook, async, running `bin/loom-ingest` after each turn. It
+calls `loom ingest`, which brings the ledger up to date and prints nothing: a no-op takes about 10ms
+and a first ingest of a large history under a second. It always exits 0, does nothing if the binary
+is missing, has its own two-minute cap, and never writes anywhere but Loom's own ledger. Set
+`LOOM_NO_HOOK=1` to turn it off without uninstalling. It ingests only; proposals, pins and applies
+stay manual. Why `Stop` and not `SessionEnd` or `SessionStart`: `docs/design.md`, "Unattended ingest".
+
+## What was cut
+
 The design doc used to say this plugin would ship "the MCP server registration, the optional hooks,
-the Advisor skill and a manifest". Two of those four no longer exist. The session-start hook was cut
+the Advisor skill and a manifest". Two of those four were cut. The session-start hook was cut
 on measurement, it ran 48x over its latency budget for a nudge nobody asked for. The Advisor skill
 would have wrapped `list_proposals`, `dismiss_proposal` and `loom propose apply`, which already do
 that job through surfaces that exist; a skill on top would have been a third way to do the same
 thing. Neither was replaced, so the plugin is thinner than it was specified to be, and this table is
-the honest version.
+the honest version. The ingest hook is a different thing from the cut nudge: it prints nothing.
 
 ## Why `bin/loom-mcp` instead of just `"command": "loom"`
 

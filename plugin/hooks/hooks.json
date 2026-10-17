@@ -1,0 +1,16 @@
+{
+  "description": "Keep Loom's ledger current: runs `loom ingest` after each turn, in the background, printing nothing. Set LOOM_NO_HOOK=1 to turn it off.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/loom-ingest",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

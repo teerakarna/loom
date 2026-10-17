@@ -1,0 +1,61 @@
+#!/bin/sh
+# Bring Loom's ledger up to date. Run by the plugin's Stop hook, in the
+# background, after every turn.
+#
+# This must never get in the way of a session, so it is built to fail quietly:
+# it always exits 0, prints nothing (a hook's output can reach the model's
+# context), and does nothing at all when the binary is missing. Loom's design
+# constraint 7: degrade, never block.
+#
+# The binary lookup mirrors bin/loom-mcp and has to stay in step with it; a
+# test checks that both name the same install locations. It is repeated here
+# rather than shared because loom-mcp's lookup reports to the user and exits,
+# which is right for a server that failed to start and wrong for a hook.
+#
+# Set LOOM_NO_HOOK=1 to turn the hook off without uninstalling the plugin.
+
+[ -n "${LOOM_NO_HOOK:-}" ] && exit 0
+
+loom_bin=""
+if [ -n "${LOOM_BIN:-}" ]; then
+	[ -x "$LOOM_BIN" ] && loom_bin="$LOOM_BIN"
+elif command -v loom >/dev/null 2>&1; then
+	loom_bin="$(command -v loom)"
+else
+	for candidate in \
+		"${GOBIN:-}/loom" \
+		"${GOPATH:-$HOME/go}/bin/loom" \
+		"$HOME/go/bin/loom" \
+		/opt/homebrew/bin/loom \
+		/usr/local/bin/loom
+	do
+		case "$candidate" in
+			/loom) continue ;;
+		esac
+		if [ -x "$candidate" ]; then
+			loom_bin="$candidate"
+			break
+		fi
+	done
+fi
+[ -n "$loom_bin" ] || exit 0
+
+# A no-op ingest takes about 10ms and a first one on a large history under a
+# second, so two minutes means something is stuck. Async hooks get no timeout
+# from Claude Code, so enforce one here. Stopping ingest part-way is safe: its
+# writes are transactions.
+"$loom_bin" ingest >/dev/null 2>&1 &
+ingest_pid=$!
+# Polls rather than sleeping 120s in one go, so it ends within a second of the
+# ingest finishing instead of lingering for two minutes after every turn.
+(
+	i=0
+	while [ "$i" -lt 120 ]; do
+		kill -0 "$ingest_pid" 2>/dev/null || exit 0
+		sleep 1
+		i=$((i + 1))
+	done
+	kill "$ingest_pid" 2>/dev/null
+) >/dev/null 2>&1 &
+wait "$ingest_pid" 2>/dev/null
+exit 0
