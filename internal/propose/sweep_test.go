@@ -41,7 +41,7 @@ func TestClassifyUnreachableIsSafeWhenEveryCheckPasses(t *testing.T) {
 	writeSweepFile(t, filepath.Join(mem, "MEMORY.md"), "- [other](other.md)\n")
 
 	row, ev := unreachableRow("note_a")
-	it := Classify(home, row, ev, SlugIndex(home))
+	it := Classify(home, row, ev, SweepContext{Slugs: SlugIndex(home)})
 	if it.Tier != TierSafe {
 		t.Fatalf("tier = %s (%s), want safe", it.Tier, it.Why)
 	}
@@ -97,7 +97,7 @@ func TestClassifyUnreachableIsNotSafeWhenAnyCheckFails(t *testing.T) {
 			home, mem := sweepHome(t)
 			filename := setup(t, mem)
 			row, ev := unreachableRow(filename)
-			it := Classify(home, row, ev, nil)
+			it := Classify(home, row, ev, SweepContext{})
 			if it.Tier == TierSafe {
 				t.Fatalf("classified safe, want decide")
 			}
@@ -117,7 +117,7 @@ func TestClassifyNeverSweepsOtherKinds(t *testing.T) {
 		KindFilenameSlugDrift, KindBrokenLink, KindPromoteMemoryDuplicate,
 		KindRetireAsset, KindPinModel, KindRevertPolicy, "a_kind_added_later",
 	} {
-		it := Classify(home, ledger.ProposalRow{ID: 1, Kind: kind}, map[string]any{"store": sweepStore, "filename": "n"}, nil)
+		it := Classify(home, ledger.ProposalRow{ID: 1, Kind: kind}, map[string]any{"store": sweepStore, "filename": "n"}, SweepContext{})
 		if it.Tier != TierDecide || it.Script != "" {
 			t.Errorf("%s: tier %s, script %q - only unreachable_asset may be swept", kind, it.Tier, it.Script)
 		}
@@ -129,8 +129,8 @@ func TestClassifyNeverSweepsOtherKinds(t *testing.T) {
 
 func TestFilenameDriftAdviceSeparatesStyleFromRealDrift(t *testing.T) {
 	row := ledger.ProposalRow{Kind: KindFilenameSlugDrift}
-	style, _ := adviceFor(row, map[string]any{"filename": "user_profile", "slug": "user-profile"})
-	genuine, _ := adviceFor(row, map[string]any{"filename": "feedback_x", "slug": "something-else"})
+	style, _ := adviceFor(row, map[string]any{"filename": "user_profile", "slug": "user-profile"}, SweepContext{})
+	genuine, _ := adviceFor(row, map[string]any{"filename": "feedback_x", "slug": "something-else"}, SweepContext{})
 	if style == genuine {
 		t.Fatalf("a separator-only difference and a real one got the same advice: %q", style)
 	}
@@ -160,7 +160,7 @@ func TestSweepScriptLinksTheFileAndKeepsEveryExistingByte(t *testing.T) {
 			writeSweepFile(t, filepath.Join(mem, "MEMORY.md"), existing)
 
 			row, ev := unreachableRow("note_a")
-			script := SweepScript([]SweepItem{Classify(home, row, ev, nil)})
+			script := SweepScript([]SweepItem{Classify(home, row, ev, SweepContext{})})
 			runScript(t, script)
 
 			got, _ := os.ReadFile(filepath.Join(mem, "MEMORY.md"))
@@ -208,7 +208,7 @@ func TestClassifyRejectsStoreNamesThatEscapeTheStores(t *testing.T) {
 
 	for _, store := range []string{"..", ".", "a/b", "../x", "/", ""} {
 		row := ledger.ProposalRow{ID: 1, Kind: KindUnreachableAsset}
-		it := Classify(home, row, map[string]any{"store": store, "filename": "n"}, nil)
+		it := Classify(home, row, map[string]any{"store": store, "filename": "n"}, SweepContext{})
 		if it.Tier == TierSafe {
 			t.Errorf("store %q classified safe", store)
 		}
@@ -227,7 +227,7 @@ func TestClassifyRejectsASymlinkedStoreDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	it := Classify(home, ledger.ProposalRow{ID: 1, Kind: KindUnreachableAsset},
-		map[string]any{"store": "-tmp-linkedstore", "filename": "n"}, nil)
+		map[string]any{"store": "-tmp-linkedstore", "filename": "n"}, SweepContext{})
 	if it.Tier == TierSafe {
 		t.Fatal("a symlinked store directory was classified safe")
 	}
@@ -242,7 +242,7 @@ func TestClassifyFallsBackToFilenameForAnUnsafeSlug(t *testing.T) {
 	if slugs[sweepStore+"/n"] == "" {
 		t.Fatal("fixture slug was not read, so this test would pass vacuously")
 	}
-	if it := Classify(home, row, ev, slugs); it.Line != "- [n](n.md)" {
+	if it := Classify(home, row, ev, SweepContext{Slugs: slugs}); it.Line != "- [n](n.md)" {
 		t.Errorf("unsafe slug leaked into the line: %q", it.Line)
 	}
 }
@@ -263,7 +263,7 @@ func TestClassifyRejectsASymlinkedMemoryDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	it := Classify(home, ledger.ProposalRow{ID: 1, Kind: KindUnreachableAsset},
-		map[string]any{"store": "-tmp-linked", "filename": "n"}, nil)
+		map[string]any{"store": "-tmp-linked", "filename": "n"}, SweepContext{})
 	if it.Tier == TierSafe {
 		t.Fatal("a symlinked memory directory was classified safe")
 	}
@@ -277,7 +277,7 @@ func TestSweepScriptSkipsWhenTheFilesChangedAfterItWasGenerated(t *testing.T) {
 		writeSweepFile(t, filepath.Join(mem, "n.md"), "---\nname: n\n---\n")
 		writeSweepFile(t, filepath.Join(mem, "MEMORY.md"), "x\n")
 		row, ev := unreachableRow("n")
-		return home, mem, SweepScript([]SweepItem{Classify(home, row, ev, nil)})
+		return home, mem, SweepScript([]SweepItem{Classify(home, row, ev, SweepContext{})})
 	}
 
 	t.Run("file deleted", func(t *testing.T) {
@@ -356,12 +356,53 @@ func TestSweepScriptGuardAgreesWithTheClassifierOnProse(t *testing.T) {
 	writeSweepFile(t, filepath.Join(mem, "MEMORY.md"), "see (n.md) for details\n")
 
 	row, ev := unreachableRow("n")
-	it := Classify(home, row, ev, nil)
+	it := Classify(home, row, ev, SweepContext{})
 	if it.Tier != TierSafe {
 		t.Fatalf("prose is not a link, want safe: %s", it.Why)
 	}
 	runScript(t, SweepScript([]SweepItem{it}))
 	if !asset.MemoryIndex(home, sweepStore)["n"] {
 		t.Fatal("the classifier said safe, the script skipped it, and the file is still unreachable")
+	}
+}
+
+func TestRetireBottomLineStatesWhatUnusedRestsOn(t *testing.T) {
+	ctx := SweepContext{LedgerSince: "2026-06-16T20:33:15Z"}
+	cases := map[string]struct {
+		ev   map[string]any
+		want []string
+	}{
+		"used before": {
+			map[string]any{"on_disk": true, "ever_used": true, "days_unused": 120},
+			[]string{"Last recorded use was 120 days ago", "2026-06-16"},
+		},
+		"never used": {
+			map[string]any{"on_disk": true, "ever_used": false, "days_unused": 95},
+			[]string{"Never recorded as used in the 95 days since loom first saw it", "2026-06-16"},
+		},
+		"gone from disk": {
+			map[string]any{"on_disk": false, "ever_used": true, "days_unused": 100},
+			[]string{"Gone from disk"},
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := retireBottomLine(c.ev, ctx)
+			for _, w := range c.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("missing %q in %q", w, got)
+				}
+			}
+		})
+	}
+	// Used and never-used must not read the same: that is the distinction a
+	// reader needs to spot a false positive.
+	used := retireBottomLine(cases["used before"].ev, ctx)
+	never := retireBottomLine(cases["never used"].ev, ctx)
+	if used == never {
+		t.Fatal("used and never-used got identical text")
+	}
+	if got := retireBottomLine(cases["used before"].ev, SweepContext{}); !strings.Contains(got, "start date is unknown") {
+		t.Errorf("an unknown window must be said, not hidden: %q", got)
 	}
 }

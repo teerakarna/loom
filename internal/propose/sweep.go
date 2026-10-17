@@ -58,6 +58,18 @@ var safeName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 // shown for a decision, which is the cheaper way to be wrong.
 var safeStore = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
+// SweepContext is what Classify needs besides the proposal itself, gathered
+// once per sweep.
+type SweepContext struct {
+	// Slugs maps "store/filename" to a memory file's frontmatter name, from
+	// SlugIndex. Nil means titles fall back to filenames.
+	Slugs map[string]string
+	// LedgerSince is the start of the ledger's run window (RFC3339), so a
+	// retire proposal can say how far back "unused" can actually see. Empty
+	// if unknown.
+	LedgerSince string
+}
+
 // Classify decides the tier of one pending proposal. It reads the files on
 // disk at call time, not just the stored evidence: a proposal can be days old
 // and the file may have changed since, so "safe" is only ever true of the
@@ -65,14 +77,14 @@ var safeStore = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 //
 // The default is TierDecide. Only a kind that is named here and passes every
 // check becomes safe, so a new proposal kind is never swept by accident.
-func Classify(home string, row ledger.ProposalRow, ev map[string]any, slugs map[string]string) SweepItem {
+func Classify(home string, row ledger.ProposalRow, ev map[string]any, ctx SweepContext) SweepItem {
 	it := SweepItem{
 		ID: row.ID, Kind: row.Kind,
 		Summary: SummaryFor(row.Kind, row.Subject, ev),
 		Tier:    TierDecide,
 	}
 	if row.Kind == KindUnreachableAsset {
-		line, script, why := checkUnreachableSafe(home, ev, slugs)
+		line, script, why := checkUnreachableSafe(home, ev, ctx.Slugs)
 		if why == "" {
 			it.Tier, it.Line, it.Script = TierSafe, line, script
 			it.Why = "adds one line to MEMORY.md and changes nothing else"
@@ -80,7 +92,7 @@ func Classify(home string, row ledger.ProposalRow, ev map[string]any, slugs map[
 		}
 		it.Why = why
 	}
-	it.BottomLine, it.Options = adviceFor(row, ev)
+	it.BottomLine, it.Options = adviceFor(row, ev, ctx)
 	return it
 }
 
@@ -199,7 +211,7 @@ func SweepScript(items []SweepItem) string {
 // adviceFor gives the bottom line and the options for a proposal that needs a
 // decision. It states what the evidence shows and what each choice costs, and
 // never recommends anything the evidence does not support.
-func adviceFor(row ledger.ProposalRow, ev map[string]any) (string, []string) {
+func adviceFor(row ledger.ProposalRow, ev map[string]any, ctx SweepContext) (string, []string) {
 	switch row.Kind {
 	case KindUnreachableAsset:
 		return "Not linked from MEMORY.md, and the automatic fix did not pass its checks.",
@@ -219,7 +231,7 @@ func adviceFor(row ledger.ProposalRow, ev map[string]any) (string, []string) {
 		return "The same note is copied across several stores, so it is a cross-project fact kept per project.",
 			[]string{"promote it to a skill, which loads in every session", "move it to a shared reference doc that loads nothing until opened", "keep one copy and delete the rest", "dismiss"}
 	case KindRetireAsset:
-		return "Unused for a long time. Removing it touches your files and loom will not do it.",
+		return retireBottomLine(ev, ctx),
 			[]string{"delete it", "archive it somewhere outside the load path", "dismiss, if it is rarely but really used"}
 	case KindPinModel:
 		return "Records the model already in use as loom's deliberate policy for this agent type. It changes what loom recommends, not what runs.",
@@ -231,4 +243,25 @@ func adviceFor(row ledger.ProposalRow, ev map[string]any) (string, []string) {
 		return "No guidance written for this kind of proposal yet.",
 			[]string{"read the evidence in `loom propose`", "dismiss"}
 	}
+}
+
+// retireBottomLine says what "unused" rests on, so a reader can tell a real
+// dead asset from one that only looks dead: used rarely, or used before the
+// ledger starts. It states the evidence and does not recommend deletion.
+func retireBottomLine(ev map[string]any, ctx SweepContext) string {
+	days := fmt.Sprint(ev["days_unused"])
+	var what string
+	switch {
+	case ev["on_disk"] == false:
+		what = fmt.Sprintf("Gone from disk, and no recorded use in the last %s days.", days)
+	case ev["ever_used"] == true:
+		what = fmt.Sprintf("Last recorded use was %s days ago.", days)
+	default:
+		what = fmt.Sprintf("Never recorded as used in the %s days since loom first saw it.", days)
+	}
+	window := " The ledger's start date is unknown."
+	if len(ctx.LedgerSince) >= 10 {
+		window = fmt.Sprintf(" The ledger only sees runs from %s on, so earlier use is invisible.", ctx.LedgerSince[:10])
+	}
+	return what + window + " Removing it touches your files, which loom will not do."
 }
