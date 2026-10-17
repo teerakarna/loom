@@ -37,6 +37,14 @@ jobs:
         with:
           cosign-release: "v3.0.6" # pinned explicitly, not left to the action's own default
 
+      # goreleaser shells out to syft for each archive's SBOM and does not install it. The first
+      # real tag (v0.5.0) failed with `exec: "syft": executable file not found in $PATH`; the local
+      # snapshot run that had "verified" this pipeline had syft installed already.
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          syft-version: "v1.54.0" # pinned exactly, same reason as goreleaser below
+
       - name: goreleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
