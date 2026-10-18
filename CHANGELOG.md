@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-18
+
+### Added
+
+- `loom propose sweep [--script]`: groups pending proposals into what is safe to clean up in one pass
+  and what needs a decision. Only an `unreachable_asset` proposal can be safe (link the file from its
+  store's `MEMORY.md`), and only after checks run against the files at that moment: regular files, no
+  symlinked store or memory directory, a store name inside a safe character set, a shell-safe
+  filename, and no existing link. Anything else, and any kind added later, needs a decision, with a
+  bottom line and options (identical advice prints once). `--script` prints the safe group as an
+  idempotent shell script that repeats the checks when run and exits non-zero if it skipped anything.
+  Loom still never writes to your files. Recorded in `docs/design.md`, "Sweep tiers".
+- A retire proposal's entry in the sweep says what "unused" rests on: last recorded use, or never used
+  since loom first saw it, plus the date the ledger's run window starts.
+- `loom context` and `get_context_occupancy` split images and documents out of tool output (`media_bytes`,
+  shown as "of which X images/documents" per bucket and per tool). A `Read` of a screenshot used to
+  count as "file I/O" and look like a large source file (#128, first half).
+
+### Changed
+
+- Feature version 3: the next `loom report` or `loom ingest` re-reads every run once to fill in
+  `tool_usage.media_bytes`. Runs whose transcript is gone from disk keep 0 for it. The MCP change is
+  additive (a new `media_bytes` field); the plugin version is bumped to 0.6.0 so `plugin update`
+  picks the release up.
+
 ### Fixed
 
 - The release workflow failed on its first real tag: goreleaser needs `syft` for the per-archive
