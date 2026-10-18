@@ -47,7 +47,11 @@ signs:
     artifacts: checksum
     output: true
 
+# release-please writes the release notes from the same Conventional Commits and creates the
+# release before this runs, so goreleaser only attaches assets and appends the footer below.
+# Generating its own changelog as well would put the commit list in the release twice.
 changelog:
+  disable: true
   sort: asc
   use: github
   filters:
@@ -57,6 +61,7 @@ changelog:
       - "^test:"
 
 release:
+  mode: append # keep release-please's notes, add the footer after them
   prerelease: auto
   footer: |
     ## Verifying this release

@@ -1,0 +1,38 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+# Least-privilege default; each job asks for what it needs.
+permissions: {}
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      # Keeps a standing release PR open that bumps the version and CHANGELOG.md from the
+      # Conventional Commits since the last release. Merging it is a deliberate human decision.
+      # When it is merged this creates the vX.Y.Z tag and the GitHub release.
+      - id: rp
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+
+  # A tag created with the default GITHUB_TOKEN does not start other workflows, so release.yml's
+  # own tag trigger never fires for release-please's tag. Calling it directly is how the build
+  # still happens without a personal access token (a long-lived credential).
+  release:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+      id-token: write # keyless cosign signing, passed through to release.yml
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}

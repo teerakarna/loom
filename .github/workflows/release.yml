@@ -3,6 +3,14 @@ name: Release
 on:
   push:
     tags: ["v*.*.*"]
+  # Called by release-please.yml with the tag it just created. A tag pushed by hand still
+  # triggers the push path above, with no input.
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to build and release
+        required: true
+        type: string
 
 # Least-privilege default so a job added later without its own block doesn't inherit the repo's
 # default token scope.
@@ -24,6 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.tag || github.ref }} # the tag, not the caller's branch, when called
           fetch-depth: 0 # goreleaser's changelog needs full history
           persist-credentials: false # nothing after this step needs git push access
 

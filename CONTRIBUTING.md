@@ -44,6 +44,24 @@ finds so a mismatch against the pins above is visible rather than silent. CI doe
 govulncheck fresh at the pinned version on every run, since a runner starts with nothing on `PATH`;
 golangci-lint and gitleaks arrive through their own actions instead.
 
+## Releasing
+
+Releases come from [release-please](https://github.com/googleapis/release-please), not by hand. It
+keeps one standing release PR open that bumps the version and writes `CHANGELOG.md` from the
+Conventional Commits since the last release. Do not edit `[Unreleased]` or bump versions in feature
+PRs.
+
+- It bumps `plugin/.claude-plugin/plugin.json` and the `const version` line in
+  `internal/mcp/server.go` (found by its `x-release-please-version` comment). A test requires the two
+  to match and requires the config to keep listing both.
+- **CI does not run on the release PR by itself.** A PR opened with the default `GITHUB_TOKEN` does not
+  start other workflows, so the required checks stay pending. Push a signed commit onto the PR's own
+  branch (`git commit -S --allow-empty -m "chore: trigger checks"`) and CI runs; then merge.
+- Merging the PR makes release-please create the tag and the GitHub release. A tag it creates does not
+  trigger `release.yml` either, so `release-please.yml` calls `release.yml` directly, and
+  goreleaser attaches the signed binaries to the release and appends the verification footer. A tag
+  pushed by hand still triggers `release.yml` the old way.
+
 ## Merging
 
 `main` is protected. A change reaches it through a pull request, never a direct push, and:

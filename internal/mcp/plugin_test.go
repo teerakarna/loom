@@ -142,3 +142,50 @@ func keys[V any](m map[string]V) []string {
 	}
 	return out
 }
+
+// release-please bumps the two version strings it can reach. A line it cannot
+// find the annotation on, or a file missing from its config, would let a
+// release PR bump one and leave the other, which TestPluginManifest then fails
+// on only after the release PR is already open.
+func TestReleasePleaseCoversEveryVersionString(t *testing.T) {
+	src, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	annotated := false
+	for _, line := range strings.Split(string(src), "\n") {
+		if strings.HasPrefix(line, "const version =") {
+			annotated = strings.Contains(line, "x-release-please-version")
+		}
+	}
+	if !annotated {
+		t.Error(`the "const version =" line in server.go has no x-release-please-version comment, so release-please cannot bump it`)
+	}
+
+	var cfg struct {
+		Packages map[string]struct {
+			ExtraFiles []json.RawMessage `json:"extra-files"`
+		} `json:"packages"`
+	}
+	readJSON(t, "release-please-config.json", &cfg)
+	listed := ""
+	for _, raw := range cfg.Packages["."].ExtraFiles {
+		listed += string(raw)
+	}
+	for _, want := range []string{"internal/mcp/server.go", "plugin/.claude-plugin/plugin.json"} {
+		if !strings.Contains(listed, want) {
+			t.Errorf("release-please-config.json does not list %s in extra-files", want)
+		}
+	}
+
+	var manifest map[string]string
+	readJSON(t, ".release-please-manifest.json", &manifest)
+	var plugin struct {
+		Version string `json:"version"`
+	}
+	readJSON(t, "plugin/.claude-plugin/plugin.json", &plugin)
+	if manifest["."] != plugin.Version {
+		t.Errorf(".release-please-manifest.json says %q but plugin.json says %q; they move together or release-please bumps from the wrong base",
+			manifest["."], plugin.Version)
+	}
+}
