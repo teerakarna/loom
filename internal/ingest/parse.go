@@ -138,61 +138,53 @@ func parseUser(m map[string]any, ev *Event) {
 			if id == "" {
 				continue
 			}
+			total, media := toolResultSizes(b["content"])
 			ev.ToolResults = append(ev.ToolResults, ToolResult{
-				ToolUseID:  id,
-				Bytes:      toolResultBytes(b["content"]),
-				MediaBytes: toolResultMediaBytes(b["content"]),
+				ToolUseID: id, Bytes: total, MediaBytes: media,
 			})
 		}
 	}
 }
 
-// toolResultBytes measures a tool_result's content - a byte count, never a
-// token estimate (docs/design.md, B7b: "bytes are not tokens"). content is
-// either a plain string (the common case, measured exactly via len) or a
-// list of blocks (text, image, document, tool_reference), re-marshaled to
-// measure its size - an approximation, not the original bytes as written:
-// re-marshaling an already-decoded value does not reproduce the source
-// JSON's exact whitespace, key order or number formatting. Close enough for
-// occupancy's purpose (which tool dominates, not to the byte), and never
-// inspects what is inside either way, per constraint 6.
-func toolResultBytes(content any) int64 {
+// toolResultSizes measures a tool_result's content in one pass: the whole of
+// it, and the part that is image or document blocks. Both are byte counts,
+// never token estimates (docs/design.md, B7b: "bytes are not tokens").
+// content is either a plain string (the common case, measured exactly via
+// len, no media) or a list of blocks (text, image, document,
+// tool_reference), re-marshaled to measure its size - an approximation, not
+// the original bytes as written: re-marshaling an already-decoded value does
+// not reproduce the source JSON's exact whitespace, key order or number
+// formatting. Close enough for occupancy's purpose (which tool dominates,
+// not to the byte). Only a block's type is read to decide what is media,
+// never what is inside it, per constraint 6.
+//
+// Media is summed from the same marshaled blocks as the total, so it can
+// never exceed it, and a list that fails to marshal reports zero for both
+// rather than a media figure with no total behind it.
+func toolResultSizes(content any) (total, media int64) {
 	switch c := content.(type) {
 	case string:
-		return int64(len(c))
+		return int64(len(c)), 0
 	case []any:
-		b, err := json.Marshal(c)
+		all, err := json.Marshal(c)
 		if err != nil {
-			return 0
+			return 0, 0
 		}
-		return int64(len(b))
-	default:
-		return 0
-	}
-}
-
-// toolResultMediaBytes is the size of the image and document blocks in a
-// tool_result's content, measured the same way toolResultBytes measures the
-// whole, so it is always a part of that figure. Only the block type is
-// looked at, never what is inside it (constraint 6).
-func toolResultMediaBytes(content any) int64 {
-	blocks, ok := content.([]any)
-	if !ok {
-		return 0
-	}
-	var n int64
-	for _, blk := range blocks {
-		b, ok := blk.(map[string]any)
-		if !ok {
-			continue
-		}
-		if t, _ := b["type"].(string); t == "image" || t == "document" {
-			if raw, err := json.Marshal(b); err == nil {
-				n += int64(len(raw))
+		for _, blk := range c {
+			b, ok := blk.(map[string]any)
+			if !ok {
+				continue
+			}
+			if t, _ := b["type"].(string); t == "image" || t == "document" {
+				if raw, err := json.Marshal(b); err == nil {
+					media += int64(len(raw))
+				}
 			}
 		}
+		return int64(len(all)), media
+	default:
+		return 0, 0
 	}
-	return n
 }
 
 // parseCompaction reads a compact_boundary system record's compactMetadata.

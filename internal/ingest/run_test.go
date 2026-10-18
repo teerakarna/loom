@@ -3,6 +3,7 @@ package ingest
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -195,7 +196,7 @@ func TestIngestFile_ToolUsageByBytes(t *testing.T) {
 	}
 
 	// List-shaped content is measured as its marshaled JSON, not the text
-	// alone - see toolResultBytes.
+	// alone - see toolResultSizes.
 	wantMCPBytes := int64(len(`[{"text":"twelve chars","type":"text"}]`))
 	if got := byName["mcp__synth__search"]; len(got) != 1 || got[0].ResultBytes != wantMCPBytes {
 		t.Errorf("mcp__synth__search events = %+v, want one event with ResultBytes %d", got, wantMCPBytes)
@@ -370,13 +371,41 @@ func TestToolResultMediaBytes(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := toolResultMediaBytes(c.content)
+			total, got := toolResultSizes(c.content)
 			if got != c.want {
 				t.Errorf("media bytes = %d, want %d", got, c.want)
 			}
-			if total := toolResultBytes(c.content); got > total {
+			if got > total {
 				t.Errorf("media bytes %d exceed the whole result %d", got, total)
 			}
 		})
+	}
+}
+
+// The unit test above builds its maps by hand. This one goes through the
+// real decoder, so a change in how content is decoded cannot slip past it.
+func TestIngestFile_ImageResultCountsAsMedia(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "img.jsonl")
+	lines := []string{
+		`{"type":"user","sessionId":"s","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"go"}}`,
+		`{"type":"assistant","sessionId":"s","timestamp":"2026-01-01T00:00:01Z","message":{"model":"claude-sonnet-5","content":[{"type":"tool_use","id":"imgtool1","name":"Read","input":{"file_path":"x.png"}},{"type":"tool_use","id":"txttool1","name":"Read","input":{"file_path":"y.go"}}],"usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}`,
+		`{"type":"user","sessionId":"s","timestamp":"2026-01-01T00:00:02Z","message":{"role":"user","content":[{"tool_use_id":"imgtool1","type":"tool_result","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAAAAAAAAAAAAAAAAAA"}}]},{"tool_use_id":"txttool1","type":"tool_result","content":"package main"}]}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rs, err := IngestFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]ToolUsageEvent{}
+	for _, e := range rs.ToolUsage {
+		byID[e.ToolUseID] = e
+	}
+	if e := byID["imgtool1"]; e.MediaBytes == 0 || e.MediaBytes > e.ResultBytes {
+		t.Errorf("image result = %+v, want media bytes > 0 and not above the total", e)
+	}
+	if e := byID["txttool1"]; e.MediaBytes != 0 || e.ResultBytes != int64(len("package main")) {
+		t.Errorf("text result = %+v, want no media and the exact text length", e)
 	}
 }

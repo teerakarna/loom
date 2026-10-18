@@ -91,7 +91,7 @@ func mediaNote(r ledger.ToolOutputRow) string {
 	if r.MediaBytes == 0 {
 		return ""
 	}
-	return fmt.Sprintf("  (%s images/documents)", formatBytes(r.MediaBytes))
+	return fmt.Sprintf("  (of which %s images/documents)", formatBytes(r.MediaBytes))
 }
 
 // formatBytes renders a byte count for display - a measured figure, never a
