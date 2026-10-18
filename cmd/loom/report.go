@@ -518,6 +518,9 @@ func printReport(s ledger.Summary) {
 				label = r.AgentType + " / " + model
 			}
 			fmt.Printf("  %5.1f%%  %-30s %12.0f  %s\n", r.Share*100, label, r.WeightedCost, filepath.Base(r.Path))
+			if d := describeRun(r); d != "" {
+				fmt.Printf("          %s\n", d)
+			}
 		}
 	}
 
@@ -527,6 +530,30 @@ func printReport(s ledger.Summary) {
 		fmt.Println("task-notification. This is NOT reconciled against the weighted cost above -")
 		fmt.Println("see docs/transcript-schema.md, \"Reconciliation does NOT hold\".")
 	}
+}
+
+// describeRun is the one-line account of why a listed run cost what it did:
+// how many tool calls, how long the session stayed alive (resumes included),
+// how often it was compacted, and how much of its tool output was images or
+// documents. Empty when the run has none of it to say.
+func describeRun(r ledger.RunCost) string {
+	var parts []string
+	if r.ToolUses > 0 {
+		parts = append(parts, fmt.Sprintf("%d tool calls", r.ToolUses))
+	}
+	switch {
+	case r.SpanHours >= 48:
+		parts = append(parts, fmt.Sprintf("alive %.0f days", r.SpanHours/24))
+	case r.SpanHours >= 1:
+		parts = append(parts, fmt.Sprintf("alive %.0f hours", r.SpanHours))
+	}
+	if r.Compactions > 0 {
+		parts = append(parts, fmt.Sprintf("compacted %dx", r.Compactions))
+	}
+	if r.MediaBytes > 0 {
+		parts = append(parts, fmt.Sprintf("%s images/documents", formatBytes(r.MediaBytes)))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // printCostByKind shows what the headline figure is actually made of. A bare

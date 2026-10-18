@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `loom report`'s "Most expensive runs" lists, under each run, why it cost what it did: tool calls, how
+  long the session stayed alive (resumes included, so it is not working time), how often it was
+  compacted, and how much of its tool output was images or documents. On the author's ledger the top
+  runs were 2,800 to 5,500 tool calls kept alive for weeks, which the bare cost figure hid.
+
 ## [0.6.0] - 2026-10-18
 
 ### Added
