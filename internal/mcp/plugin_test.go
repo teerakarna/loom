@@ -143,39 +143,58 @@ func keys[V any](m map[string]V) []string {
 	return out
 }
 
-// release-please bumps the two version strings it can reach. A line it cannot
-// find the annotation on, or a file missing from its config, would let a
-// release PR bump one and leave the other, which TestPluginManifest then fails
-// on only after the release PR is already open.
+// releasePleaseProblems says what would stop release-please bumping every
+// version string: the annotation on the const line and an extra-files entry
+// whose path is exactly each file. Pure, so a test can show it catches a miss.
+func releasePleaseProblems(serverSrc string, extraFiles []json.RawMessage) []string {
+	var problems []string
+	found, annotated := false, false
+	for _, line := range strings.Split(serverSrc, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "const version =") {
+			found = true
+			annotated = strings.Contains(line, "x-release-please-version")
+		}
+	}
+	switch {
+	case !found:
+		problems = append(problems, `no "const version =" line in server.go; if it moved into a const block, release-please needs its annotation on the new line and this check needs updating`)
+	case !annotated:
+		problems = append(problems, `the "const version =" line has no x-release-please-version comment`)
+	}
+
+	listed := map[string]bool{}
+	for _, raw := range extraFiles {
+		var plain string
+		var obj struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(raw, &plain) == nil {
+			listed[plain] = true
+		} else if json.Unmarshal(raw, &obj) == nil {
+			listed[obj.Path] = true
+		}
+	}
+	for _, want := range []string{"internal/mcp/server.go", "plugin/.claude-plugin/plugin.json"} {
+		if !listed[want] {
+			problems = append(problems, "extra-files does not list "+want)
+		}
+	}
+	return problems
+}
+
 func TestReleasePleaseCoversEveryVersionString(t *testing.T) {
 	src, err := os.ReadFile("server.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	annotated := false
-	for _, line := range strings.Split(string(src), "\n") {
-		if strings.HasPrefix(line, "const version =") {
-			annotated = strings.Contains(line, "x-release-please-version")
-		}
-	}
-	if !annotated {
-		t.Error(`the "const version =" line in server.go has no x-release-please-version comment, so release-please cannot bump it`)
-	}
-
 	var cfg struct {
 		Packages map[string]struct {
 			ExtraFiles []json.RawMessage `json:"extra-files"`
 		} `json:"packages"`
 	}
 	readJSON(t, "release-please-config.json", &cfg)
-	listed := ""
-	for _, raw := range cfg.Packages["."].ExtraFiles {
-		listed += string(raw)
-	}
-	for _, want := range []string{"internal/mcp/server.go", "plugin/.claude-plugin/plugin.json"} {
-		if !strings.Contains(listed, want) {
-			t.Errorf("release-please-config.json does not list %s in extra-files", want)
-		}
+	for _, p := range releasePleaseProblems(string(src), cfg.Packages["."].ExtraFiles) {
+		t.Error(p)
 	}
 
 	var manifest map[string]string
@@ -187,5 +206,28 @@ func TestReleasePleaseCoversEveryVersionString(t *testing.T) {
 	if manifest["."] != plugin.Version {
 		t.Errorf(".release-please-manifest.json says %q but plugin.json says %q; they move together or release-please bumps from the wrong base",
 			manifest["."], plugin.Version)
+	}
+}
+
+// The check above is only worth having if it can fail.
+func TestReleasePleaseProblemsDetectsAMiss(t *testing.T) {
+	good := []json.RawMessage{
+		json.RawMessage(`{"type":"json","path":"plugin/.claude-plugin/plugin.json","jsonpath":"$.version"}`),
+		json.RawMessage(`"internal/mcp/server.go"`),
+	}
+	if p := releasePleaseProblems("const version = \"v1.2.3\" // x-release-please-version\n", good); len(p) != 0 {
+		t.Errorf("a correct setup reported problems: %v", p)
+	}
+	if p := releasePleaseProblems("const version = \"v1.2.3\"\n", good); len(p) != 1 {
+		t.Errorf("a missing annotation gave %v, want one problem", p)
+	}
+	if p := releasePleaseProblems("package mcp\n", good); len(p) != 1 {
+		t.Errorf("a missing const line gave %v, want one problem", p)
+	}
+	decoy := []json.RawMessage{
+		json.RawMessage(`{"type":"json","path":"other.json","jsonpath":"$.x","note":"internal/mcp/server.go plugin/.claude-plugin/plugin.json"}`),
+	}
+	if p := releasePleaseProblems("const version = \"v1\" // x-release-please-version\n", decoy); len(p) != 2 {
+		t.Errorf("paths mentioned only inside another field must not count, got %v", p)
 	}
 }

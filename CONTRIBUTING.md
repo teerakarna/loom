@@ -60,7 +60,14 @@ PRs.
 - Merging the PR makes release-please create the tag and the GitHub release. A tag it creates does not
   trigger `release.yml` either, so `release-please.yml` calls `release.yml` directly, and
   goreleaser attaches the signed binaries to the release and appends the verification footer. A tag
-  pushed by hand still triggers `release.yml` the old way.
+  pushed by hand still triggers `release.yml` the old way, but only as a recovery path: goreleaser's own
+  changelog is switched off, so a release made that way has the verification footer and no notes.
+- **If the build fails**, the release already exists without binaries and release-please will not retry.
+  Run `release.yml` from the Actions tab (it takes the existing tag), or re-run the failed job.
+- **Repo prerequisite:** Settings > Actions > General > "Allow GitHub Actions to create and approve
+  pull requests" must be on, or release-please cannot open its PR.
+- The signing certificate for a release made this way names `release.yml@refs/heads/main`, not the tag,
+  because the build runs as a called workflow. The footer's identity regexp covers both.
 
 ## Merging
 

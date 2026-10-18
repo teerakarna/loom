@@ -11,6 +11,14 @@ on:
         description: Tag to build and release
         required: true
         type: string
+  # Recovery: release-please publishes the release before this builds, so a failed build leaves a
+  # release with no binaries and nothing re-runs it. Run this with the existing tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and attach binaries to
+        required: true
+        type: string
 
 # Least-privilege default so a job added later without its own block doesn't inherit the repo's
 # default token scope.

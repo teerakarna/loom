@@ -753,7 +753,8 @@ and a hand-pushed tag. It now opens the release PR and creates the tag, and `rel
 other workflow and a personal access token would be a long-lived credential. goreleaser attaches assets
 to the release release-please already made (`release.mode: append`, its own changelog disabled so the
 commit list is not in the release twice). Its PR does not trigger CI either, which `CONTRIBUTING.md`
-covers. `bootstrap-sha` is the v0.6.0 release commit, or the first PR would replay all history.
+covers, as do the recovery path for a failed build and the repo setting it needs. The cosign
+certificate for these releases names `release.yml@refs/heads/main` rather than the tag. `bootstrap-sha` is the v0.6.0 release commit, or the first PR would replay all history.
 
 A tool that asks people to download a binary is a supply chain and should behave like one.
 
