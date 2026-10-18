@@ -135,7 +135,8 @@ CREATE TABLE IF NOT EXISTS tool_usage (
 	tool_use_id  TEXT PRIMARY KEY,
 	run_id       INTEGER NOT NULL REFERENCES runs(id),
 	tool_name    TEXT NOT NULL,
-	result_bytes INTEGER NOT NULL DEFAULT 0 -- a byte count, never a token estimate
+	result_bytes INTEGER NOT NULL DEFAULT 0, -- a byte count, never a token estimate
+	media_bytes  INTEGER NOT NULL DEFAULT 0  -- the image/document part of result_bytes
 );
 
 CREATE TABLE IF NOT EXISTS compactions (
@@ -282,6 +283,9 @@ func migrate(db *sql.DB) error {
 		{"proposals", map[string]string{
 			"subject":       `ALTER TABLE proposals ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
 			"evidence_hash": `ALTER TABLE proposals ADD COLUMN evidence_hash TEXT NOT NULL DEFAULT ''`,
+		}},
+		{"tool_usage", map[string]string{
+			"media_bytes": `ALTER TABLE tool_usage ADD COLUMN media_bytes INTEGER NOT NULL DEFAULT 0`,
 		}},
 		{"policies", map[string]string{
 			"source":                 `ALTER TABLE policies ADD COLUMN source TEXT NOT NULL DEFAULT 'human'`,

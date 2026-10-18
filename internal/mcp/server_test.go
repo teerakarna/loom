@@ -188,8 +188,9 @@ func TestGetContextOccupancyDimension(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := db.ReplaceToolUsage(id, []ingest.ToolUsageEvent{
-		{ToolUseID: "t1", ToolName: "Read", ResultBytes: 250},
+		{ToolUseID: "t1", ToolName: "Read", ResultBytes: 250, MediaBytes: 200},
 		{ToolUseID: "t2", ToolName: "Read", ResultBytes: 250},
+		{ToolUseID: "t3", ToolName: "Bash", ResultBytes: 10},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -200,11 +201,22 @@ func TestGetContextOccupancyDimension(t *testing.T) {
 	}
 
 	out := callTool[ContextOccupancyOutput](t, session, "get_context_occupancy", map[string]any{})
-	if len(out.ByTool) != 1 || out.ByTool[0].Name != "Read" || out.ByTool[0].ResultBytes != 500 {
-		t.Errorf("ByTool = %+v, want one Read row with 500 bytes", out.ByTool)
+	byTool := map[string]ToolOutputDimension{}
+	for _, r := range out.ByTool {
+		byTool[r.Name] = r
 	}
-	if len(out.ByBucket) != 1 || out.ByBucket[0].Name != "file I/O" {
-		t.Errorf("ByBucket = %+v, want one file I/O row", out.ByBucket)
+	if r := byTool["Read"]; len(out.ByTool) != 2 || r.ResultBytes != 500 || r.MediaBytes != 200 {
+		t.Errorf("ByTool = %+v, want Read with 500 bytes and 200 media, plus Bash", out.ByTool)
+	}
+	if r := byTool["Bash"]; r.MediaBytes != 0 {
+		t.Errorf("Bash MediaBytes = %d, want 0", r.MediaBytes)
+	}
+	byBucket := map[string]ToolOutputDimension{}
+	for _, r := range out.ByBucket {
+		byBucket[r.Name] = r
+	}
+	if len(out.ByBucket) != 2 || byBucket["file I/O"].MediaBytes != 200 || byBucket["shell"].MediaBytes != 0 {
+		t.Errorf("ByBucket = %+v, want file I/O with 200 media and shell with none", out.ByBucket)
 	}
 	if out.CompactionCount != 1 || out.CompactionDroppedTokens != 900 {
 		t.Errorf("compaction fields = %+v, want count 1, dropped 900", out)

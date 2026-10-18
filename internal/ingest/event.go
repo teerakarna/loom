@@ -57,6 +57,10 @@ type ToolUse struct {
 type ToolResult struct {
 	ToolUseID string
 	Bytes     int64
+	// MediaBytes is the part of Bytes that is image or document blocks, which
+	// stay in context and cost the same on every later turn. Zero for a plain
+	// string result.
+	MediaBytes int64
 }
 
 // AssetTouch is one tool_use block that issue #39 counts as an asset

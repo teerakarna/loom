@@ -1924,6 +1924,13 @@ assets sharing a name (a project-level skill overriding a global one - `discover
 dirs by design) resolved to whichever row SQLite felt like returning that call. All three fixed
 alongside the dedup fix, each with its own regression test reproducing the original failure shape.
 
+**Added 2026-10-18: images and documents are split out (#128).** `tool_usage` also carries
+`media_bytes`, the part of `result_bytes` that is image or document blocks, and `loom context` and
+`get_context_occupancy` show it per bucket and per tool. Only the block type is read, never what is
+inside it. It exists because a `Read` of a screenshot counted as "file I/O" and looked like a large
+source file, when images stay in context and are re-read from cache on every later turn. Feature
+version 3 re-reads every run once to fill it in. A proposal that acts on it is not built.
+
 #### B7c. Promotion rules as read-only proposals (#41) - BUILT 2026-09-22
 
 Turn the promotion-rules table into code emitting `promote_*` proposals, each carrying evidence and a

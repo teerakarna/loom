@@ -393,6 +393,8 @@ type ToolOutputDimension struct {
 	Name        string `json:"name"`
 	Calls       int    `json:"calls"`
 	ResultBytes int64  `json:"result_bytes"`
+	// MediaBytes is the image and document part of ResultBytes.
+	MediaBytes int64 `json:"media_bytes"`
 }
 
 // toolOutputCap bounds ByTool in the MCP response - constraint 10, every
@@ -415,14 +417,14 @@ func getContextOccupancyHandler(db *ledger.DB, home string, fc *freshnessCache) 
 			Freshness: fc.get(db, home),
 		}
 		for _, b := range occ.ByBucket {
-			out.ByBucket = append(out.ByBucket, ToolOutputDimension{Name: b.ToolName, Calls: b.Calls, ResultBytes: b.ResultBytes})
+			out.ByBucket = append(out.ByBucket, ToolOutputDimension{Name: b.ToolName, Calls: b.Calls, ResultBytes: b.ResultBytes, MediaBytes: b.MediaBytes})
 		}
 		n := len(occ.ByTool)
 		if n > toolOutputCap {
 			n = toolOutputCap
 		}
 		for _, t := range occ.ByTool[:n] {
-			out.ByTool = append(out.ByTool, ToolOutputDimension{Name: t.ToolName, Calls: t.Calls, ResultBytes: t.ResultBytes})
+			out.ByTool = append(out.ByTool, ToolOutputDimension{Name: t.ToolName, Calls: t.Calls, ResultBytes: t.ResultBytes, MediaBytes: t.MediaBytes})
 		}
 		return nil, out, nil
 	}
