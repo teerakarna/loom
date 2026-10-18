@@ -291,6 +291,16 @@ type RunCost struct {
 	AgentType    string
 	WeightedCost float64
 	Share        float64 // fraction of the total, 0-1
+
+	// What the run looked like, so a reader can see why it cost what it did
+	// without opening the transcript. Filled for the listed runs only.
+	ToolUses    int
+	Compactions int
+	// SpanHours is first message to last, resumes included, so it is how long
+	// the session stayed alive, not how long anyone was working in it.
+	SpanHours float64
+	// MediaBytes is the image and document part of its tool output.
+	MediaBytes int64
 }
 
 // ShareAtN is "the top N runs account for this share of total cost". A small
@@ -349,6 +359,9 @@ func (d *DB) report(lane string) (Summary, error) {
 		return s, err
 	}
 	if err := d.scanTopRuns(&s, where, args); err != nil {
+		return s, err
+	}
+	if err := d.annotateTopRuns(&s); err != nil {
 		return s, err
 	}
 	return s, nil
@@ -488,6 +501,37 @@ func (d *DB) scanTopRuns(s *Summary, where string, args []any) error {
 		}
 	}
 	return rows.Err()
+}
+
+// annotateTopRuns fills in what each listed run looked like. It runs after
+// scanTopRuns has finished with its rows, and costs a few lookups for at most
+// topRunsShown runs, not a join over every run.
+func (d *DB) annotateTopRuns(s *Summary) error {
+	for i := range s.TopRuns {
+		r := &s.TopRuns[i]
+		var started, ended sql.NullString
+		err := d.sql.QueryRow(`
+			SELECT tool_use_count, started_at, ended_at,
+			       (SELECT COUNT(*) FROM compactions c WHERE c.run_id = runs.id),
+			       (SELECT COALESCE(SUM(media_bytes), 0) FROM tool_usage t WHERE t.run_id = runs.id)
+			FROM runs WHERE path = ?`, r.Path).
+			Scan(&r.ToolUses, &started, &ended, &r.Compactions, &r.MediaBytes)
+		if errors.Is(err, sql.ErrNoRows) {
+			// Gone between the two queries (a concurrent ingest). This is
+			// decoration, so the run prints without it rather than failing
+			// the whole report.
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		a, errA := parseTime(started.String)
+		b, errB := parseTime(ended.String)
+		if errA == nil && errB == nil && !a.IsZero() && b.After(a) {
+			r.SpanHours = b.Sub(a).Hours()
+		}
+	}
+	return nil
 }
 
 // perRun guards against a zero divisor; a group with no runs has no per-run

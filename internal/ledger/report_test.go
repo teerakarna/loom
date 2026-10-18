@@ -2,7 +2,11 @@ package ledger
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/teerakarna/loom/internal/ingest"
 )
 
 // seedRuns inserts n runs with the given costs, alternating kinds so both
@@ -242,5 +246,83 @@ func TestReportByLaneAndFiltering(t *testing.T) {
 	}
 	if none.TotalRuns != 0 {
 		t.Errorf("unknown lane = %d runs, want 0", none.TotalRuns)
+	}
+}
+
+// The listed runs say why they cost what they did, and a run with none of it
+// says nothing rather than a row of zeros dressed as fact.
+func TestReportTopRunsCarryTheirContext(t *testing.T) {
+	db := openTestDB(t)
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := db.InsertRun(RunRecord{
+		Path: "big.jsonl", Kind: "session", Model: "m", WeightedCost: 900, ToolUseCount: 1234,
+		StartedAt: start, EndedAt: start.Add(72 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertRun(RunRecord{Path: "bare.jsonl", Kind: "session", Model: "m", WeightedCost: 100}); err != nil {
+		t.Fatal(err)
+	}
+	big, err := db.RunIDByPath("big.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceToolUsage(big, []ingest.ToolUsageEvent{
+		{ToolUseID: "a", ToolName: "Read", ResultBytes: 500, MediaBytes: 400},
+		{ToolUseID: "b", ToolName: "Bash", ResultBytes: 50},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertCompactions(big, []ingest.CompactionEvent{{UUID: "c1", PreTokens: 10, PostTokens: 1}}); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := db.Report()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotBig, gotBare RunCost
+	for _, r := range s.TopRuns {
+		switch filepath.Base(r.Path) {
+		case "big.jsonl":
+			gotBig = r
+		case "bare.jsonl":
+			gotBare = r
+		}
+	}
+	if gotBig.ToolUses != 1234 || gotBig.Compactions != 1 || gotBig.MediaBytes != 400 || gotBig.SpanHours != 72 {
+		t.Errorf("big = %+v, want 1234 tool calls, 1 compaction, 400 media bytes, 72h span", gotBig)
+	}
+	if gotBare.ToolUses != 0 || gotBare.Compactions != 0 || gotBare.MediaBytes != 0 || gotBare.SpanHours != 0 {
+		t.Errorf("bare = %+v, want all zero for a run with none of it", gotBare)
+	}
+}
+
+// A top run that vanished between the two queries must not fail the report,
+// and odd timestamps must give no span rather than a wrong one.
+func TestAnnotateTopRunsToleratesMissingAndOddRows(t *testing.T) {
+	db := openTestDB(t)
+	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	for path, rec := range map[string]RunRecord{
+		"noend.jsonl":    {StartedAt: start},
+		"reversed.jsonl": {StartedAt: start, EndedAt: start.Add(-time.Hour)},
+		"short.jsonl":    {StartedAt: start, EndedAt: start.Add(20 * time.Minute)},
+	} {
+		rec.Path, rec.Kind, rec.Model = path, "session", "m"
+		if err := db.InsertRun(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := Summary{TopRuns: []RunCost{{Path: "gone.jsonl"}, {Path: "noend.jsonl"}, {Path: "reversed.jsonl"}, {Path: "short.jsonl"}}}
+	if err := db.annotateTopRuns(&s); err != nil {
+		t.Fatalf("annotateTopRuns failed on a vanished run: %v", err)
+	}
+	for _, r := range s.TopRuns[:3] {
+		if r.SpanHours != 0 {
+			t.Errorf("%s: SpanHours = %v, want 0 for a missing or reversed end", r.Path, r.SpanHours)
+		}
+	}
+	if got := s.TopRuns[3].SpanHours; got < 0.33 || got > 0.34 {
+		t.Errorf("short.jsonl SpanHours = %v, want about 0.333", got)
 	}
 }
