@@ -297,3 +297,32 @@ func TestReportTopRunsCarryTheirContext(t *testing.T) {
 		t.Errorf("bare = %+v, want all zero for a run with none of it", gotBare)
 	}
 }
+
+// A top run that vanished between the two queries must not fail the report,
+// and odd timestamps must give no span rather than a wrong one.
+func TestAnnotateTopRunsToleratesMissingAndOddRows(t *testing.T) {
+	db := openTestDB(t)
+	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	for path, rec := range map[string]RunRecord{
+		"noend.jsonl":    {StartedAt: start},
+		"reversed.jsonl": {StartedAt: start, EndedAt: start.Add(-time.Hour)},
+		"short.jsonl":    {StartedAt: start, EndedAt: start.Add(20 * time.Minute)},
+	} {
+		rec.Path, rec.Kind, rec.Model = path, "session", "m"
+		if err := db.InsertRun(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := Summary{TopRuns: []RunCost{{Path: "gone.jsonl"}, {Path: "noend.jsonl"}, {Path: "reversed.jsonl"}, {Path: "short.jsonl"}}}
+	if err := db.annotateTopRuns(&s); err != nil {
+		t.Fatalf("annotateTopRuns failed on a vanished run: %v", err)
+	}
+	for _, r := range s.TopRuns[:3] {
+		if r.SpanHours != 0 {
+			t.Errorf("%s: SpanHours = %v, want 0 for a missing or reversed end", r.Path, r.SpanHours)
+		}
+	}
+	if got := s.TopRuns[3].SpanHours; got < 0.33 || got > 0.34 {
+		t.Errorf("short.jsonl SpanHours = %v, want about 0.333", got)
+	}
+}

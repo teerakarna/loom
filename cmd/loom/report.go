@@ -544,8 +544,10 @@ func describeRun(r ledger.RunCost) string {
 	switch {
 	case r.SpanHours >= 48:
 		parts = append(parts, fmt.Sprintf("alive %.0f days", r.SpanHours/24))
-	case r.SpanHours >= 1:
+	case r.SpanHours >= 1.5:
 		parts = append(parts, fmt.Sprintf("alive %.0f hours", r.SpanHours))
+	case r.SpanHours >= 1:
+		parts = append(parts, "alive about an hour")
 	}
 	if r.Compactions > 0 {
 		parts = append(parts, fmt.Sprintf("compacted %dx", r.Compactions))

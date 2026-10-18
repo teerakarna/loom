@@ -516,12 +516,18 @@ func (d *DB) annotateTopRuns(s *Summary) error {
 			       (SELECT COALESCE(SUM(media_bytes), 0) FROM tool_usage t WHERE t.run_id = runs.id)
 			FROM runs WHERE path = ?`, r.Path).
 			Scan(&r.ToolUses, &started, &ended, &r.Compactions, &r.MediaBytes)
+		if errors.Is(err, sql.ErrNoRows) {
+			// Gone between the two queries (a concurrent ingest). This is
+			// decoration, so the run prints without it rather than failing
+			// the whole report.
+			continue
+		}
 		if err != nil {
 			return err
 		}
-		a, errA := time.Parse(time.RFC3339, started.String)
-		b, errB := time.Parse(time.RFC3339, ended.String)
-		if errA == nil && errB == nil && b.After(a) {
+		a, errA := parseTime(started.String)
+		b, errB := parseTime(ended.String)
+		if errA == nil && errB == nil && !a.IsZero() && b.After(a) {
 			r.SpanHours = b.Sub(a).Hours()
 		}
 	}

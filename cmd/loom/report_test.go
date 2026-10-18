@@ -54,3 +54,29 @@ func TestDescribeRun(t *testing.T) {
 		t.Errorf("a short span reads in hours: %q", got)
 	}
 }
+
+func TestDescribeRunSpanWording(t *testing.T) {
+	cases := []struct {
+		hours float64
+		want  string
+	}{
+		{0.4, ""},
+		{1.2, "alive about an hour"},
+		{5, "alive 5 hours"},
+		{47.5, "alive 48 hours"},
+		{48, "alive 2 days"},
+		{1488, "alive 62 days"},
+	}
+	for _, c := range cases {
+		got := describeRun(ledger.RunCost{ToolUses: 1, SpanHours: c.hours})
+		if c.want == "" && strings.Contains(got, "alive") {
+			t.Errorf("%vh: printed a span %q, want none under an hour", c.hours, got)
+		}
+		if c.want != "" && !strings.Contains(got, c.want) {
+			t.Errorf("%vh: %q, want %q", c.hours, got, c.want)
+		}
+		if strings.Contains(got, "1 hours") {
+			t.Errorf("%vh: bad plural in %q", c.hours, got)
+		}
+	}
+}
