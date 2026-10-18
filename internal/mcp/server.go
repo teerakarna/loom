@@ -20,7 +20,7 @@ import (
 
 // version is the MCP server's own implementation version, independent of the
 // loom binary's version - bump when a tool's input/output shape changes.
-const version = "v0.6.0"
+const version = "v0.6.0" // x-release-please-version
 
 // NewServer builds the Loom MCP server backed by db. The caller owns db's
 // lifecycle (open before, close after) - the server never opens or closes it

@@ -747,6 +747,15 @@ but cargo cult. `.goreleaser.yaml` builds it, `.github/workflows/release.yml` tr
 `goreleaser check` - caught one real mismatch along the way: the first draft's release notes
 claimed a CycloneDX SBOM, but syft's actual default output is SPDX JSON.
 
+**Releases are cut by release-please (2026-10-19, #132).** Releases up to v0.6.0 were hand-made release PRs
+and a hand-pushed tag. It now opens the release PR and creates the tag, and `release-please.yml` calls
+`release.yml` directly (`workflow_call`), because a tag made with the default `GITHUB_TOKEN` starts no
+other workflow and a personal access token would be a long-lived credential. goreleaser attaches assets
+to the release release-please already made (`release.mode: append`, its own changelog disabled so the
+commit list is not in the release twice). Its PR does not trigger CI either, which `CONTRIBUTING.md`
+covers, as do the recovery path for a failed build and the repo setting it needs. The cosign
+certificate for these releases names `release.yml@refs/heads/main` rather than the tag. `bootstrap-sha` is the v0.6.0 release commit, or the first PR would replay all history.
+
 A tool that asks people to download a binary is a supply chain and should behave like one.
 
 #### B6b. Fixture-hygiene check - BUILT 2026-09-13
