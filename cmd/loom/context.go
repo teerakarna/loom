@@ -59,7 +59,7 @@ func printOccupancy(r ledger.OccupancyReport, lane string) {
 	} else {
 		fmt.Println("Tool output, by bucket:")
 		for _, b := range r.ByBucket {
-			fmt.Printf("  %-14s %8d calls  %12s\n", b.ToolName, b.Calls, formatBytes(b.ResultBytes))
+			fmt.Printf("  %-14s %8d calls  %12s%s\n", b.ToolName, b.Calls, formatBytes(b.ResultBytes), mediaNote(b))
 		}
 
 		fmt.Println()
@@ -69,7 +69,7 @@ func printOccupancy(r ledger.OccupancyReport, lane string) {
 			n = 10
 		}
 		for _, t := range r.ByTool[:n] {
-			fmt.Printf("  %-30s %8d calls  %12s\n", t.ToolName, t.Calls, formatBytes(t.ResultBytes))
+			fmt.Printf("  %-30s %8d calls  %12s%s\n", t.ToolName, t.Calls, formatBytes(t.ResultBytes), mediaNote(t))
 		}
 	}
 
@@ -82,6 +82,16 @@ func printOccupancy(r ledger.OccupancyReport, lane string) {
 		r.CompactionCount, formatTokens(r.CompactionDroppedTokens), formatDuration(r.CompactionWallClockMs))
 	fmt.Println("  (dropped tokens are as reported per event, pre minus post - see")
 	fmt.Println("   docs/design.md, B7b, for why the host's own cumulative figure is not summed)")
+}
+
+// mediaNote says how much of a row is images and documents, which stay in
+// context and are re-read on every later turn, so a reader can tell a large
+// file from a large screenshot. Empty when there is none.
+func mediaNote(r ledger.ToolOutputRow) string {
+	if r.MediaBytes == 0 {
+		return ""
+	}
+	return fmt.Sprintf("  (%s images/documents)", formatBytes(r.MediaBytes))
 }
 
 // formatBytes renders a byte count for display - a measured figure, never a

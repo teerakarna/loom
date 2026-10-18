@@ -139,8 +139,9 @@ func parseUser(m map[string]any, ev *Event) {
 				continue
 			}
 			ev.ToolResults = append(ev.ToolResults, ToolResult{
-				ToolUseID: id,
-				Bytes:     toolResultBytes(b["content"]),
+				ToolUseID:  id,
+				Bytes:      toolResultBytes(b["content"]),
+				MediaBytes: toolResultMediaBytes(b["content"]),
 			})
 		}
 	}
@@ -168,6 +169,30 @@ func toolResultBytes(content any) int64 {
 	default:
 		return 0
 	}
+}
+
+// toolResultMediaBytes is the size of the image and document blocks in a
+// tool_result's content, measured the same way toolResultBytes measures the
+// whole, so it is always a part of that figure. Only the block type is
+// looked at, never what is inside it (constraint 6).
+func toolResultMediaBytes(content any) int64 {
+	blocks, ok := content.([]any)
+	if !ok {
+		return 0
+	}
+	var n int64
+	for _, blk := range blocks {
+		b, ok := blk.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := b["type"].(string); t == "image" || t == "document" {
+			if raw, err := json.Marshal(b); err == nil {
+				n += int64(len(raw))
+			}
+		}
+	}
+	return n
 }
 
 // parseCompaction reads a compact_boundary system record's compactMetadata.

@@ -33,7 +33,11 @@ import (
 // corrected it. A bump is the only repair path the design offers - there is
 // deliberately no --force (docs/design.md, "No reprocessing flag") - so without
 // one, a ledger that took a narrowed report stays wrong for as long as it lives.
-const CurrentFeatureVersion = 2
+//
+// 3 is tool_usage.media_bytes, the image and document part of a result. A
+// ledger ingested before it has result_bytes with no split, so every run is
+// re-read once to fill it in.
+const CurrentFeatureVersion = 3
 
 // FreshnessState is the three-way answer to "does this stored run need a
 // re-read, and for which of the two reasons" - NeedsIngest only needs the

@@ -1,6 +1,8 @@
 package ledger
 
 import (
+	"database/sql"
+	"path/filepath"
 	"testing"
 
 	"github.com/teerakarna/loom/internal/ingest"
@@ -250,5 +252,80 @@ func TestOccupancy_LaneFilter(t *testing.T) {
 	}
 	if len(empty.ByTool) != 0 {
 		t.Errorf("OccupancyForLane(no-such-lane).ByTool = %+v, want empty", empty.ByTool)
+	}
+}
+
+// Media bytes are carried through per tool and rolled up per bucket, and a
+// tool with none reports zero rather than inheriting a neighbour's.
+func TestReplaceToolUsage_MediaBytesPerToolAndBucket(t *testing.T) {
+	db := openTestDB(t)
+	id := insertTestRun(t, db, "run-media.jsonl")
+	if err := db.ReplaceToolUsage(id, []ingest.ToolUsageEvent{
+		{ToolUseID: "m1", ToolName: "Read", ResultBytes: 1000, MediaBytes: 900},
+		{ToolUseID: "m2", ToolName: "Read", ResultBytes: 100},
+		{ToolUseID: "m3", ToolName: "Bash", ResultBytes: 50},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	occ, err := db.Occupancy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byTool := map[string]ToolOutputRow{}
+	for _, r := range occ.ByTool {
+		byTool[r.ToolName] = r
+	}
+	if r := byTool["Read"]; r.ResultBytes != 1100 || r.MediaBytes != 900 {
+		t.Errorf("Read = %+v, want ResultBytes 1100, MediaBytes 900", r)
+	}
+	if r := byTool["Bash"]; r.MediaBytes != 0 {
+		t.Errorf("Bash MediaBytes = %d, want 0", r.MediaBytes)
+	}
+	byBucket := map[string]ToolOutputRow{}
+	for _, r := range occ.ByBucket {
+		byBucket[r.ToolName] = r
+	}
+	if r := byBucket["file I/O"]; r.MediaBytes != 900 {
+		t.Errorf("file I/O bucket MediaBytes = %d, want 900", r.MediaBytes)
+	}
+	if r := byBucket["shell"]; r.MediaBytes != 0 {
+		t.Errorf("shell bucket MediaBytes = %d, want 0", r.MediaBytes)
+	}
+}
+
+// A ledger created before media_bytes existed must open, keep its rows with a
+// zero split, and accept new rows that carry one.
+func TestMigrateToolUsageAddsMediaBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`
+		CREATE TABLE tool_usage (
+			tool_use_id  TEXT PRIMARY KEY,
+			run_id       INTEGER NOT NULL,
+			tool_name    TEXT NOT NULL,
+			result_bytes INTEGER NOT NULL DEFAULT 0
+		);
+		INSERT INTO tool_usage VALUES ('old1', 1, 'Read', 500);`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open on a pre-media_bytes ledger failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var media int64
+	if err := db.sql.QueryRow(`SELECT media_bytes FROM tool_usage WHERE tool_use_id = 'old1'`).Scan(&media); err != nil {
+		t.Fatalf("media_bytes column missing after migrate: %v", err)
+	}
+	if media != 0 {
+		t.Errorf("an old row got media_bytes %d, want 0", media)
 	}
 }

@@ -36,15 +36,15 @@ func (d *DB) ReplaceToolUsage(runID int64, events []ingest.ToolUsageEvent) error
 		return err
 	}
 	stmt, err := tx.Prepare(`
-		INSERT INTO tool_usage (tool_use_id, run_id, tool_name, result_bytes)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO tool_usage (tool_use_id, run_id, tool_name, result_bytes, media_bytes)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(tool_use_id) DO NOTHING`)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = stmt.Close() }()
 	for _, ev := range events {
-		if _, err := stmt.Exec(ev.ToolUseID, runID, ev.ToolName, ev.ResultBytes); err != nil {
+		if _, err := stmt.Exec(ev.ToolUseID, runID, ev.ToolName, ev.ResultBytes, ev.MediaBytes); err != nil {
 			return err
 		}
 	}
@@ -90,6 +90,8 @@ type ToolOutputRow struct {
 	Bucket      string
 	Calls       int
 	ResultBytes int64
+	// MediaBytes is the image and document part of ResultBytes.
+	MediaBytes int64
 }
 
 // CompactionRow is one compaction event, for `loom context`'s per-session
@@ -162,7 +164,7 @@ func (d *DB) occupancy(lane string) (OccupancyReport, error) {
 	}
 
 	rows, err := d.sql.Query(`
-		SELECT tu.tool_name, COUNT(*), COALESCE(SUM(tu.result_bytes),0)
+		SELECT tu.tool_name, COUNT(*), COALESCE(SUM(tu.result_bytes),0), COALESCE(SUM(tu.media_bytes),0)
 		FROM tool_usage tu JOIN runs r ON r.id = tu.run_id`+where+`
 		GROUP BY tu.tool_name ORDER BY SUM(tu.result_bytes) DESC`, args...)
 	if err != nil {
@@ -172,7 +174,7 @@ func (d *DB) occupancy(lane string) (OccupancyReport, error) {
 	bucketIndex := map[string]int{}
 	for rows.Next() {
 		var t ToolOutputRow
-		if err := rows.Scan(&t.ToolName, &t.Calls, &t.ResultBytes); err != nil {
+		if err := rows.Scan(&t.ToolName, &t.Calls, &t.ResultBytes, &t.MediaBytes); err != nil {
 			return r, err
 		}
 		t.Bucket = bucketFor(t.ToolName)
@@ -186,6 +188,7 @@ func (d *DB) occupancy(lane string) (OccupancyReport, error) {
 		}
 		r.ByBucket[i].Calls += t.Calls
 		r.ByBucket[i].ResultBytes += t.ResultBytes
+		r.ByBucket[i].MediaBytes += t.MediaBytes
 	}
 	if err := rows.Err(); err != nil {
 		return r, err

@@ -43,6 +43,8 @@ type ToolUsageEvent struct {
 	ToolUseID   string
 	ToolName    string
 	ResultBytes int64
+	// MediaBytes is the image and document part of ResultBytes.
+	MediaBytes int64
 }
 
 // RunSummary is one file's worth of ingest - one main session transcript, or
@@ -288,7 +290,7 @@ func applyEvent(rs *RunSummary, ev Event) {
 			name = UnknownTool
 		}
 		rs.ToolUsage = append(rs.ToolUsage, ToolUsageEvent{
-			ToolUseID: tr.ToolUseID, ToolName: name, ResultBytes: tr.Bytes,
+			ToolUseID: tr.ToolUseID, ToolName: name, ResultBytes: tr.Bytes, MediaBytes: tr.MediaBytes,
 		})
 	}
 

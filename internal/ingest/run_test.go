@@ -342,3 +342,41 @@ func TestKindAndTranscriptDoNotDependOnALeadingSeparator(t *testing.T) {
 		}
 	}
 }
+
+// TestToolResultMediaBytes: only image and document blocks count, and the
+// figure is always a part of toolResultBytes, never more. The counterpoints
+// matter as much as the hit: a text block, a plain string and a missing
+// content must all be zero, or a large file would be reported as a screenshot.
+func TestToolResultMediaBytes(t *testing.T) {
+	img := map[string]any{"type": "image", "source": map[string]any{"type": "base64", "data": "AAAA"}}
+	doc := map[string]any{"type": "document", "source": map[string]any{"type": "base64", "data": "BBBBBB"}}
+	text := map[string]any{"type": "text", "text": "plain words"}
+
+	imgLen := int64(len(`{"source":{"data":"AAAA","type":"base64"},"type":"image"}`))
+	docLen := int64(len(`{"source":{"data":"BBBBBB","type":"base64"},"type":"document"}`))
+
+	cases := map[string]struct {
+		content any
+		want    int64
+	}{
+		"image":             {[]any{img}, imgLen},
+		"document":          {[]any{doc}, docLen},
+		"image and text":    {[]any{text, img}, imgLen},
+		"two media blocks":  {[]any{img, doc}, imgLen + docLen},
+		"text only":         {[]any{text}, 0},
+		"plain string":      {"AAAA", 0},
+		"nil":               {nil, 0},
+		"malformed element": {[]any{"not a block", 3.0}, 0},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := toolResultMediaBytes(c.content)
+			if got != c.want {
+				t.Errorf("media bytes = %d, want %d", got, c.want)
+			}
+			if total := toolResultBytes(c.content); got > total {
+				t.Errorf("media bytes %d exceed the whole result %d", got, total)
+			}
+		})
+	}
+}
