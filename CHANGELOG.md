@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/teerakarna/loom/compare/v0.6.0...v0.7.0) (2026-10-19)
+
+
+### Added
+
+* loom report says why each expensive run cost what it did ([#131](https://github.com/teerakarna/loom/issues/131)) ([990e0ec](https://github.com/teerakarna/loom/commit/990e0ece567b023ab444733745c14f69e46f6e68))
+
 ## [0.6.0] - 2026-10-18
 
 ### Added
