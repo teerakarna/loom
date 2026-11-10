@@ -340,7 +340,7 @@ type LedgerModelReport struct {
 	// TotalWeightedCostUnits field - a caller reading one row in isolation
 	// (e.g. summarizing per-model spend) must not lose the same caveat
 	// issue #86 exists to attach.
-	WeightedCost float64 `json:"weighted_cost" jsonschema:"relative units - not tokens, not real currency, see docs/design.md"`
+	WeightedCost float64 `json:"weighted_cost" jsonschema:"relative units - not tokens, not real currency, see docs/design.md. The same token-kind weights apply to every model, so rows compare token volume across models, not price (issue #141)"`
 }
 
 func getCostSummaryHandler(db *ledger.DB, home string, fc *freshnessCache) gomcp.ToolHandlerFor[emptyInput, CostSummaryOutput] {

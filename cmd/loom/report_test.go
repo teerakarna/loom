@@ -80,3 +80,28 @@ func TestDescribeRunSpanWording(t *testing.T) {
 		}
 	}
 }
+
+// TestPrintGroupLabelsModelBlindCost pins issue #141: the by-model breakdown is
+// weighted tokens with one set of weights for every model, so it must say it
+// compares volume rather than price. The other groups compare like with like
+// and carry no note.
+func TestPrintGroupLabelsModelBlindCost(t *testing.T) {
+	s := ledger.Summary{ByModel: []ledger.ModelCost{{Model: "a", Runs: 1, WeightedCost: 10, PerRun: 10}}}
+	row := func(int) (string, int, float64, float64) { return "a", 1, 10, 10 }
+
+	out, _ := captureStdout(t, func() error {
+		printGroup(s, "By model:", modelBlindNote, 1, row)
+		return nil
+	})
+	if !strings.Contains(out, "not price") || !strings.Contains(out, "#141") {
+		t.Errorf("by-model group does not carry the model-blind note:\n%s", out)
+	}
+
+	out, _ = captureStdout(t, func() error {
+		printGroup(s, "By lane:", "", 1, row)
+		return nil
+	})
+	if strings.Contains(out, "not price") {
+		t.Errorf("a group without a note printed one anyway:\n%s", out)
+	}
+}
