@@ -476,7 +476,7 @@ func printReport(s ledger.Summary) {
 		}
 	}
 
-	printGroup(s, "By model:", len(s.ByModel), func(i int) (string, int, float64, float64) {
+	printGroup(s, "By model:", modelBlindNote, len(s.ByModel), func(i int) (string, int, float64, float64) {
 		m := s.ByModel[i]
 		model := m.Model
 		if model == "" {
@@ -488,14 +488,14 @@ func printReport(s ledger.Summary) {
 	})
 
 	if len(s.ByLane) > 1 {
-		printGroup(s, "By lane:", len(s.ByLane), func(i int) (string, int, float64, float64) {
+		printGroup(s, "By lane:", "", len(s.ByLane), func(i int) (string, int, float64, float64) {
 			l := s.ByLane[i]
 			return ingest.LaneDisplay(l.Lane), l.Runs, l.WeightedCost, l.PerRun
 		})
 	}
 
 	if len(s.ByAgentType) > 0 {
-		printGroup(s, "By agent type:", len(s.ByAgentType), func(i int) (string, int, float64, float64) {
+		printGroup(s, "By agent type:", "", len(s.ByAgentType), func(i int) (string, int, float64, float64) {
 			a := s.ByAgentType[i]
 			name := a.AgentType
 			if name == "" {
@@ -508,6 +508,7 @@ func printReport(s ledger.Summary) {
 	if len(s.TopRuns) > 0 && s.TotalRuns > 1 {
 		fmt.Println()
 		fmt.Println("Most expensive runs:")
+		fmt.Println(modelBlindNote)
 		for _, r := range s.TopRuns {
 			model := r.Model
 			if model == "" {
@@ -591,16 +592,28 @@ func weightFor(kind string) float64 {
 	}
 }
 
+// modelBlindNote is printed wherever runs of different models are compared or
+// ranked. ingest.WeightedCost weights tokens by kind only, identically for every
+// model, so these figures compare token volume, not price (issue #141).
+const modelBlindNote = "  weighted tokens, same weights for every model: compares volume across models, not price (#141)"
+
 // printGroup renders one grouped breakdown with both the total and the
 // per-run figure. Per-run is shown because totals alone conflate "costs more
 // each time" with "used more often", and can invert the real ordering when
 // run counts differ (issue #10).
-func printGroup(s ledger.Summary, heading string, n int, row func(int) (string, int, float64, float64)) {
+//
+// note, when set, is printed under the heading. The by-model group uses it to say
+// its figures are weighted tokens with one set of weights for every model, so a
+// model with a higher price per token is under-represented (issue #141).
+func printGroup(s ledger.Summary, heading, note string, n int, row func(int) (string, int, float64, float64)) {
 	if n == 0 {
 		return
 	}
 	fmt.Println()
 	fmt.Println(heading)
+	if note != "" {
+		fmt.Println(note)
+	}
 	fmt.Printf("  %-24s %6s %14s %14s\n", "", "runs", "total", "per run")
 	for i := range n {
 		name, runs, total, per := row(i)
