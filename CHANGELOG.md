@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1](https://github.com/teerakarna/loom/compare/v0.7.0...v0.7.1) (2026-11-10)
+
+
+### Fixed
+
+* bump go.mod to 1.27.3, closing GO-2026-6809 (crypto/x509) ([#145](https://github.com/teerakarna/loom/issues/145)) ([1b0a78f](https://github.com/teerakarna/loom/commit/1b0a78f5a2c27270093fdd2c530bef285f989675))
+* say that weighted cost compares volume across models, not price ([#141](https://github.com/teerakarna/loom/issues/141)) ([#147](https://github.com/teerakarna/loom/issues/147)) ([b0102e5](https://github.com/teerakarna/loom/commit/b0102e578e45059aae60626a55fa77db82fe6eeb))
+
 ## [0.7.0](https://github.com/teerakarna/loom/compare/v0.6.0...v0.7.0) (2026-10-19)
 
 
