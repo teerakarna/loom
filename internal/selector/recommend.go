@@ -336,7 +336,12 @@ var debugWords = tokenize("debug diagnose fix investigate troubleshoot")
 
 // minPlanningHits is how many distinct planning-keyword hits it takes to
 // escalate to the expensive tier - deliberately more than one (issue #63).
-// On real measured data, opus costs roughly 272x sonnet's per-run cost, and
+// On real measured data, an opus run carried roughly 272x the weighted cost of a
+// sonnet run. That figure is weighted tokens with one set of weights for every
+// model, so it measures how much work the runs did, not a price ratio: opus
+// tended to run the long sessions and sonnet the short subagent tasks, and its
+// higher price per token is not in it at all (issue #141). Whatever the exact
+// multiple, the asymmetry below holds, and
 // the two ways to misjudge are not symmetric: guessing too cheap costs a
 // retry, guessing too expensive costs the difference outright, every time,
 // whether or not it turns out to have been warranted. A single incidental
