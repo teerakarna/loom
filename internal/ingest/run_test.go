@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIngestFileSession(t *testing.T) {
@@ -407,5 +408,35 @@ func TestIngestFile_ImageResultCountsAsMedia(t *testing.T) {
 	}
 	if e := byID["txttool1"]; e.MediaBytes != 0 || e.ResultBytes != int64(len("package main")) {
 		t.Errorf("text result = %+v, want no media and the exact text length", e)
+	}
+}
+
+// TestApplyEvent_DailySplitsByResponseDay pins issue #142: usage is split by the
+// UTC day of each response's own timestamp, with the same per-message.id dedupe
+// as the run total, so the days of a run always sum to it. A response with no
+// timestamp is kept under "" rather than given a day.
+func TestApplyEvent_DailySplitsByResponseDay(t *testing.T) {
+	rs := RunSummary{countedMessages: map[string]struct{}{}}
+	day1 := time.Date(2026, 11, 2, 23, 30, 0, 0, time.UTC)
+	day2 := time.Date(2026, 11, 3, 0, 30, 0, 0, time.UTC)
+	ev := Event{MessageID: "a", Timestamp: day1, Usage: &Usage{InputTokens: 10}}
+	applyEvent(&rs, ev)
+	applyEvent(&rs, ev) // same response on a second line: not counted again
+	applyEvent(&rs, Event{MessageID: "b", Timestamp: day2, Usage: &Usage{InputTokens: 5}})
+	applyEvent(&rs, Event{MessageID: "c", Usage: &Usage{InputTokens: 1}})
+
+	want := map[string]int64{"2026-11-02": 10, "2026-11-03": 5, "": 1}
+	if len(rs.Daily) != len(want) {
+		t.Fatalf("Daily has %d days, want %d: %+v", len(rs.Daily), len(want), rs.Daily)
+	}
+	var sum int64
+	for day, n := range want {
+		if got := rs.Daily[day].InputTokens; got != n {
+			t.Errorf("Daily[%q].InputTokens = %d, want %d", day, got, n)
+		}
+		sum += rs.Daily[day].InputTokens
+	}
+	if sum != rs.Usage.InputTokens {
+		t.Errorf("days sum to %d, run total is %d", sum, rs.Usage.InputTokens)
 	}
 }

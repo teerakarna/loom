@@ -139,6 +139,22 @@ CREATE TABLE IF NOT EXISTS tool_usage (
 	media_bytes  INTEGER NOT NULL DEFAULT 0  -- the image/document part of result_bytes
 );
 
+-- daily_usage is issue #142's time roll-up: each run's usage split by the UTC
+-- day of the responses in it, so a run that spans weeks is spread over the
+-- days it actually did the work on. Derived counts only (constraint 6). day
+-- is '' for responses with no timestamp. Rows are rewritten whole on every
+-- ingest of the run, so the days of a run always sum to its runs row.
+CREATE TABLE IF NOT EXISTS daily_usage (
+	run_id                INTEGER NOT NULL REFERENCES runs(id),
+	day                   TEXT NOT NULL,
+	input_tokens          INTEGER NOT NULL DEFAULT 0,
+	output_tokens         INTEGER NOT NULL DEFAULT 0,
+	cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+	cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+	weighted_cost         REAL NOT NULL DEFAULT 0,
+	PRIMARY KEY (run_id, day)
+);
+
 CREATE TABLE IF NOT EXISTS compactions (
 	id                 INTEGER PRIMARY KEY AUTOINCREMENT,
 	run_id             INTEGER NOT NULL REFERENCES runs(id),

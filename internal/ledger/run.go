@@ -37,7 +37,12 @@ import (
 // 3 is tool_usage.media_bytes, the image and document part of a result. A
 // ledger ingested before it has result_bytes with no split, so every run is
 // re-read once to fill it in.
-const CurrentFeatureVersion = 3
+//
+// 4 is daily_usage, the per-day split behind `loom report --by` (issue #142).
+// A run ingested before it has a total and no days, so every run still on disk
+// is re-read once. A run whose transcript is already gone cannot be, and is
+// reported as undated rather than given a day.
+const CurrentFeatureVersion = 4
 
 // FreshnessState is the three-way answer to "does this stored run need a
 // re-read, and for which of the two reasons" - NeedsIngest only needs the
@@ -593,7 +598,7 @@ func (d *DB) DeleteRuns(paths []string) ([]string, error) {
 			}
 			return nil, err
 		}
-		for _, table := range []string{"tool_usage", "compactions", "asset_usage"} {
+		for _, table := range []string{"tool_usage", "compactions", "asset_usage", "daily_usage"} {
 			if _, err := tx.Exec(`DELETE FROM `+table+` WHERE run_id = ?`, id); err != nil {
 				return nil, err
 			}
