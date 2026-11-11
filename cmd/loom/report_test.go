@@ -105,3 +105,27 @@ func TestPrintGroupLabelsModelBlindCost(t *testing.T) {
 		t.Errorf("a group without a note printed one anyway:\n%s", out)
 	}
 }
+
+// TestTakeByAndPeriodKey pins the --by flag: it is removed from the args the
+// shared parser sees, rejects anything but day/week/month, and groups days into
+// labels that sort in time order (ISO weeks, months).
+func TestTakeByAndPeriodKey(t *testing.T) {
+	by, rest, err := takeBy([]string{"--lane", "x", "--by", "week"})
+	if err != nil || by != "week" || strings.Join(rest, " ") != "--lane x" {
+		t.Errorf("takeBy = %q %v %v, want week, [--lane x], nil", by, rest, err)
+	}
+	for _, bad := range [][]string{{"--by"}, {"--by", "year"}} {
+		if _, _, err := takeBy(bad); err == nil {
+			t.Errorf("takeBy(%v) accepted a bad value", bad)
+		}
+	}
+	if got := periodKey("week")("2026-11-02"); got != "2026-W45" {
+		t.Errorf("week of 2026-11-02 = %q, want 2026-W45", got)
+	}
+	if got := periodKey("week")("2027-01-01"); got != "2026-W53" {
+		t.Errorf("week of 2027-01-01 = %q, want 2026-W53 (ISO year, not calendar year)", got)
+	}
+	if got := periodKey("month")("2026-11-02"); got != "2026-11" {
+		t.Errorf("month = %q, want 2026-11", got)
+	}
+}

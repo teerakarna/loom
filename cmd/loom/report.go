@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/teerakarna/loom/internal/ingest"
 	"github.com/teerakarna/loom/internal/ledger"
@@ -64,7 +65,11 @@ func defaultLedgerPath() (string, error) {
 }
 
 func runReport(args []string) error {
-	db, lane, err := ingestFromArgs(args, "usage: loom report [path] [--lane <lane>]", true)
+	by, args, err := takeBy(args)
+	if err != nil {
+		return err
+	}
+	db, lane, err := ingestFromArgs(args, "usage: loom report [path] [--lane <lane>] [--by day|week|month]", true)
 	if err != nil {
 		return err
 	}
@@ -85,6 +90,13 @@ func runReport(args []string) error {
 		}
 	}
 	printReport(summary)
+	if by != "" {
+		periods, undated, err := db.CostByPeriod(lane, periodKey(by))
+		if err != nil {
+			return err
+		}
+		printPeriods(by, periods, undated, summary.TotalWeightedCost)
+	}
 	return nil
 }
 
@@ -439,6 +451,9 @@ func recordOccupancyAndUsage(db *ledger.DB, path string, lookup ledger.AssetLook
 		return err
 	}
 	if err := db.ReplaceToolUsage(runID, rs.ToolUsage); err != nil {
+		return err
+	}
+	if err := db.ReplaceDailyUsage(runID, rs.Daily); err != nil {
 		return err
 	}
 	if err := db.InsertCompactions(runID, rs.Compactions); err != nil {
@@ -943,4 +958,82 @@ func isJournalLedgerPath(path string) bool {
 // which is what this predicate answers and all that the label claims.
 func isPrunableLedgerPath(path string) bool {
 	return isJournalLedgerPath(path) || !filepath.IsAbs(path)
+}
+
+// takeBy removes `--by <day|week|month>` from args and returns its value. It is
+// taken out before the shared parser so `loom ingest` and `loom status`, which
+// share that parser, do not grow a flag that means nothing to them.
+func takeBy(args []string) (string, []string, error) {
+	var by string
+	rest := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] != "--by" {
+			rest = append(rest, args[i])
+			continue
+		}
+		if i+1 >= len(args) {
+			return "", nil, fmt.Errorf("--by needs a value: day, week or month")
+		}
+		by = args[i+1]
+		i++
+		switch by {
+		case "day", "week", "month":
+		default:
+			return "", nil, fmt.Errorf("--by %q: want day, week or month", by)
+		}
+	}
+	return by, rest, nil
+}
+
+// periodKey maps a UTC YYYY-MM-DD day to its period label. Labels sort in time
+// order: the day itself, an ISO week ("2026-W45"), or a month ("2026-11").
+func periodKey(by string) func(string) string {
+	switch by {
+	case "week":
+		return func(day string) string {
+			t, err := time.Parse(time.DateOnly, day)
+			if err != nil {
+				return day
+			}
+			y, w := t.ISOWeek()
+			return fmt.Sprintf("%04d-W%02d", y, w)
+		}
+	case "month":
+		return func(day string) string {
+			if len(day) >= 7 {
+				return day[:7]
+			}
+			return day
+		}
+	default:
+		return func(day string) string { return day }
+	}
+}
+
+// printPeriods renders the roll-up. Shares are of the whole ledger's weighted
+// cost, so a dated total that falls short of 100% is the undated part, shown on
+// its own line rather than spread over periods it cannot be placed in.
+func printPeriods(by string, periods []ledger.PeriodCost, undated ledger.Undated, total float64) {
+	fmt.Println()
+	fmt.Printf("By %s (UTC):\n", by)
+	fmt.Println(modelBlindNote)
+	if len(periods) == 0 && undated.WeightedCost == 0 {
+		fmt.Println("  no dated usage yet; it fills in as transcripts are read")
+		return
+	}
+	fmt.Printf("  %-12s %6s %14s %7s\n", "", "runs", "weighted", "share")
+	share := func(c float64) float64 {
+		if total == 0 {
+			return 0
+		}
+		return 100 * c / total
+	}
+	for _, p := range periods {
+		fmt.Printf("  %-12s %6d %14.0f %6.1f%%\n", p.Period, p.Runs, p.WeightedCost, share(p.WeightedCost))
+	}
+	if undated.WeightedCost > 0 {
+		fmt.Printf("  %-12s %6d %14.0f %6.1f%%\n", "undated", undated.Runs, undated.WeightedCost, share(undated.WeightedCost))
+		fmt.Println("  undated: runs whose transcript was deleted before per-day data existed, and responses")
+		fmt.Println("  with no timestamp. Not spread over days they cannot be placed in.")
+	}
 }

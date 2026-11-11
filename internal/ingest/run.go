@@ -82,6 +82,15 @@ type RunSummary struct {
 	// spawnDepth field on the .meta.json companion).
 	AgentReconciliations map[string]AgentUsage
 
+	// Daily is Usage split by the UTC day of each response's own timestamp,
+	// added at the same point and with the same per-message.id dedupe as Usage,
+	// so the days of a run always sum to its total. A run is not a day: on a
+	// real ledger 10 runs spanning more than a month carried 90% of weighted
+	// cost, so dating a run by when it started would put nearly all of it on a
+	// few days (issue #142). A response with no timestamp is keyed "", which
+	// the ledger reports as undated rather than guessing a day for it.
+	Daily map[string]Usage
+
 	// ToolUsage is every tool_result this file recorded (B7b), one entry per
 	// call - not pre-aggregated by tool name, so the ledger layer can dedupe
 	// on each event's own ToolUseID before aggregating. See
@@ -178,6 +187,7 @@ func IngestFile(path string) (RunSummary, error) {
 		Kind:                 kindForPath(path),
 		AgentReconciliations: map[string]AgentUsage{},
 		countedMessages:      map[string]struct{}{},
+		Daily:                map[string]Usage{},
 		toolNames:            map[string]string{},
 	}
 
@@ -261,6 +271,14 @@ func applyEvent(rs *RunSummary, ev Event) {
 	// undercount instead.
 	if ev.Usage != nil && !rs.alreadyCounted(ev.MessageID) {
 		rs.Usage = rs.Usage.Add(*ev.Usage)
+		day := ""
+		if !ev.Timestamp.IsZero() {
+			day = ev.Timestamp.UTC().Format(time.DateOnly)
+		}
+		if rs.Daily == nil {
+			rs.Daily = map[string]Usage{}
+		}
+		rs.Daily[day] = rs.Daily[day].Add(*ev.Usage)
 	}
 
 	// ToolUseCount is deliberately NOT deduplicated: each line carries its

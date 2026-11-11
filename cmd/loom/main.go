@@ -48,7 +48,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `loom - asset lifecycle and cost/routing engine for Claude Code
 
 Usage:
-  loom report [path] [--lane <lane>]
+  loom report [path] [--lane <lane>] [--by day|week|month]
                             Ingest transcripts under path (default ~/.claude/projects)
                              and print an aggregate cost/usage report, optionally
                              narrowed to one lane (the project directory a session ran in).
