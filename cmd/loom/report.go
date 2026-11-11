@@ -1033,7 +1033,7 @@ func printPeriods(by string, periods []ledger.PeriodCost, undated ledger.Undated
 	}
 	if undated.WeightedCost > 0 {
 		fmt.Printf("  %-12s %6d %14.0f %6.1f%%\n", "undated", undated.Runs, undated.WeightedCost, share(undated.WeightedCost))
-		fmt.Println("  undated: runs whose transcript was deleted before per-day data existed, and responses")
-		fmt.Println("  with no timestamp. Not spread over days they cannot be placed in.")
+		fmt.Println("  undated: runs that span several days and whose transcript was deleted before per-day")
+		fmt.Println("  data existed, so their cost cannot be split by day. Shown apart, not spread or guessed.")
 	}
 }

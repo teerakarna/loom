@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"sort"
+	"time"
 
 	"github.com/teerakarna/loom/internal/ingest"
 )
@@ -47,8 +48,8 @@ type PeriodCost struct {
 
 // Undated is weighted cost that cannot be put on a day, kept apart rather than
 // spread or guessed (constraint 11). Runs are runs with a cost and no daily rows
-// at all: ingested before daily_usage existed and whose transcript is gone, so
-// they cannot be re-read. Cost also includes responses that had no timestamp.
+// whose start and end fall on different UTC days (or are missing), so their cost
+// cannot be put on one day. Cost also includes responses that had no timestamp.
 type Undated struct {
 	Runs         int
 	WeightedCost float64
@@ -102,20 +103,44 @@ func (d *DB) CostByPeriod(lane string, period func(day string) string) ([]Period
 		return nil, Undated{}, err
 	}
 
-	// Runs with a cost and no daily rows at all. A zero-cost run has nothing to
-	// date, so it is not counted as undated.
-	var n int
-	var c float64
+	// Runs with a cost and no daily rows at all: ingested before daily_usage
+	// existed, transcript since deleted. One that started and ended on the same
+	// UTC day is dated exactly by that day, which is not a guess. Only a run that
+	// spans days, or has no usable timestamps, is undated. A zero-cost run has
+	// nothing to date and is left out.
 	cond := " WHERE r.weighted_cost > 0 AND NOT EXISTS (SELECT 1 FROM daily_usage du WHERE du.run_id = r.id)"
 	if lane != "" {
 		cond += " AND r.lane = ?"
 	}
-	if err := d.sql.QueryRow(`SELECT COUNT(*), COALESCE(SUM(r.weighted_cost), 0) FROM runs r`+cond, args...).
-		Scan(&n, &c); err != nil {
+	orphans, err := d.sql.Query(`SELECT r.id, COALESCE(r.started_at, ''), COALESCE(r.ended_at, ''), r.weighted_cost FROM runs r`+cond, args...)
+	if err != nil {
 		return nil, Undated{}, err
 	}
-	und.Runs += n
-	und.WeightedCost += c
+	defer func() { _ = orphans.Close() }()
+	for orphans.Next() {
+		var runID int64
+		var started, ended string
+		var cost float64
+		if err := orphans.Scan(&runID, &started, &ended, &cost); err != nil {
+			return nil, Undated{}, err
+		}
+		if day, ok := sameUTCDay(started, ended); ok {
+			key := period(day)
+			a := byPeriod[key]
+			if a == nil {
+				a = &acc{runs: map[int64]struct{}{}}
+				byPeriod[key] = a
+			}
+			a.runs[runID] = struct{}{}
+			a.cost += cost
+			continue
+		}
+		und.Runs++
+		und.WeightedCost += cost
+	}
+	if err := orphans.Err(); err != nil {
+		return nil, Undated{}, err
+	}
 
 	out := make([]PeriodCost, 0, len(byPeriod))
 	for k, a := range byPeriod {
@@ -123,4 +148,16 @@ func (d *DB) CostByPeriod(lane string, period func(day string) string) ([]Period
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Period < out[j].Period })
 	return out, und, nil
+}
+
+// sameUTCDay reports the UTC day both timestamps fall on, if they parse and it
+// is the same day.
+func sameUTCDay(started, ended string) (string, bool) {
+	a, errA := time.Parse(time.RFC3339, started)
+	b, errB := time.Parse(time.RFC3339, ended)
+	if errA != nil || errB != nil {
+		return "", false
+	}
+	da, db := a.UTC().Format(time.DateOnly), b.UTC().Format(time.DateOnly)
+	return da, da == db
 }

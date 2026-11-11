@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"testing"
+	"time"
 
 	"github.com/teerakarna/loom/internal/ingest"
 )
@@ -12,11 +13,20 @@ import (
 // than dropped or given a day.
 func TestCostByPeriodCountsRunsPerPeriod(t *testing.T) {
 	db := openTestDB(t)
-	for _, p := range []string{"/a.jsonl", "/b.jsonl", "/old.jsonl"} {
+	for _, p := range []string{"/a.jsonl", "/b.jsonl"} {
 		if err := db.InsertRun(RunRecord{Path: p, Kind: "session", WeightedCost: 100}); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// No daily rows (transcript gone): one spans days and stays undated, one
+	// sits inside a single UTC day and is dated by it exactly.
+	mustInsert := func(path string, start, end time.Time, cost float64) {
+		if err := db.InsertRun(RunRecord{Path: path, Kind: "session", StartedAt: start, EndedAt: end, WeightedCost: cost}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustInsert("/old-long.jsonl", time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC), 100)
+	mustInsert("/old-short.jsonl", time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC), time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC), 7)
 	idA, _ := db.RunIDByPath("/a.jsonl")
 	idB, _ := db.RunIDByPath("/b.jsonl")
 	// a spans two days of the same month; b is one day; old has no days at all.
@@ -37,14 +47,14 @@ func TestCostByPeriodCountsRunsPerPeriod(t *testing.T) {
 	if len(periods) != 1 || periods[0].Period != "2026-11" {
 		t.Fatalf("periods = %+v, want one period 2026-11", periods)
 	}
-	if periods[0].Runs != 2 {
-		t.Errorf("runs in 2026-11 = %d, want 2 (a's two days are one run)", periods[0].Runs)
+	if periods[0].Runs != 3 {
+		t.Errorf("runs in 2026-11 = %d, want 3 (a's two days are one run, plus b and old-short)", periods[0].Runs)
 	}
-	if periods[0].WeightedCost != 35 {
-		t.Errorf("weighted cost = %v, want 35", periods[0].WeightedCost)
+	if periods[0].WeightedCost != 42 {
+		t.Errorf("weighted cost = %v, want 42 (35 from daily rows + 7 from the single-day run)", periods[0].WeightedCost)
 	}
 	if undated.Runs != 1 || undated.WeightedCost != 100 {
-		t.Errorf("undated = %+v, want the one run with no days, cost 100", undated)
+		t.Errorf("undated = %+v, want only the multi-day run with no days, cost 100", undated)
 	}
 
 	// Rewriting a run's days replaces them, it does not add to them.
@@ -57,7 +67,7 @@ func TestCostByPeriodCountsRunsPerPeriod(t *testing.T) {
 	for _, p := range periods {
 		got[p.Period] = p.WeightedCost
 	}
-	if got["2026-11-03"] != 20 || got["2026-11-04"] != 1 {
-		t.Errorf("after rewrite: %+v, want 2026-11-03=20 (a only) and 2026-11-04=1", got)
+	if got["2026-11-03"] != 27 || got["2026-11-04"] != 1 {
+		t.Errorf("after rewrite: %+v, want 2026-11-03=27 (a's 20 + old-short's 7) and 2026-11-04=1", got)
 	}
 }
