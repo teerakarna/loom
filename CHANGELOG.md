@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0](https://github.com/teerakarna/loom/compare/v0.7.1...v0.8.0) (2026-11-11)
+
+
+### Added
+
+* loom report --by day|week|month, from each response's own day ([#142](https://github.com/teerakarna/loom/issues/142)) ([#148](https://github.com/teerakarna/loom/issues/148)) ([7ee8db5](https://github.com/teerakarna/loom/commit/7ee8db537f64304a884423dcbbaeebd771a1ccea))
+
+
+### Fixed
+
+* bump go.mod to 1.27.4, closing GO-2026-6859 (net/http) ([#149](https://github.com/teerakarna/loom/issues/149)) ([9467331](https://github.com/teerakarna/loom/commit/9467331eb3334db8f8e2eff241972ab74e2e5920))
+
 ## [0.7.1](https://github.com/teerakarna/loom/compare/v0.7.0...v0.7.1) (2026-11-10)
 
 
